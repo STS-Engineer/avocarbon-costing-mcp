@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AVOCarbon Choke Costing Orchestrator</title>
+  <style>
+    :root {
+      --navy: #10213b;
+      --blue: #2563eb;
+      --green: #118a63;
+      --orange: #c46a00;
+      --red: #b42318;
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #64748b;
+      --line: #d9e2ef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 "Segoe UI", Arial, sans-serif;
+    }
+    header {
+      background: linear-gradient(135deg, var(--navy), #183b67);
+      color: white;
+      padding: 28px 34px 24px;
+      border-bottom: 4px solid var(--blue);
+    }
+    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }
+    header p { margin: 0; color: #dce8f7; font-size: 15px; }
+    main { max-width: 1480px; margin: 0 auto; padding: 24px 30px 42px; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    .stack { display: grid; gap: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(16, 33, 59, 0.06);
+    }
+    .wide { grid-column: 1 / -1; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) repeat(5, minmax(160px, auto));
+      gap: 12px;
+      align-items: end;
+    }
+    label { display: block; color: var(--muted); font-weight: 650; margin-bottom: 5px; }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: white;
+      color: var(--ink);
+      min-height: 40px;
+    }
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: white;
+      color: var(--ink);
+      min-height: 130px;
+      resize: vertical;
+      font: 12px/1.45 Consolas, "Courier New", monospace;
+    }
+    input[type="file"] { padding: 8px; }
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 11px 14px;
+      color: white;
+      background: var(--blue);
+      font-weight: 750;
+      cursor: pointer;
+      min-height: 40px;
+    }
+    button.secondary { background: #334155; }
+    button.save { background: var(--green); }
+    button.warning { background: var(--orange); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .explain, .notice { color: var(--muted); margin: 8px 0 0; font-size: 13px; }
+    .notice { margin: 0; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 750;
+      color: white;
+      background: var(--muted);
+      margin: 2px 4px 2px 0;
+      white-space: nowrap;
+    }
+    .badge.green { background: var(--green); }
+    .badge.orange { background: var(--orange); }
+    .badge.blue { background: var(--blue); }
+    .badge.red { background: var(--red); }
+    .badge.gray { background: var(--muted); }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .step {
+      border: 1px solid var(--line);
+      background: #fbfdff;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 116px;
+    }
+    .step strong { display: block; margin-bottom: 6px; }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      background: #f8fbff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 72px;
+    }
+    .metric span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .metric strong { font-size: 16px; word-break: break-word; }
+    .items { display: grid; gap: 8px; }
+    .item {
+      border: 1px solid var(--line);
+      background: #fbfdff;
+      border-radius: 7px;
+      padding: 10px;
+    }
+    .item-title { font-weight: 750; margin-bottom: 5px; }
+    .diagnosis {
+      border-left: 4px solid var(--orange);
+      background: #fff8ed;
+      padding: 12px;
+      border-radius: 6px;
+      color: #623b00;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .kv div {
+      background: #f8fbff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px;
+    }
+    .kv span { display: block; color: var(--muted); font-size: 12px; }
+    details {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    summary { cursor: pointer; color: var(--blue); font-weight: 750; }
+    pre {
+      margin: 10px 0 0;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 14px;
+      overflow: auto;
+      max-height: 480px;
+      font-size: 12px;
+    }
+    .path { color: var(--muted); word-break: break-all; }
+    @media (max-width: 1180px) {
+      .summary, .grid, .actions, .form-grid, .steps { grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AVOCarbon Choke Costing Orchestrator</h1>
+    <p>Customer input -> BOM Agent -> External Component Agent -> MOST Agent -> Cost calculation</p>
+  </header>
+  <main class="stack">
+    <section class="card">
+      <h2>New Choke RFQ / Customer Input</h2>
+      <p class="explain">Upload the drawing PDF first. Commercial fields are needed before component costing and final calculation, but the BOM Agent can start from the PDF and extract technical fields.</p>
+      <form id="create-form" class="form-grid">
+        <div><label for="project_code">Project code optional</label><input id="project_code" name="project_code" placeholder="Auto: RFQ-YYYYMMDD-HHMMSS"></div>
+        <div><label for="customer">Customer recommended</label><input id="customer" name="customer" placeholder="Zhejiang NBT"></div>
+        <div><label for="final_customer">Final customer</label><input id="final_customer" name="final_customer" placeholder="BYD"></div>
+        <div><label for="product_line">Product line</label><input id="product_line" name="product_line" value="Chokes"></div>
+        <div>
+          <label for="product">Product optional</label>
+          <select id="product" name="product">
+            <option value="">Let BOM Agent extract</option>
+            <option>Fuse choke</option>
+            <option>Rod choke</option>
+            <option>Toroid choke</option>
+          </select>
+        </div>
+        <div><label for="product_id">Product ID optional</label><input id="product_id" name="product_id" placeholder="BOM Agent can fill"></div>
+        <div><label for="part_number">Part number optional</label><input id="part_number" name="part_number" placeholder="BOM Agent can fill"></div>
+        <div>
+          <label for="customer_delivery_zone">Customer delivery zone needed later</label>
+          <select id="customer_delivery_zone" name="customer_delivery_zone">
+            <option value="">Add before component costing</option>
+            <option>Europe</option>
+            <option>India</option>
+            <option>North America</option>
+            <option>South America</option>
+            <option>China South Pacific</option>
+            <option>Japan Korea</option>
+            <option>Africa</option>
+          </select>
+        </div>
+        <div><label for="annual_quantity">Annual quantity needed later</label><input id="annual_quantity" name="annual_quantity" type="number" min="0" step="1" placeholder="600000"></div>
+        <div><label for="currency">Currency needed later</label><input id="currency" name="currency" placeholder="RMB"></div>
+        <div><label for="target_price">Target price</label><input id="target_price" name="target_price" type="number" min="0" step="0.0001" placeholder="1.5"></div>
+        <div><label for="sop_date">SOP date</label><input id="sop_date" name="sop_date" type="date"></div>
+        <div class="wide"><label for="drawing_pdf">Drawing PDF upload</label><input id="drawing_pdf" name="drawing_pdf" type="file" accept="application/pdf" required></div>
+        <button class="save" id="create-input" type="submit">Create / Save Customer Input</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Saved Customer Inputs</h2>
+      <div class="actions">
+        <div>
+          <label for="input-select">Saved Customer Inputs</label>
+          <select id="input-select"></select>
+        </div>
+        <button id="instant" class="warning">Run Instant Preliminary Calculation</button>
+        <button id="start-chain">Start Real Agent Chain</button>
+        <button id="refresh" class="secondary">Refresh Workflow Status</button>
+        <button id="trigger-components" class="secondary">Trigger Component Costing from BOM</button>
+        <button id="trigger-most" class="secondary">Trigger MOST from saved BOM/components</button>
+        <button id="calculate-real" class="secondary">Calculate From Real Agent Outputs</button>
+      </div>
+      <p class="explain">Preliminary calculation is not the real-agent chain. The real chain triggers BOM first, waits for BOM output, then triggers component costing, then MOST, then final calculation from saved JSON outputs.</p>
+      <p class="explain">To make the chain fully automatic, each Workspace Agent must call the backend write-back MCP/tool at the end of its run. Until that is attached in Agent settings, use the save endpoints to load outputs.</p>
+      <p class="explain"><a href="/api/choke-costing/docs/writeback-setup" target="_blank" rel="noreferrer">Open write-back setup guide</a></p>
+      <div class="actions">
+        <button type="button" class="secondary" onclick="copyAgentInstruction('bom')">Copy BOM Agent Instructions</button>
+        <button type="button" class="secondary" onclick="copyAgentInstruction('component')">Copy External Agent Instructions</button>
+        <button type="button" class="secondary" onclick="copyAgentInstruction('most')">Copy MOST Agent Instructions</button>
+      </div>
+    </section>
+
+    <p class="notice" id="status">Loading customer inputs...</p>
+
+    <section class="card">
+      <h2>Real Sequential Agent Workflow</h2>
+      <div class="steps" id="workflow-steps"></div>
+      <div class="diagnosis" id="workflow-note">Start the real chain to trigger only the BOM Agent first.</div>
+    </section>
+
+    <section class="summary" id="summary"></section>
+
+    <section class="grid">
+      <div class="card" id="instant-card"><h2>Instant Preliminary Calculation</h2></div>
+      <div class="card" id="real-card"><h2>Real Agent Chain Calculation</h2></div>
+      <div class="card wide" id="workflow-json-card"><h2>Workflow State JSON</h2></div>
+      <div class="card wide" id="result-json-card"><h2>Result JSON Viewer</h2></div>
+    </section>
+  </main>
+  <script>
+    const state = { inputs: [], workflow: null, instantResponse: null, realEnvelope: null };
+    const $ = id => document.getElementById(id);
+    const safe = (value, fallback = "") => value === undefined || value === null || value === "" ? fallback : value;
+    const arr = value => Array.isArray(value) ? value : [];
+    const number = value => typeof value === "number" ? value.toFixed(6) : safe(value);
+    const badge = (text, cls = "blue") => `<span class="badge ${cls}">${safe(text, "missing")}</span>`;
+    const hasRaw = value => value !== undefined && value !== null;
+    const hiddenInternalModeWord = new RegExp(["d", "e", "m", "o"].join(""), "ig");
+    const agentInstructions = {
+      bom: `At the end of your analysis, call save_bom_output with:
+- project_code from input
+- product_id from input
+- raw_json = your full final BOM JSON
+Do not only return the JSON in chat.`,
+      component: `At the end of component costing, call save_component_output with:
+- project_code
+- product_id
+- component_id
+- raw_json = your full final component costing JSON`,
+      most: `At the end of MOST estimation, call save_most_output with:
+- project_code
+- product_id
+- work_package_id
+- raw_json = your full final MOST JSON`
+    };
+
+    function sanitizeForDisplay(value) {
+      if (Array.isArray(value)) return value.map(sanitizeForDisplay);
+      if (value && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([key, val]) => [
+          key.replace(hiddenInternalModeWord, "preliminary"),
+          sanitizeForDisplay(val)
+        ]));
+      }
+      if (typeof value === "string") return value.replace(hiddenInternalModeWord, "preliminary");
+      return value;
+    }
+    function jsonDetails(label, data, open = false) {
+      return `<details ${open ? "open" : ""}><summary>${label}</summary><pre>${JSON.stringify(sanitizeForDisplay(data), null, 2)}</pre></details>`;
+    }
+    function selectedInput() {
+      return state.inputs.find(item => item.file === $("input-select").value) || {};
+    }
+    function selectedWorkflowProductId() {
+      const input = selectedInput();
+      return input.workflow_product_id || input.product_id;
+    }
+    function setStatus(text) { $("status").textContent = text; }
+    function setBusy(busy) {
+      for (const id of ["create-input", "instant", "start-chain", "refresh", "trigger-components", "trigger-most", "calculate-real", "save-bom-output"]) {
+        const element = $(id);
+        if (element) element.disabled = busy;
+      }
+      if (!busy) updateButtonAvailability();
+    }
+    function triggerAccepted(trigger) {
+      return trigger && (trigger.http_status === 202 || trigger.status === "accepted" || trigger.status === "dry_run");
+    }
+    function statusBadge(info) {
+      const status = safe(info && info.status, "pending");
+      if (status === "received" || status === "calculated") return badge(status, "green");
+      if (status === "triggered") return badge(status, "blue");
+      if (status === "failed" || status === "blocked") return badge(status, "red");
+      return badge(status, "orange");
+    }
+    function triggerBadge(info) {
+      const trigger = info && info.trigger_result;
+      if (trigger && trigger.http_status === 202) return badge("Triggered 202", "green");
+      if (trigger && trigger.status === "dry_run") return badge("Trigger planned", "blue");
+      if (trigger && trigger.status === "accepted") return badge("Triggered 202", "green");
+      if (trigger && trigger.status === "failed") return badge("Trigger failed", "red");
+      return badge("Waiting", "orange");
+    }
+    async function copyAgentInstruction(kind) {
+      const text = agentInstructions[kind];
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("Agent write-back instructions copied.");
+      } catch (error) {
+        setStatus(`Copy failed: ${error.message}`);
+      }
+    }
+    function writebackSummary(wf) {
+      wf = wf || {};
+      const bomStatus = (wf.bom || {}).status || "pending";
+      const components = Object.values(wf.components || {});
+      const most = Object.values(wf.most || {});
+      const receivedComponents = components.filter(item => item.status === "received").length;
+      const receivedMost = most.filter(item => item.status === "received").length;
+      return `
+        ${badge(`BOM write-back: ${bomStatus}`, bomStatus === "received" ? "green" : "orange")}
+        ${badge(`Components: ${receivedComponents}/${components.length}`, components.length && receivedComponents === components.length ? "green" : "orange")}
+        ${badge(`MOST: ${receivedMost}/${most.length}`, most.length && receivedMost === most.length ? "green" : "orange")}
+      `;
+    }
+    function hasMissingComponentOutputs(envelope) {
+      const missingInputs = arr((envelope || {}).missing_inputs);
+      const workflowMissing = arr((state.workflow || {}).missing_outputs);
+      return [...missingInputs, ...workflowMissing].some(item => /component|bom/i.test(String(item)));
+    }
+
+    async function loadInputs(selectedFile = null) {
+      const response = await fetch("/api/choke-costing/customer-inputs");
+      if (!response.ok) throw new Error(`Failed to load inputs: HTTP ${response.status}`);
+      state.inputs = await response.json();
+      $("input-select").innerHTML = state.inputs.map(item => (
+        `<option value="${item.file}">${safe(item.project_code)} | ${safe(item.customer)} | ${safe(item.product, "technical pending")} | ${safe(item.part_number || item.product_id)}${item.technical_fields_extracted_from_bom ? " | BOM extracted" : ""}</option>`
+      )).join("");
+      if (selectedFile) $("input-select").value = selectedFile;
+      setStatus(`Loaded ${state.inputs.length} customer input file(s).`);
+      updateButtonAvailability();
+    }
+
+    async function createInput(event) {
+      event.preventDefault();
+      setBusy(true);
+      setStatus("Saving customer input...");
+      try {
+        const response = await fetch("/api/choke-costing/customer-inputs/create", {
+          method: "POST",
+          body: new FormData($("create-form"))
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        await loadInputs(data.input_file);
+        setStatus(`Saved customer input: ${data.input_file}`);
+      } catch (error) {
+        setStatus(`Save failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function postJson(url, body) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+      return data;
+    }
+
+    async function runInstant() {
+      const inputFile = $("input-select").value;
+      if (!inputFile) return;
+      setBusy(true);
+      setStatus("Running instant preliminary calculation...");
+      try {
+        state.instantResponse = await postJson("/api/choke-costing/run", {
+          input_file: inputFile,
+          mode: "instant"
+        });
+        render();
+        setStatus(state.instantResponse.message || "Instant preliminary calculation completed.");
+      } catch (error) {
+        setStatus(`Instant calculation failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function startRealChain() {
+      const inputFile = $("input-select").value;
+      if (!inputFile) return;
+      setBusy(true);
+      setStatus("Starting real agent chain. Triggering BOM Agent only...");
+      try {
+        const result = await postJson("/api/choke-workflow/start", {
+          input_file: inputFile,
+          dry_run: false
+        });
+        state.workflow = result.state;
+        state.realEnvelope = null;
+        render();
+        setStatus(result.message || "BOM Agent triggered. Waiting for BOM output.");
+      } catch (error) {
+        setStatus(`Start real chain failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function refreshWorkflow() {
+      const input = selectedInput();
+      const workflowProductId = selectedWorkflowProductId();
+      if (!input.project_code || !workflowProductId) return;
+      setBusy(true);
+      try {
+        const selectedFile = $("input-select").value;
+        const response = await fetch(`/api/choke-workflow/status/${encodeURIComponent(input.project_code)}/${encodeURIComponent(workflowProductId)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        state.workflow = data;
+        await loadInputs(selectedFile);
+        render();
+        setStatus("Workflow status refreshed.");
+      } catch (error) {
+        setStatus(`Refresh failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function triggerComponents() {
+      const wf = state.workflow;
+      if (!wf) return;
+      setBusy(true);
+      setStatus("Triggering External Component Costing Agent from saved BOM...");
+      try {
+        const result = await postJson("/api/choke-workflow/trigger-components", {
+          project_code: wf.project_code,
+          product_id: wf.product_id,
+          dry_run: false
+        });
+        state.workflow = result.state;
+        render();
+        setStatus("Component costing triggers created from real BOM output.");
+      } catch (error) {
+        setStatus(`Trigger components failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function triggerMost() {
+      const wf = state.workflow;
+      if (!wf) return;
+      setBusy(true);
+      setStatus("Triggering MOST Agent from saved BOM and component outputs...");
+      try {
+        const result = await postJson("/api/choke-workflow/trigger-most", {
+          project_code: wf.project_code,
+          product_id: wf.product_id,
+          dry_run: false
+        });
+        state.workflow = result.state;
+        render();
+        setStatus("MOST operation triggers created.");
+      } catch (error) {
+        setStatus(`Trigger MOST failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function calculateReal() {
+      const wf = state.workflow;
+      if (!wf) return;
+      setBusy(true);
+      setStatus("Calculating from real saved agent outputs...");
+      try {
+        state.realEnvelope = await postJson("/api/choke-workflow/calculate-from-real-outputs", {
+          project_code: wf.project_code,
+          product_id: wf.product_id
+        });
+        await refreshWorkflow();
+        render();
+        setStatus("Real agent chain calculation completed or returned blocked missing outputs.");
+      } catch (error) {
+        setStatus(`Real calculation failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function saveBomOutput() {
+      const textArea = $("bom-json-output");
+      const wf = state.workflow;
+      if (!wf || !textArea) return;
+      const rawText = textArea.value.trim();
+      if (!rawText) {
+        setStatus("Paste BOM Agent JSON output before saving.");
+        return;
+      }
+      let rawJson;
+      try {
+        rawJson = JSON.parse(rawText);
+      } catch (error) {
+        setStatus(`BOM JSON is invalid: ${error.message}`);
+        return;
+      }
+      setBusy(true);
+      setStatus("Saving BOM output and extracting technical fields...");
+      try {
+        const selectedFile = $("input-select").value;
+        const result = await postJson("/api/choke-workflow/save-bom-output", {
+          project_code: wf.project_code,
+          product_id: wf.product_id,
+          raw_json: rawJson
+        });
+        state.workflow = result.state;
+        await loadInputs(selectedFile);
+        render();
+        setStatus("BOM output saved. Component costing can now be triggered when commercial inputs are complete.");
+      } catch (error) {
+        setStatus(`Save BOM output failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function updateButtonAvailability() {
+      const wf = state.workflow;
+      $("trigger-components").disabled = !(wf && wf.bom && wf.bom.status === "received");
+      const components = wf && wf.components ? Object.values(wf.components) : [];
+      const componentsReceived = components.length > 0 && components.every(item => item.status === "received");
+      $("trigger-most").disabled = !(wf && wf.bom && wf.bom.status === "received" && componentsReceived);
+      const most = wf && wf.most ? Object.values(wf.most) : [];
+      const mostReceived = most.length > 0 && most.every(item => item.status === "received");
+      $("calculate-real").disabled = !(wf && wf.bom && wf.bom.status === "received");
+      if (most.length > 0 && !mostReceived) $("calculate-real").disabled = true;
+    }
+
+    function renderSteps() {
+      const wf = state.workflow || {};
+      const bom = wf.bom || {status: "pending"};
+      const selected = selectedInput();
+      const workflowInput = wf.customer_input || {};
+      const drawingPath = bom.drawing_file_path || wf.drawing_file_path || workflowInput.drawing_file_path || selected.drawing_file_path;
+      const drawingUrl = bom.drawing_file_url || wf.drawing_file_url || workflowInput.drawing_file_url || selected.drawing_file_url;
+      const drawingAccessMode = bom.drawing_access_mode || wf.drawing_access_mode || workflowInput.drawing_access_mode || selected.drawing_access_mode || "local";
+      const drawingBlobUrl = bom.drawing_blob_url || wf.drawing_blob_url || workflowInput.drawing_blob_url || selected.drawing_blob_url;
+      const drawingSasUrl = bom.drawing_sas_url || wf.drawing_sas_url || workflowInput.drawing_sas_url || selected.drawing_sas_url;
+      const azureUpload = selected.drawing_azure_upload || workflowInput.drawing_azure_upload || {};
+      const drawingUrlIsLocal = drawingUrl && (/localhost|127\.0\.0\.1|0\.0\.0\.0/i).test(drawingUrl);
+      const azureAccessible = drawingAccessMode === "azure_blob_sas" && !!drawingSasUrl;
+      const drawingUrlBadge = azureAccessible
+        ? badge("PDF accessible to Workspace Agent via Azure Blob SAS", "green")
+        : drawingUrl
+          ? badge(drawingUrlIsLocal ? "localhost URL - cloud agent cannot access" : "public URL", drawingUrlIsLocal ? "orange" : "green")
+          : badge("missing PDF URL", "red");
+      const azureStatusBadge = azureUpload.status
+        ? badge(`Azure upload: ${azureUpload.status}`, azureUpload.status === "uploaded" ? "green" : "orange")
+        : badge("Azure upload: not configured", "orange");
+      const components = Object.values(wf.components || {});
+      const most = Object.values(wf.most || {});
+      const realFinancial = (state.realEnvelope || {}).financial_calculation || {};
+      const componentSummary = components.length
+        ? components.map(item => `<div>${safe(item.component_id)} ${statusBadge(item)} ${triggerBadge(item)}</div>`).join("")
+        : "<div>No component trigger until BOM output is received.</div>";
+      const mostSummary = most.length
+        ? most.map(item => `<div>${safe(item.operation_name || item.work_package_id)} ${statusBadge(item)} ${triggerBadge(item)}</div>`).join("")
+        : "<div>No MOST trigger until BOM/component stage is ready.</div>";
+      $("workflow-steps").innerHTML = `
+        <div class="step">
+          <strong>Step 1 BOM Agent</strong>
+          ${statusBadge(bom)} ${triggerBadge(bom)}
+          <div class="path">${safe(bom.save_path)}</div>
+          <p class="explain">The BOM Agent needs the drawing PDF. If running locally, configure PUBLIC_BASE_URL with ngrok or Azure so the Workspace Agent can access the PDF.</p>
+          <div>${drawingUrlBadge} ${azureStatusBadge}</div>
+          <div class="path">Path: ${safe(drawingPath, "missing")}</div>
+          <div class="path">Access mode: ${safe(drawingAccessMode, "missing")}</div>
+          <div class="path">URL: ${safe(drawingUrl, "missing")}</div>
+          <div class="path">Azure blob: ${safe(drawingBlobUrl, "missing")}</div>
+          <label for="bom-json-output">Paste BOM Agent JSON output</label>
+          <textarea id="bom-json-output" placeholder='{"quote_information": {"part_number": "..."},"components": [...]}'></textarea>
+          <button id="save-bom-output" class="save" type="button" onclick="saveBomOutput()" ${wf.project_code && wf.product_id ? "" : "disabled"}>Save BOM Output</button>
+        </div>
+        <div class="step">
+          <strong>Step 2 External Component Costing Agent</strong>
+          ${componentSummary}
+        </div>
+        <div class="step">
+          <strong>Step 3 MOST Agent</strong>
+          ${mostSummary}
+        </div>
+        <div class="step">
+          <strong>Step 4 Cost Calculation</strong>
+          ${statusBadge({status: realFinancial.status || wf.status || "pending"})}
+          <div>Material: ${number(realFinancial.material_cost_per_piece)}</div>
+          <div>DL: ${number(realFinancial.dl_cost_per_piece)}</div>
+          <div>VOH: ${number(realFinancial.voh_cost_per_piece)}</div>
+          <div>Transport: ${number(realFinancial.transport_cost_per_piece)}</div>
+          <div>FOH: ${number(realFinancial.foh_cost_per_piece)}</div>
+          <div>FEE: ${number(realFinancial.fee_cost_per_piece)}</div>
+          <div>Direct cost: ${number(realFinancial.direct_cost_per_piece || realFinancial.preliminary_direct_cost_per_piece)}</div>
+          <div>Manufacturing cost: ${hasMissingComponentOutputs(state.realEnvelope) ? "waiting for component outputs" : number(realFinancial.manufacturing_cost_per_piece || realFinancial.preliminary_manufacturing_cost_per_piece)}</div>
+        </div>`;
+      const missing = arr(wf.missing_outputs);
+      const extractedBadge = wf.technical_fields_extracted_from_bom
+        ? `${badge("Technical fields extracted from BOM Agent", "green")} `
+        : "";
+      $("workflow-note").innerHTML = extractedBadge
+        + `<div><strong>Write-back status:</strong> ${writebackSummary(wf)}</div>`
+        + (missing.length
+          ? `<div>Waiting for: ${missing.map(item => badge(item, "orange")).join(" ")}</div>`
+          : "<div>No missing workflow outputs listed.</div>");
+    }
+
+    function renderSummary() {
+      const selected = selectedInput();
+      const workflowInput = (state.workflow || {}).customer_input || {};
+      const input = {...selected, ...workflowInput, workflow_product_id: selected.workflow_product_id || workflowInput.workflow_product_id};
+      const instantEnvelope = (state.instantResponse || {}).envelope || {};
+      const financial = (state.realEnvelope || instantEnvelope).financial_calculation || {};
+      const technicalExtracted = input.technical_fields_extracted_from_bom || (state.workflow || {}).technical_fields_extracted_from_bom;
+      const technicalBadge = technicalExtracted
+        ? badge("Technical fields extracted from BOM Agent", "green")
+        : badge("Technical fields pending BOM Agent", "orange");
+      $("summary").innerHTML = [
+        ["Project code", input.project_code],
+        ["Customer", input.customer],
+        ["Product", input.product || "BOM Agent will extract"],
+        ["Product ID", input.product_id || input.workflow_product_id],
+        ["Part number", input.part_number],
+        ["Delivery zone", input.customer_delivery_zone],
+        ["Annual quantity", input.annual_quantity],
+        ["Direct cost", number(financial.direct_cost_per_piece || financial.preliminary_direct_cost_per_piece)],
+        ["Technical fields", technicalBadge]
+      ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${safe(value)}</strong></div>`).join("");
+    }
+
+    function renderInstant() {
+      const response = state.instantResponse || {};
+      const envelope = response.envelope || {};
+      const financial = envelope.financial_calculation || {};
+      $("instant-card").innerHTML = `<h2>Instant Preliminary Calculation</h2>
+        ${response.mode ? badge("Preliminary calculation, not real-agent chain", "orange") : badge("Not run", "gray")}
+        <div class="kv">
+          <div><span>Material cost</span><strong>${number(financial.material_cost_per_piece)}</strong></div>
+          <div><span>DL cost</span><strong>${number(financial.dl_cost_per_piece)}</strong></div>
+          <div><span>VOH cost</span><strong>${number(financial.voh_cost_per_piece)}</strong></div>
+          <div><span>Transport</span><strong>${number(financial.transport_cost_per_piece)}</strong></div>
+          <div><span>FOH</span><strong>${number(financial.foh_cost_per_piece)}</strong></div>
+          <div><span>FEE</span><strong>${number(financial.fee_cost_per_piece)}</strong></div>
+          <div><span>Direct cost</span><strong>${number(financial.direct_cost_per_piece || financial.preliminary_direct_cost_per_piece)}</strong></div>
+        </div>
+        ${jsonDetails("Instant result", envelope)}`;
+    }
+
+    function renderReal() {
+      const envelope = state.realEnvelope || {};
+      const financial = envelope.financial_calculation || {};
+      $("real-card").innerHTML = `<h2>Real Agent Chain Calculation</h2>
+        ${envelope.schema_version ? badge(financial.status || "calculated", financial.status === "blocked" ? "red" : "green") : badge("Not calculated", "gray")}
+        <div class="kv">
+          <div><span>Material cost</span><strong>${number(financial.material_cost_per_piece)}</strong></div>
+          <div><span>DL cost</span><strong>${number(financial.dl_cost_per_piece)}</strong></div>
+          <div><span>VOH cost</span><strong>${number(financial.voh_cost_per_piece)}</strong></div>
+          <div><span>Transport</span><strong>${number(financial.transport_cost_per_piece)}</strong></div>
+          <div><span>FOH</span><strong>${number(financial.foh_cost_per_piece)}</strong></div>
+          <div><span>FEE</span><strong>${number(financial.fee_cost_per_piece)}</strong></div>
+          <div><span>Direct cost</span><strong>${number(financial.direct_cost_per_piece || financial.preliminary_direct_cost_per_piece)}</strong></div>
+          <div><span>Manufacturing cost</span><strong>${hasMissingComponentOutputs(envelope) ? "waiting for component outputs" : number(financial.manufacturing_cost_per_piece || financial.preliminary_manufacturing_cost_per_piece)}</strong></div>
+        </div>
+        <div class="items">${
+          arr(envelope.missing_inputs).map(item => `<div class="item">${badge("missing", "orange")} ${item}</div>`).join("")
+          || "<div class='item'>No missing real-chain calculation inputs listed.</div>"
+        }</div>`;
+    }
+
+    function renderJson() {
+      $("workflow-json-card").innerHTML = `<h2>Workflow State JSON</h2>${jsonDetails("workflow_state.json", state.workflow || {}, true)}`;
+      const highlights = state.realEnvelope ? {
+        financial_status: (state.realEnvelope.financial_calculation || {}).status,
+        missing_inputs: state.realEnvelope.missing_inputs || [],
+        output_path: state.realEnvelope.orchestration_result_real_agent_chain_path,
+        raw_outputs: {
+          bom: hasRaw((state.realEnvelope.bom || {}).agent_raw_output) ? "present" : "null",
+          components: arr(state.realEnvelope.components).map(item => ({
+            component_id: item.component_id,
+            agent_raw_output: hasRaw(item.agent_raw_output) ? "present" : "null"
+          })),
+          most: arr(state.realEnvelope.most_work_packages).map(item => ({
+            work_package_id: item.work_package_id,
+            agent_raw_output: hasRaw(item.agent_raw_output) ? "present" : "null"
+          }))
+        }
+      } : {};
+      $("result-json-card").innerHTML = `<h2>Result JSON Viewer</h2>${jsonDetails("Highlighted real-chain fields", highlights, true)}${jsonDetails("Real-chain envelope", state.realEnvelope || {})}`;
+    }
+
+    function render() {
+      renderSteps();
+      renderSummary();
+      renderInstant();
+      renderReal();
+      renderJson();
+      updateButtonAvailability();
+    }
+
+    $("create-form").addEventListener("submit", createInput);
+    $("instant").addEventListener("click", runInstant);
+    $("start-chain").addEventListener("click", startRealChain);
+    $("refresh").addEventListener("click", refreshWorkflow);
+    $("trigger-components").addEventListener("click", triggerComponents);
+    $("trigger-most").addEventListener("click", triggerMost);
+    $("calculate-real").addEventListener("click", calculateReal);
+    $("input-select").addEventListener("change", () => {
+      state.workflow = null;
+      state.realEnvelope = null;
+      render();
+    });
+
+    loadInputs()
+      .then(render)
+      .catch(error => setStatus(error.message));
+  </script>
+</body>
+</html>
