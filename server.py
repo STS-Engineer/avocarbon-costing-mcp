@@ -11,7 +11,7 @@ import anyio
 import psycopg2
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -96,6 +96,98 @@ def error(message: str, exc: Optional[Exception] = None):
     if exc:
         result["details"] = str(exc)
     return result
+
+
+def _save_agent_json_traceability(
+    project_code: str,
+    product_id: str,
+    output_type: str,
+    object_id: str,
+    agent_name: str,
+    status: str,
+    raw_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Best-effort traceability write into agent_json_records when that table exists.
+
+    The table has had a few shapes during this prototype, so this helper maps the
+    requested choke write-back metadata onto whichever compatible columns exist.
+    Traceability failures never block the workflow write-back.
+    """
+    try:
+        with db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'agent_json_records'
+                    """
+                )
+                columns = {row["column_name"] for row in cur.fetchall()}
+                if not columns:
+                    return {
+                        "status": "skipped",
+                        "reason": "agent_json_records table is not available",
+                    }
+
+                metadata_payload = {
+                    "project_code": project_code,
+                    "product_id": product_id,
+                    "output_type": output_type,
+                    "object_id": object_id,
+                    "agent_name": agent_name,
+                    "status": status,
+                    "raw_json": raw_json,
+                }
+                values_by_column = {
+                    "project_code": project_code,
+                    "product_id": product_id,
+                    "product_reference": product_id,
+                    "output_type": output_type,
+                    "json_type": output_type,
+                    "object_id": object_id,
+                    "source_agent": agent_name,
+                    "agent_name": agent_name,
+                    "validation_status": status,
+                    "status": status,
+                    "payload": Json(metadata_payload),
+                    "raw_json": Json(raw_json),
+                }
+                insert_columns = [
+                    column
+                    for column in values_by_column
+                    if column in columns
+                ]
+                if "project_code" not in insert_columns:
+                    return {
+                        "status": "skipped",
+                        "reason": "agent_json_records has no project_code column",
+                    }
+                placeholders = ", ".join(["%s"] * len(insert_columns))
+                column_sql = ", ".join(insert_columns)
+                values = [values_by_column[column] for column in insert_columns]
+                cur.execute(
+                    f"""
+                    INSERT INTO agent_json_records ({column_sql})
+                    VALUES ({placeholders})
+                    RETURNING *
+                    """,
+                    values,
+                )
+                row = cur.fetchone()
+        return {
+            "status": "saved",
+            "table": "agent_json_records",
+            "record": json_safe(dict(row)) if row else None,
+        }
+    except Exception as exc:
+        logger.warning("agent_json_records traceability save skipped: %s", exc)
+        return {
+            "status": "skipped",
+            "reason": str(exc),
+        }
 
 
 @mcp.custom_route("/", methods=["GET"], include_in_schema=False)
@@ -539,11 +631,23 @@ def save_bom_output(
     try:
         from services.choke_sequential_agent_workflow import save_bom_output as workflow_save_bom_output
 
-        return workflow_save_bom_output(
+        workflow_response = workflow_save_bom_output(
             project_code=project_code,
             product_id=product_id,
             raw_json=raw_json,
         )
+        traceability = _save_agent_json_traceability(
+            project_code=project_code,
+            product_id=product_id,
+            output_type="bom",
+            object_id="bom",
+            agent_name="choke_bom_agent",
+            status="received",
+            raw_json=raw_json,
+        )
+        if isinstance(workflow_response, dict):
+            workflow_response["traceability"] = traceability
+        return workflow_response
     except Exception as exc:
         logger.exception("save_bom_output failed")
         return error("Failed to save BOM output.", exc)
@@ -565,12 +669,24 @@ def save_component_output(
     try:
         from services.choke_sequential_agent_workflow import save_component_output as workflow_save_component_output
 
-        return workflow_save_component_output(
+        workflow_response = workflow_save_component_output(
             project_code=project_code,
             product_id=product_id,
             component_id=component_id,
             raw_json=raw_json,
         )
+        traceability = _save_agent_json_traceability(
+            project_code=project_code,
+            product_id=product_id,
+            output_type="component",
+            object_id=component_id,
+            agent_name="external_component_costing_agent",
+            status="received",
+            raw_json=raw_json,
+        )
+        if isinstance(workflow_response, dict):
+            workflow_response["traceability"] = traceability
+        return workflow_response
     except Exception as exc:
         logger.exception("save_component_output failed")
         return error("Failed to save component output.", exc)
@@ -580,8 +696,9 @@ def save_component_output(
 def save_most_output(
     project_code: str,
     product_id: str,
-    work_package_id: str,
     raw_json: Dict[str, Any],
+    most_scope_id: Optional[str] = None,
+    work_package_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
@@ -590,21 +707,36 @@ def save_most_output(
     POST /api/choke-workflow/save-most-output.
     """
     try:
+        scope_id = most_scope_id or work_package_id
+        if not scope_id:
+            return error("most_scope_id or work_package_id is required.")
         from services.choke_sequential_agent_workflow import save_most_output as workflow_save_most_output
 
-        return workflow_save_most_output(
+        workflow_response = workflow_save_most_output(
             project_code=project_code,
             product_id=product_id,
-            work_package_id=work_package_id,
+            work_package_id=scope_id,
             raw_json=raw_json,
         )
+        traceability = _save_agent_json_traceability(
+            project_code=project_code,
+            product_id=product_id,
+            output_type="most",
+            object_id=scope_id,
+            agent_name="most_assemblage_agent",
+            status="received",
+            raw_json=raw_json,
+        )
+        if isinstance(workflow_response, dict):
+            workflow_response["traceability"] = traceability
+        return workflow_response
     except Exception as exc:
         logger.exception("save_most_output failed")
         return error("Failed to save MOST output.", exc)
 
 
 @mcp.tool()
-def get_workflow_status(project_code: str, product_id: str) -> Dict[str, Any]:
+def get_choke_workflow_status(project_code: str, product_id: str) -> Dict[str, Any]:
     """
     Read the Choke workflow status after agent write-back.
 
@@ -615,8 +747,31 @@ def get_workflow_status(project_code: str, product_id: str) -> Dict[str, Any]:
 
         return get_workflow_state(project_code=project_code, product_id=product_id)
     except Exception as exc:
-        logger.exception("get_workflow_status failed")
+        logger.exception("get_choke_workflow_status failed")
         return error("Failed to get workflow status.", exc)
+
+
+@mcp.tool()
+def get_workflow_status(project_code: str, product_id: str) -> Dict[str, Any]:
+    """Backward-compatible alias for get_choke_workflow_status."""
+    return get_choke_workflow_status(project_code=project_code, product_id=product_id)
+
+
+@mcp.tool()
+def calculate_choke_from_saved_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
+    """
+    Calculate final choke result from saved individual BOM, component and MOST outputs.
+
+    Uses the backend calculation function behind /api/choke-workflow/calculate-from-real-outputs,
+    including Olivier transport, direct cost, FOH, FEE and manufacturing-cost formulas.
+    """
+    try:
+        from services.choke_sequential_agent_workflow import calculate_from_real_outputs
+
+        return calculate_from_real_outputs(project_code=project_code, product_id=product_id)
+    except Exception as exc:
+        logger.exception("calculate_choke_from_saved_outputs failed")
+        return error("Failed to calculate choke from saved outputs.", exc)
 
 
 @mcp.tool()
