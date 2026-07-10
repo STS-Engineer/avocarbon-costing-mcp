@@ -1,0 +1,189 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AVOCarbon Choke Agent Write-back API",
+    "version": "1.0.0",
+    "description": "Write-back tools used by Choke BOM, External Component Costing, and MOST Workspace Agents to save final JSON outputs into the backend workflow."
+  },
+  "servers": [
+    {
+      "url": " https://8eeb-41-224-4-231.ngrok-free.app",
+      "description": "Public backend URL"
+    }
+  ],
+  "paths": {
+    "/api/choke-workflow/save-bom-output": {
+      "post": {
+        "operationId": "save_bom_output",
+        "summary": "Save final Choke BOM Agent JSON",
+        "description": "The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called. Use this tool at the end of the Choke BOM analysis to save your final BOM JSON to the backend.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveBomOutputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "BOM output saved and workflow moved to bom_received.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/choke-workflow/save-component-output": {
+      "post": {
+        "operationId": "save_component_output",
+        "summary": "Save final External Component Costing Agent JSON",
+        "description": "The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called. Use this tool at the end of each External Component Costing analysis to save the component JSON.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveComponentOutputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Component output saved and component status updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/choke-workflow/save-most-output": {
+      "post": {
+        "operationId": "save_most_output",
+        "summary": "Save final MOST Agent JSON",
+        "description": "The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called. Use this tool at the end of each MOST operation estimation to save the operation JSON.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveMostOutputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MOST output saved and MOST work package status updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SaveBomOutputRequest": {
+        "type": "object",
+        "required": [
+          "project_code",
+          "product_id",
+          "raw_json"
+        ],
+        "properties": {
+          "project_code": {
+            "type": "string",
+            "description": "Project code from the agent input payload."
+          },
+          "product_id": {
+            "type": "string",
+            "description": "Product/workflow product_id from the agent input payload."
+          },
+          "raw_json": {
+            "type": "object",
+            "description": "The complete final BOM JSON produced by the Choke BOM Agent.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SaveComponentOutputRequest": {
+        "type": "object",
+        "required": [
+          "project_code",
+          "product_id",
+          "component_id",
+          "raw_json"
+        ],
+        "properties": {
+          "project_code": {
+            "type": "string",
+            "description": "Project code from the agent input payload."
+          },
+          "product_id": {
+            "type": "string",
+            "description": "Product/workflow product_id from the agent input payload."
+          },
+          "component_id": {
+            "type": "string",
+            "description": "Component ID from the component costing agent input payload."
+          },
+          "raw_json": {
+            "type": "object",
+            "description": "The complete final component costing JSON produced by the External Component Costing Agent.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SaveMostOutputRequest": {
+        "type": "object",
+        "required": [
+          "project_code",
+          "product_id",
+          "work_package_id",
+          "raw_json"
+        ],
+        "properties": {
+          "project_code": {
+            "type": "string",
+            "description": "Project code from the agent input payload."
+          },
+          "product_id": {
+            "type": "string",
+            "description": "Product/workflow product_id from the agent input payload."
+          },
+          "work_package_id": {
+            "type": "string",
+            "description": "MOST work package ID from the MOST agent input payload."
+          },
+          "raw_json": {
+            "type": "object",
+            "description": "The complete final MOST operation JSON produced by the MOST Agent.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

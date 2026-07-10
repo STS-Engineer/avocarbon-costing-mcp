@@ -15,6 +15,8 @@ from psycopg2.extras import RealDictCursor
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from services import agent_writeback_service
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -487,7 +489,628 @@ async def _run_http_async() -> None:
 
     await uvicorn.Server(config).serve()
 
+@mcp.tool()
+def find_project_product(project_code: str, product_reference: str):
+    """Find project_product_id from project name/RFQ number and product/customer reference."""
+    try:
+        with db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        p.project_id,
+                        p.project_name,
+                        pp.project_product_id,
+                        pr.product_name,
+                        pp.customer_part_number
+                    FROM projects p
+                    JOIN project_products pp ON pp.project_id = p.project_id
+                    JOIN products pr ON pr.product_id = pp.product_id
+                    WHERE p.project_name ILIKE %s
+                      AND (
+                        pp.customer_part_number ILIKE %s
+                        OR pr.product_name ILIKE %s
+                      )
+                    LIMIT 10
+                """, (
+                    f"%{project_code}%",
+                    f"%{product_reference}%",
+                    f"%{product_reference}%"
+                ))
+                rows = [dict(r) for r in cur.fetchall()]
 
+        return success(rows, count=len(rows))
+    except Exception as exc:
+        logger.exception("find_project_product failed")
+        return error("Failed to find project product.", exc)
+
+
+@mcp.tool()
+def save_bom_output(
+    project_code: str,
+    product_id: str,
+    raw_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
+
+    Save the final Choke BOM Analyzer JSON to the backend workflow. This is equivalent
+    to POST /api/choke-workflow/save-bom-output.
+    """
+    try:
+        from services.choke_sequential_agent_workflow import save_bom_output as workflow_save_bom_output
+
+        return workflow_save_bom_output(
+            project_code=project_code,
+            product_id=product_id,
+            raw_json=raw_json,
+        )
+    except Exception as exc:
+        logger.exception("save_bom_output failed")
+        return error("Failed to save BOM output.", exc)
+
+
+@mcp.tool()
+def save_component_output(
+    project_code: str,
+    product_id: str,
+    component_id: str,
+    raw_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
+
+    Save one final External Component Costing Agent JSON to the backend workflow. This
+    is equivalent to POST /api/choke-workflow/save-component-output.
+    """
+    try:
+        from services.choke_sequential_agent_workflow import save_component_output as workflow_save_component_output
+
+        return workflow_save_component_output(
+            project_code=project_code,
+            product_id=product_id,
+            component_id=component_id,
+            raw_json=raw_json,
+        )
+    except Exception as exc:
+        logger.exception("save_component_output failed")
+        return error("Failed to save component output.", exc)
+
+
+@mcp.tool()
+def save_most_output(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+    raw_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
+
+    Save one final MOST operation JSON to the backend workflow. This is equivalent to
+    POST /api/choke-workflow/save-most-output.
+    """
+    try:
+        from services.choke_sequential_agent_workflow import save_most_output as workflow_save_most_output
+
+        return workflow_save_most_output(
+            project_code=project_code,
+            product_id=product_id,
+            work_package_id=work_package_id,
+            raw_json=raw_json,
+        )
+    except Exception as exc:
+        logger.exception("save_most_output failed")
+        return error("Failed to save MOST output.", exc)
+
+
+@mcp.tool()
+def get_workflow_status(project_code: str, product_id: str) -> Dict[str, Any]:
+    """
+    Read the Choke workflow status after agent write-back.
+
+    This is equivalent to GET /api/choke-workflow/status/{project_code}/{product_id}.
+    """
+    try:
+        from services.choke_sequential_agent_workflow import get_workflow_state
+
+        return get_workflow_state(project_code=project_code, product_id=product_id)
+    except Exception as exc:
+        logger.exception("get_workflow_status failed")
+        return error("Failed to get workflow status.", exc)
+
+
+@mcp.tool()
+def import_agent_costing_package(payload: dict):
+    """
+    Import agent-generated costing JSON into PostgreSQL.
+    Creates project, product, project_product, components, BOM and routing operations.
+    """
+    try:
+        project = payload.get("project", {})
+        product = payload.get("project_product", {})
+        components = payload.get("components", [])
+        bom_lines = payload.get("bill_of_materials", [])
+        operations = payload.get("router_operations", [])
+
+        project_code = project.get("project_code")
+        customer_name = project.get("customer")
+        product_name = product.get("product_name")
+        customer_reference = product.get("customer_reference")
+
+        if not project_code:
+            return error("project.project_code is required.")
+        if not customer_name:
+            return error("project.customer is required.")
+        if not product_name:
+            return error("project_product.product_name is required.")
+
+        with db_connection() as conn:
+            with conn.cursor() as cur:
+
+                # 1. Customer
+                cur.execute("""
+                    SELECT customer_id FROM customers
+                    WHERE customer_name ILIKE %s
+                    LIMIT 1
+                """, (customer_name,))
+                row = cur.fetchone()
+
+                if row:
+                    customer_id = row["customer_id"]
+                else:
+                    cur.execute("""
+                        INSERT INTO customers (customer_name)
+                        VALUES (%s)
+                        RETURNING customer_id
+                    """, (customer_name,))
+                    customer_id = cur.fetchone()["customer_id"]
+                # Delivery zone
+                delivery_zone_name = project.get("delivery_zone") or "Europe"
+
+                cur.execute("""
+                    SELECT zone_id
+                    FROM zones
+                    WHERE zone_name ILIKE %s
+                    LIMIT 1
+                """, (delivery_zone_name,))
+                row = cur.fetchone()
+
+                if row:
+                    delivery_zone_id = row["zone_id"]
+                else:
+                    cur.execute("""
+                        SELECT zone_id
+                        FROM zones
+                        ORDER BY zone_id
+                        LIMIT 1
+                    """)
+                    row = cur.fetchone()
+
+                    if not row:
+                        return error("No delivery zone found in zones table.")
+
+                    delivery_zone_id = row["zone_id"]
+                # 2. Project
+                cur.execute("""
+                    SELECT project_id FROM projects
+                    WHERE project_name ILIKE %s
+                    LIMIT 1
+                """, (project_code,))
+                row = cur.fetchone()
+
+                if row:
+                    project_id = row["project_id"]
+                else:
+                    cur.execute("""
+                        INSERT INTO projects (project_name, customer_id, delivery_zone_id, status)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING project_id
+                    """, (project_code, customer_id, delivery_zone_id, "created_from_agent"))
+                    project_id = cur.fetchone()["project_id"]
+
+                # 3. Product line fallback
+                cur.execute("""
+                    SELECT product_line_id FROM product_lines
+                    ORDER BY product_line_id
+                    LIMIT 1
+                """)
+                product_line_id = cur.fetchone()["product_line_id"]
+
+                # 4. Product
+                cur.execute("""
+                    SELECT product_id FROM products
+                    WHERE product_name ILIKE %s
+                    LIMIT 1
+                """, (product_name,))
+                row = cur.fetchone()
+
+                if row:
+                    product_id = row["product_id"]
+                else:
+                    cur.execute("""
+                        INSERT INTO products (product_name, product_line_id, roce_target_percent)
+                        VALUES (%s, %s, %s)
+                        RETURNING product_id
+                    """, (product_name, product_line_id, 0))
+                    product_id = cur.fetchone()["product_id"]
+
+                # 5. Project product
+                cur.execute("""
+                    SELECT project_product_id FROM project_products
+                    WHERE project_id = %s
+                      AND product_id = %s
+                    LIMIT 1
+                """, (project_id, product_id))
+                row = cur.fetchone()
+
+                if row:
+                    project_product_id = row["project_product_id"]
+                else:
+                    cur.execute("""
+                        INSERT INTO project_products
+                        (project_id, product_id, customer_part_number, annual_volume)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING project_product_id
+                    """, (
+                        project_id,
+                        product_id,
+                        customer_reference,
+                        project.get("annual_quantity")
+                    ))
+                    project_product_id = cur.fetchone()["project_product_id"]
+
+                component_id_by_code = {}
+
+                # 6. Components
+                for component in components:
+                    code = component.get("component_code")
+                    description = component.get("component_name") or component.get("component_description")
+                    technology = component.get("component_family") or component.get("component_type")
+                    weight = component.get("net_weight")
+
+                    if not code:
+                        continue
+
+                    cur.execute("""
+                        SELECT component_id FROM components
+                        WHERE component_code = %s
+                        LIMIT 1
+                    """, (code,))
+                    row = cur.fetchone()
+
+                    if row:
+                        component_id = row["component_id"]
+                        cur.execute("""
+                            UPDATE components
+                            SET component_description = COALESCE(%s, component_description),
+                                technology = COALESCE(%s, technology),
+                                total_weight_grams = COALESCE(%s, total_weight_grams)
+                            WHERE component_id = %s
+                        """, (
+                            description,
+                            technology,
+                            float(weight) * 1000 if weight else None,
+                            component_id
+                        ))
+                    else:
+                        cur.execute("""
+                            INSERT INTO components
+                            (component_code, component_description, technology, total_weight_grams, status)
+                            VALUES (%s, %s, %s, %s, %s)
+                            RETURNING component_id
+                        """, (
+                            code,
+                            description,
+                            technology,
+                            float(weight) * 1000 if weight else None,
+                            "created_from_agent"
+                        ))
+                        component_id = cur.fetchone()["component_id"]
+
+                    component_id_by_code[code] = component_id
+
+                # 7. BOM
+                for bom in bom_lines:
+                    code = bom.get("component_code")
+                    qty = bom.get("quantity_per_parent")
+
+                    component_id = component_id_by_code.get(code)
+                    if not component_id:
+                        continue
+
+                    cur.execute("""
+                        SELECT bom_id FROM bill_of_materials
+                        WHERE project_product_id = %s
+                          AND component_id = %s
+                        LIMIT 1
+                    """, (project_product_id, component_id))
+                    row = cur.fetchone()
+
+                    if row:
+                        cur.execute("""
+                            UPDATE bill_of_materials
+                            SET quantity_per_product = %s
+                            WHERE bom_id = %s
+                        """, (qty, row["bom_id"]))
+                    else:
+                        cur.execute("""
+                            INSERT INTO bill_of_materials
+                            (project_product_id, component_id, quantity_per_product)
+                            VALUES (%s, %s, %s)
+                        """, (project_product_id, component_id, qty))
+
+                # 8. Routing operations
+                for op in operations:
+                    cur.execute("""
+                        SELECT router_operation_id FROM router_operations
+                        WHERE project_product_id = %s
+                          AND operation_number = %s
+                        LIMIT 1
+                    """, (project_product_id, op.get("operation_sequence")))
+                    row = cur.fetchone()
+
+                    if row:
+                        cur.execute("""
+                            UPDATE router_operations
+                            SET operation_description = %s,
+                                cycle_time_seconds = %s,
+                                gross_strokes_per_hour = %s,
+                                pieces_per_stroke = %s,
+                                generic_capex = %s,
+                                specific_capex = %s,
+                                tooling_cost = %s
+                            WHERE router_operation_id = %s
+                        """, (
+                            op.get("description"),
+                            op.get("cycle_time_seconds"),
+                            op.get("gross_strokes_per_hour"),
+                            op.get("pieces_per_stroke"),
+                            op.get("generic_capex"),
+                            op.get("specific_capex"),
+                            op.get("tooling_cost"),
+                            row["router_operation_id"]
+                        ))
+                    else:
+                        cur.execute("""
+                            INSERT INTO router_operations
+                            (
+                                project_product_id,
+                                operation_number,
+                                operation_description,
+                                cycle_time_seconds,
+                                gross_strokes_per_hour,
+                                pieces_per_stroke,
+                                generic_capex,
+                                specific_capex,
+                                tooling_cost
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            project_product_id,
+                            op.get("operation_sequence"),
+                            op.get("description"),
+                            op.get("cycle_time_seconds"),
+                            op.get("gross_strokes_per_hour"),
+                            op.get("pieces_per_stroke"),
+                            op.get("generic_capex"),
+                            op.get("specific_capex"),
+                            op.get("tooling_cost")
+                        ))
+
+        return success({
+            "project_id": project_id,
+            "project_product_id": project_product_id,
+            "components_processed": len(component_id_by_code),
+            "bom_lines_processed": len(bom_lines),
+            "routing_operations_processed": len(operations)
+        }, "Agent costing package imported.")
+
+    except Exception as exc:
+        logger.exception("import_agent_costing_package failed")
+        return error("Failed to import agent costing package.", exc)
+@mcp.tool()
+def save_choke_bom_result(
+    project_code: str,
+    product_id: str,
+    agent_name: str,
+    raw_json: Dict[str, Any],
+    save_to_database: bool = False,
+) -> Dict[str, Any]:
+    """
+    Use this tool to save your final JSON output. Always call this tool before finishing.
+
+    Saves the final Choke BOM Analyzer JSON to the backend costing run folder and updates
+    the write-back status file.
+    """
+    try:
+        return agent_writeback_service.save_choke_bom_result(
+            project_code=project_code,
+            product_id=product_id,
+            agent_name=agent_name,
+            raw_json=raw_json,
+            save_to_database=save_to_database,
+        )
+    except Exception as exc:
+        logger.exception("save_choke_bom_result failed")
+        return error("Failed to save choke BOM result.", exc)
+
+
+@mcp.tool()
+def save_component_costing_result(
+    project_code: str,
+    product_id: str,
+    component_id: str,
+    component_type: str,
+    agent_name: str,
+    raw_json: Dict[str, Any],
+    save_to_database: bool = False,
+) -> Dict[str, Any]:
+    """
+    Use this tool to save your final JSON output. Always call this tool before finishing.
+
+    Saves one External Component Costing Agent JSON output to the backend costing run
+    folder and updates the write-back status file.
+    """
+    try:
+        return agent_writeback_service.save_component_costing_result(
+            project_code=project_code,
+            product_id=product_id,
+            component_id=component_id,
+            component_type=component_type,
+            agent_name=agent_name,
+            raw_json=raw_json,
+            save_to_database=save_to_database,
+        )
+    except Exception as exc:
+        logger.exception("save_component_costing_result failed")
+        return error("Failed to save component costing result.", exc)
+
+
+@mcp.tool()
+def save_most_operation_result(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+    component_id: str,
+    operation_id: str,
+    operation_name: str,
+    agent_name: str,
+    raw_json: Dict[str, Any],
+    save_to_database: bool = False,
+) -> Dict[str, Any]:
+    """
+    Use this tool to save your final JSON output. Always call this tool before finishing.
+
+    Saves one MOST operation JSON output to the backend costing run folder and updates
+    the write-back status file.
+    """
+    try:
+        return agent_writeback_service.save_most_operation_result(
+            project_code=project_code,
+            product_id=product_id,
+            work_package_id=work_package_id,
+            component_id=component_id,
+            operation_id=operation_id,
+            operation_name=operation_name,
+            agent_name=agent_name,
+            raw_json=raw_json,
+            save_to_database=save_to_database,
+        )
+    except Exception as exc:
+        logger.exception("save_most_operation_result failed")
+        return error("Failed to save MOST operation result.", exc)
+
+
+@mcp.tool()
+def get_costing_run_status(project_code: str, product_id: str) -> Dict[str, Any]:
+    """Read the saved agent-output status for one Choke costing run."""
+    try:
+        return agent_writeback_service.get_costing_run_status(
+            project_code=project_code,
+            product_id=product_id,
+        )
+    except Exception as exc:
+        logger.exception("get_costing_run_status failed")
+        return error("Failed to get costing run status.", exc)
+
+
+@mcp.tool()
+def calculate_choke_from_saved_agent_outputs(
+    project_code: str,
+    product_id: str,
+    input_file: str,
+) -> Dict[str, Any]:
+    """Calculate Choke preliminary costing from JSON files saved by write-back tools."""
+    try:
+        return agent_writeback_service.calculate_choke_from_saved_agent_outputs(
+            project_code=project_code,
+            product_id=product_id,
+            input_file=input_file,
+        )
+    except Exception as exc:
+        logger.exception("calculate_choke_from_saved_agent_outputs failed")
+        return error("Failed to calculate from saved agent outputs.", exc)
+
+
+@mcp.tool()
+def store_agent_json(
+    project_code: str,
+    json_type: str,
+    payload: dict,
+    product_reference: str = None,
+    source_agent: str = None,
+    validation_status: str = "draft"
+):
+    """
+    Store an agent-generated JSON payload in PostgreSQL.
+
+    json_type examples:
+    - project_validation
+    - component_json
+    - bom_json
+    - router_operation_json
+    - costing_json
+    """
+    try:
+        if not project_code:
+            return error("project_code is required.")
+        if not json_type:
+            return error("json_type is required.")
+        if not payload:
+            return error("payload is required.")
+
+        import json
+
+        with db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_json_records (
+                        agent_json_record_id SERIAL PRIMARY KEY,
+                        project_code TEXT NOT NULL,
+                        product_reference TEXT NULL,
+                        json_type TEXT NOT NULL,
+                        source_agent TEXT NULL,
+                        validation_status TEXT NULL,
+                        payload JSONB NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                cur.execute("""
+                    INSERT INTO agent_json_records
+                    (
+                        project_code,
+                        product_reference,
+                        json_type,
+                        source_agent,
+                        validation_status,
+                        payload
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                    RETURNING agent_json_record_id
+                """, (
+                    project_code,
+                    product_reference,
+                    json_type,
+                    source_agent,
+                    validation_status,
+                    json.dumps(payload)
+                ))
+
+                record_id = cur.fetchone()["agent_json_record_id"]
+
+        return success({
+            "agent_json_record_id": record_id,
+            "project_code": project_code,
+            "product_reference": product_reference,
+            "json_type": json_type,
+            "validation_status": validation_status
+        }, "Agent JSON stored successfully.")
+
+    except Exception as exc:
+        logger.exception("store_agent_json failed")
+        return error("Failed to store agent JSON.", exc)
 if __name__ == "__main__":
     logger.info("=" * 48)
     logger.info("Starting AVOCarbon Costing MCP")
