@@ -327,7 +327,7 @@ Do not only return the JSON in chat.`,
     }
     function setStatus(text) { $("status").textContent = text; }
     function setBusy(busy) {
-      for (const id of ["create-input", "instant", "start-chain", "refresh", "trigger-components", "trigger-most", "calculate-real", "save-bom-output"]) {
+      for (const id of ["create-input", "instant", "start-chain", "refresh", "trigger-components", "trigger-most", "calculate-real", "save-bom-output", "save-component-output", "save-most-output"]) {
         const element = $(id);
         if (element) element.disabled = busy;
       }
@@ -582,6 +582,74 @@ Do not only return the JSON in chat.`,
       }
     }
 
+    async function saveComponentOutput() {
+      const wf = state.workflow;
+      const componentId = ($("component-output-id") || {}).value || "";
+      const textArea = $("component-json-output");
+      if (!wf || !textArea) return;
+      if (!componentId.trim()) {
+        setStatus("Enter component_id before saving component JSON.");
+        return;
+      }
+      let rawJson;
+      try {
+        rawJson = JSON.parse(textArea.value.trim());
+      } catch (error) {
+        setStatus(`Component JSON is invalid: ${error.message}`);
+        return;
+      }
+      setBusy(true);
+      try {
+        const result = await postJson("/api/choke-workflow/save-component-output", {
+          project_code: wf.project_code,
+          product_id: wf.product_id,
+          component_id: componentId.trim(),
+          raw_json: rawJson
+        });
+        state.workflow = result.state;
+        render();
+        setStatus(`Component output saved for ${componentId.trim()}.`);
+      } catch (error) {
+        setStatus(`Save component output failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function saveMostOutput() {
+      const wf = state.workflow;
+      const scopeId = ($("most-output-id") || {}).value || "";
+      const textArea = $("most-json-output");
+      if (!wf || !textArea) return;
+      if (!scopeId.trim()) {
+        setStatus("Enter most_scope_id/work_package_id before saving MOST JSON.");
+        return;
+      }
+      let rawJson;
+      try {
+        rawJson = JSON.parse(textArea.value.trim());
+      } catch (error) {
+        setStatus(`MOST JSON is invalid: ${error.message}`);
+        return;
+      }
+      setBusy(true);
+      try {
+        const result = await postJson("/api/choke-workflow/save-most-output", {
+          project_code: wf.project_code,
+          product_id: wf.product_id,
+          work_package_id: scopeId.trim(),
+          raw_json: rawJson
+        });
+        state.workflow = result.state;
+        render();
+        setStatus(`MOST output saved for ${scopeId.trim()}.`);
+      } catch (error) {
+        setStatus(`Save MOST output failed: ${error.message}`);
+      } finally {
+        setBusy(false);
+      }
+    }
+
     function updateButtonAvailability() {
       const wf = state.workflow;
       $("trigger-components").disabled = !(wf && wf.bom && wf.bom.status === "received");
@@ -642,10 +710,20 @@ Do not only return the JSON in chat.`,
         <div class="step">
           <strong>Step 2 External Component Costing Agent</strong>
           ${componentSummary}
+          <label for="component-output-id">Manual component_id</label>
+          <input id="component-output-id" placeholder="ferrite_core">
+          <label for="component-json-output">Paste one component JSON output</label>
+          <textarea id="component-json-output" placeholder='{"component_id":"ferrite_core","recommended_offer":{"supply_chain":{"delivered_cost":0.129}}}'></textarea>
+          <button id="save-component-output" class="save" type="button" onclick="saveComponentOutput()" ${wf.project_code && wf.product_id ? "" : "disabled"}>Save Component Output</button>
         </div>
         <div class="step">
           <strong>Step 3 MOST Agent</strong>
           ${mostSummary}
+          <label for="most-output-id">Manual most_scope_id / work_package_id</label>
+          <input id="most-output-id" placeholder="magnet_wire_winding">
+          <label for="most-json-output">Paste one MOST JSON output</label>
+          <textarea id="most-json-output" placeholder='{"work_package_id":"magnet_wire_winding","p_h":800,"oee":0.8,"operator_percent":25}'></textarea>
+          <button id="save-most-output" class="save" type="button" onclick="saveMostOutput()" ${wf.project_code && wf.product_id ? "" : "disabled"}>Save MOST Output</button>
         </div>
         <div class="step">
           <strong>Step 4 Cost Calculation</strong>
@@ -654,10 +732,13 @@ Do not only return the JSON in chat.`,
           <div>DL: ${number(realFinancial.dl_cost_per_piece)}</div>
           <div>VOH: ${number(realFinancial.voh_cost_per_piece)}</div>
           <div>Transport: ${number(realFinancial.transport_cost_per_piece)}</div>
+          <div>FOH %: ${number(realFinancial.foh_percent_dc)}</div>
           <div>FOH: ${number(realFinancial.foh_cost_per_piece)}</div>
+          <div>FEE %: ${number(realFinancial.fee_percent_dc)}</div>
           <div>FEE: ${number(realFinancial.fee_cost_per_piece)}</div>
           <div>Direct cost: ${number(realFinancial.direct_cost_per_piece || realFinancial.preliminary_direct_cost_per_piece)}</div>
           <div>Manufacturing cost: ${hasMissingComponentOutputs(state.realEnvelope) ? "waiting for component outputs" : number(realFinancial.manufacturing_cost_per_piece || realFinancial.preliminary_manufacturing_cost_per_piece)}</div>
+          <div>Missing: ${arr(realFinancial.missing_inputs).length ? arr(realFinancial.missing_inputs).map(item => badge(item, "orange")).join(" ") : "none"}</div>
         </div>`;
       const missing = arr(wf.missing_outputs);
       const extractedBadge = wf.technical_fields_extracted_from_bom
@@ -713,7 +794,7 @@ Do not only return the JSON in chat.`,
 
     function renderReal() {
       const envelope = state.realEnvelope || {};
-      const financial = envelope.financial_calculation || {};
+      const financial = (envelope.final_choke_costing || envelope.financial_calculation || {});
       $("real-card").innerHTML = `<h2>Real Agent Chain Calculation</h2>
         ${envelope.schema_version ? badge(financial.status || "calculated", financial.status === "blocked" ? "red" : "green") : badge("Not calculated", "gray")}
         <div class="kv">
@@ -721,13 +802,15 @@ Do not only return the JSON in chat.`,
           <div><span>DL cost</span><strong>${number(financial.dl_cost_per_piece)}</strong></div>
           <div><span>VOH cost</span><strong>${number(financial.voh_cost_per_piece)}</strong></div>
           <div><span>Transport</span><strong>${number(financial.transport_cost_per_piece)}</strong></div>
+          <div><span>FOH %</span><strong>${number(financial.foh_percent_dc)}</strong></div>
           <div><span>FOH</span><strong>${number(financial.foh_cost_per_piece)}</strong></div>
+          <div><span>FEE %</span><strong>${number(financial.fee_percent_dc)}</strong></div>
           <div><span>FEE</span><strong>${number(financial.fee_cost_per_piece)}</strong></div>
           <div><span>Direct cost</span><strong>${number(financial.direct_cost_per_piece || financial.preliminary_direct_cost_per_piece)}</strong></div>
           <div><span>Manufacturing cost</span><strong>${hasMissingComponentOutputs(envelope) ? "waiting for component outputs" : number(financial.manufacturing_cost_per_piece || financial.preliminary_manufacturing_cost_per_piece)}</strong></div>
         </div>
         <div class="items">${
-          arr(envelope.missing_inputs).map(item => `<div class="item">${badge("missing", "orange")} ${item}</div>`).join("")
+          arr(financial.missing_inputs || envelope.missing_inputs).map(item => `<div class="item">${badge("missing", "orange")} ${item}</div>`).join("")
           || "<div class='item'>No missing real-chain calculation inputs listed.</div>"
         }</div>`;
     }

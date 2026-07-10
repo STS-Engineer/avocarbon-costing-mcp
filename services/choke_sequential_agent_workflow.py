@@ -1082,6 +1082,245 @@ def _float(value: Any) -> Optional[float]:
     return float(match.group(0)) if match else None
 
 
+def _saved_bom_quantity_map(raw_bom: Dict[str, Any]) -> Dict[str, float]:
+    quantities: Dict[str, float] = {}
+    for index, component in enumerate(_extract_component_list(raw_bom), start=1):
+        component_id = _component_id(component, index)
+        quantity = _float(
+            component.get("quantity_per_product")
+            or component.get("quantity")
+            or component.get("qty")
+            or component.get("quantity_value")
+        )
+        quantities[component_id] = quantity if quantity not in [None, 0] else 1.0
+    return quantities
+
+
+def _saved_component_cost(raw: Dict[str, Any]) -> Optional[float]:
+    return _float(_first_value(raw, [
+        ["normalized_cost", "material_cost_per_piece"],
+        ["normalized_cost", "delivered_cost_per_piece"],
+        ["recommended_offer", "supply_chain", "material_cost"],
+        ["recommended_offer", "supply_chain", "delivered_cost"],
+        ["recommended_offer", "material_cost"],
+        ["recommended_offer", "delivered_cost"],
+        ["material_cost_per_piece"],
+        ["delivered_cost_per_piece"],
+        ["material_cost"],
+        ["delivered_cost"],
+        ["cost_per_piece"],
+    ]))
+
+
+def _saved_component_currency(raw: Dict[str, Any]) -> str:
+    return _first_value(raw, [
+        ["normalized_cost", "currency"],
+        ["recommended_offer", "supply_chain", "currency"],
+        ["recommended_offer", "currency"],
+        ["currency"],
+    ]) or ""
+
+
+def _saved_transport_value(raw: Dict[str, Any], names: List[str]) -> float:
+    paths = []
+    for name in names:
+        paths.extend([
+            ["recommended_offer", "supply_chain", name],
+            ["supply_chain", name],
+            ["normalized_cost", name],
+            [name],
+        ])
+    return _float(_first_value(raw, paths)) or 0.0
+
+
+def _load_saved_component_outputs(project_code: str, product_id: str) -> List[Dict[str, Any]]:
+    component_dir = _run_dir(project_code, product_id) / "agent_outputs" / "components"
+    return [
+        _normalize_component_output(path)
+        for path in sorted(component_dir.glob("*.json"))
+    ] if component_dir.exists() else []
+
+
+def _load_saved_most_outputs(project_code: str, product_id: str) -> List[Dict[str, Any]]:
+    most_dir = _run_dir(project_code, product_id) / "agent_outputs" / "most"
+    return [
+        _normalize_most_output(path)
+        for path in sorted(most_dir.glob("*.json"))
+    ] if most_dir.exists() else []
+
+
+def _unit_data_for_final_calculation(
+    state: Dict[str, Any],
+    customer_input: Dict[str, Any],
+    unit_data_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if unit_data_override:
+        return unit_data_override
+    unit_data = state.get("unit_data") or {}
+    if unit_data:
+        return unit_data
+    manufacturing_strategy = state.get("manufacturing_strategy") or {}
+    if not manufacturing_strategy:
+        manufacturing_strategy = get_master_manufacturing_strategy(
+            customer_input.get("product_line"),
+            customer_input.get("product"),
+            customer_input.get("customer_delivery_zone"),
+        )
+    return get_master_unit_data(manufacturing_strategy.get("production_plant"))
+
+
+def _plant_unit_missing(unit_data: Dict[str, Any]) -> bool:
+    required = [
+        "dl_rate_operating_per_hour",
+        "voh_rate_operating_per_hour",
+        "foh_percent_dc",
+        "fee_percent_dc",
+        "open_hours_per_year",
+        "operating_currency",
+        "selling_currency",
+    ]
+    return any(unit_data.get(key) in [None, "", 0] for key in required)
+
+
+def calculate_final_choke_costing_from_saved_outputs(
+    project_code: str,
+    product_id: str,
+    unit_data_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    warnings: List[str] = []
+    missing_inputs: List[str] = []
+    state = _load_state(project_code, product_id)
+    input_file = state.get("input_file")
+    customer_input = state.get("customer_input") or {}
+    if input_file:
+        try:
+            loaded_input = _load_customer_input(input_file)
+            customer_input = {**loaded_input, **customer_input}
+        except Exception as exc:
+            warnings.append(f"customer input could not be loaded from workflow state: {exc}")
+
+    raw_bom = _read_json(_bom_raw_path(project_code, product_id), None)
+    if raw_bom is None:
+        missing_inputs.append("bom")
+        raw_bom = {}
+    quantity_by_component = _saved_bom_quantity_map(raw_bom)
+
+    component_outputs = _load_saved_component_outputs(project_code, product_id)
+    if not component_outputs:
+        missing_inputs.append("component_outputs")
+
+    component_breakdown = []
+    transport_breakdown = []
+    material_cost_per_piece = 0.0
+    transport_cost_per_piece = 0.0
+    output_component_ids = set()
+    for component in component_outputs:
+        raw = component.get("agent_raw_output") or component
+        component_id = component.get("component_id") or raw.get("component_id")
+        output_component_ids.add(component_id)
+        quantity = quantity_by_component.get(component_id, 1.0)
+        unit_material_cost = _saved_component_cost(raw)
+        if unit_material_cost is None:
+            missing_inputs.append(f"component_outputs:{component_id}:material_cost")
+            line_material_cost = None
+        else:
+            line_material_cost = quantity * unit_material_cost
+            material_cost_per_piece += line_material_cost
+        transportation = _saved_transport_value(raw, ["transportation_cost", "transport_cost"])
+        custom_duty = _saved_transport_value(raw, ["custom_duty_cost", "customs_duty_cost", "duty_cost"])
+        forwarder = _saved_transport_value(raw, ["forwarder_cost", "forwarding_cost"])
+        line_transport = quantity * (transportation + custom_duty + forwarder)
+        transport_cost_per_piece += line_transport
+        currency = _saved_component_currency(raw)
+        component_breakdown.append({
+            "component_id": component_id,
+            "quantity_per_product": quantity,
+            "unit_material_or_delivered_cost": unit_material_cost,
+            "material_cost_per_piece": line_material_cost,
+            "currency": currency,
+            "source": "saved_component_json",
+        })
+        transport_breakdown.append({
+            "component_id": component_id,
+            "quantity_per_product": quantity,
+            "transportation_cost": transportation,
+            "custom_duty_cost": custom_duty,
+            "forwarder_cost": forwarder,
+            "transport_cost_per_piece": line_transport,
+            "currency": currency,
+        })
+
+    for component_id in quantity_by_component:
+        if component_id not in output_component_ids and component_id not in {"lead_tin_plating", "tin_plating"}:
+            warnings.append(f"no saved component JSON found for BOM component {component_id}")
+
+    most_outputs = _load_saved_most_outputs(project_code, product_id)
+    if not most_outputs:
+        missing_inputs.append("most_outputs")
+
+    unit_data = _unit_data_for_final_calculation(state, customer_input, unit_data_override)
+    if _plant_unit_missing(unit_data):
+        missing_inputs.append("plant_unit_data")
+
+    annual_quantity = customer_input.get("annual_quantity")
+    dl_voh = calculate_dl_voh(most_outputs, unit_data, annual_quantity)
+    if dl_voh.get("status") == "blocked":
+        for item in dl_voh.get("missing_inputs") or []:
+            if item in {
+                "dl_rate_operating_per_hour",
+                "voh_rate_operating_per_hour",
+                "open_hours_per_year",
+                "operating_currency/selling_currency",
+                "fx_operating_to_selling",
+            }:
+                missing_inputs.append("plant_unit_data")
+            else:
+                missing_inputs.append(item)
+
+    dl_cost = dl_voh.get("dl_cost_per_piece")
+    voh_cost = dl_voh.get("voh_cost_per_piece")
+    foh_percent = _float(unit_data.get("foh_percent_dc")) or 0.0
+    fee_percent = _float(unit_data.get("fee_percent_dc")) or 0.0
+    direct_cost = None
+    foh_cost = None
+    fee_cost = None
+    manufacturing_cost = None
+    if dl_cost is not None and voh_cost is not None:
+        direct_cost = dl_cost + voh_cost + transport_cost_per_piece
+        foh_cost = foh_percent / 100 * direct_cost
+        fee_cost = fee_percent / 100 * direct_cost
+        manufacturing_cost = direct_cost + foh_cost + fee_cost
+
+    unique_missing = list(dict.fromkeys(missing_inputs))
+    result = {
+        "project_code": project_code,
+        "product_id": product_id,
+        "status": "blocked" if unique_missing else "calculated",
+        "currency": unit_data.get("selling_currency") or next(
+            (item.get("currency") for item in component_breakdown if item.get("currency")),
+            "",
+        ),
+        "material_cost_per_piece": None if "component_outputs" in unique_missing else material_cost_per_piece,
+        "transport_cost_per_piece": None if "component_outputs" in unique_missing else transport_cost_per_piece,
+        "dl_cost_per_piece": dl_cost,
+        "voh_cost_per_piece": voh_cost,
+        "direct_cost_per_piece": direct_cost,
+        "foh_percent_dc": foh_percent,
+        "foh_cost_per_piece": foh_cost,
+        "fee_percent_dc": fee_percent,
+        "fee_cost_per_piece": fee_cost,
+        "manufacturing_cost_per_piece": manufacturing_cost,
+        "component_breakdown": component_breakdown,
+        "transport_breakdown_by_component": transport_breakdown,
+        "most_breakdown_by_scope": dl_voh.get("work_package_calculation") or [],
+        "missing_inputs": unique_missing,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+    output_path = _run_dir(project_code, product_id) / "final_choke_costing_result.json"
+    result["save_path"] = _write_json(output_path, result)
+    return result
+
+
 def _normalize_component_output(path: Path) -> Dict[str, Any]:
     raw = _read_json(path, {}) or {}
     component_id = raw.get("component_id") or path.stem
@@ -1195,12 +1434,33 @@ def calculate_from_real_outputs(project_code: str, product_id: str) -> Dict[str,
 
     envelope["calculation_source"] = "real_sequential_agent_chain"
     envelope["workflow_state"] = state
+    final_result = calculate_final_choke_costing_from_saved_outputs(project_code, product_id)
+    envelope["final_choke_costing"] = final_result
+    envelope.setdefault("financial_calculation", {}).update({
+        "status": final_result.get("status"),
+        "currency": final_result.get("currency"),
+        "material_cost_per_piece": final_result.get("material_cost_per_piece"),
+        "transport_cost_per_piece": final_result.get("transport_cost_per_piece"),
+        "dl_cost_per_piece": final_result.get("dl_cost_per_piece"),
+        "voh_cost_per_piece": final_result.get("voh_cost_per_piece"),
+        "direct_cost_per_piece": final_result.get("direct_cost_per_piece"),
+        "foh_percent_dc": final_result.get("foh_percent_dc"),
+        "foh_cost_per_piece": final_result.get("foh_cost_per_piece"),
+        "fee_percent_dc": final_result.get("fee_percent_dc"),
+        "fee_cost_per_piece": final_result.get("fee_cost_per_piece"),
+        "manufacturing_cost_per_piece": final_result.get("manufacturing_cost_per_piece"),
+        "component_breakdown": final_result.get("component_breakdown"),
+        "transport_breakdown_by_component": final_result.get("transport_breakdown_by_component"),
+        "most_breakdown_by_scope": final_result.get("most_breakdown_by_scope"),
+        "missing_inputs": final_result.get("missing_inputs"),
+        "warnings": final_result.get("warnings"),
+    })
     output_path = _run_dir(project_code, product_id) / "orchestration_result_real_agent_chain.json"
     envelope["orchestration_result_real_agent_chain_path"] = _write_json(output_path, envelope)
 
-    financial_status = (envelope.get("financial_calculation") or {}).get("status")
+    financial_status = final_result.get("status")
     state["status"] = "calculated" if financial_status != "blocked" else "blocked"
     state["current_step"] = "Step 4 Cost Calculation"
-    state["missing_outputs"] = envelope.get("missing_inputs") or []
+    state["missing_outputs"] = final_result.get("missing_inputs") or []
     _save_state(state)
     return envelope

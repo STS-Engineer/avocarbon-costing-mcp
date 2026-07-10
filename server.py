@@ -766,9 +766,9 @@ def calculate_choke_from_saved_outputs(project_code: str, product_id: str) -> Di
     including Olivier transport, direct cost, FOH, FEE and manufacturing-cost formulas.
     """
     try:
-        from services.choke_sequential_agent_workflow import calculate_from_real_outputs
+        from services.choke_sequential_agent_workflow import calculate_final_choke_costing_from_saved_outputs
 
-        return calculate_from_real_outputs(project_code=project_code, product_id=product_id)
+        return calculate_final_choke_costing_from_saved_outputs(project_code=project_code, product_id=product_id)
     except Exception as exc:
         logger.exception("calculate_choke_from_saved_outputs failed")
         return error("Failed to calculate choke from saved outputs.", exc)

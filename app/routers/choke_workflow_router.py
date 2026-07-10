@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from services.choke_sequential_agent_workflow import (
+    calculate_final_choke_costing_from_saved_outputs,
     calculate_from_real_outputs,
     get_workflow_state,
     save_bom_output,
@@ -52,6 +53,7 @@ class SaveMostOutputRequest(BaseModel):
 class CalculateRealOutputsRequest(BaseModel):
     project_code: str
     product_id: str
+    unit_data: Dict[str, Any] | None = None
 
 
 def _handle(callback):
@@ -131,4 +133,13 @@ def calculate_real_outputs(request: CalculateRealOutputsRequest):
     return _handle(lambda: calculate_from_real_outputs(
         project_code=request.project_code,
         product_id=request.product_id,
+    ))
+
+
+@router.post("/calculate-final")
+def calculate_final_outputs(request: CalculateRealOutputsRequest):
+    return _handle(lambda: calculate_final_choke_costing_from_saved_outputs(
+        project_code=request.project_code,
+        product_id=request.product_id,
+        unit_data_override=request.unit_data,
     ))
