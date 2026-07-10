@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AVOCarbon Choke Costing Orchestrator</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #637083;
+      --line: #d8e0ea;
+      --blue: #1f5eff;
+      --green: #16825d;
+      --orange: #b75e00;
+      --gray: #6b7280;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 "Segoe UI", Arial, sans-serif;
+    }
+    header {
+      padding: 28px 32px 18px;
+      background: #10233f;
+      color: white;
+      border-bottom: 4px solid var(--blue);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 650; }
+    header p { margin: 0; color: #d6e2f3; max-width: 900px; }
+    main { padding: 24px 32px 40px; max-width: 1440px; margin: 0 auto; }
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+    button {
+      background: var(--blue);
+      color: white;
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .status { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(16, 35, 63, 0.06);
+    }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #f8fafd;
+    }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+    .metric strong { font-size: 18px; }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 650;
+      margin: 2px 4px 2px 0;
+      color: white;
+      background: var(--gray);
+    }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .orange { background: var(--orange); }
+    .list { display: grid; gap: 8px; }
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fbfdff;
+    }
+    .item-title { font-weight: 650; margin-bottom: 4px; }
+    details {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    summary { cursor: pointer; color: var(--blue); font-weight: 600; }
+    pre {
+      margin: 10px 0 0;
+      padding: 12px;
+      background: #0f172a;
+      color: #e5edf8;
+      border-radius: 6px;
+      overflow: auto;
+      max-height: 360px;
+      font-size: 12px;
+    }
+    .wide { grid-column: 1 / -1; }
+    @media (max-width: 920px) {
+      main, header { padding-left: 18px; padding-right: 18px; }
+      .grid, .metrics { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AVOCarbon Choke Costing Orchestrator</h1>
+    <p>Visible end-to-end demo from customer input to BOM, component costing, MOST work packages, DL/VOH calculation, and unified JSON. Preliminary demo values are not commercially usable.</p>
+  </header>
+  <main>
+    <div class="toolbar">
+      <button id="load">Load Full BYD Demo</button>
+      <span class="status" id="status">Ready</span>
+    </div>
+    <div class="grid">
+      <section class="card" id="customer"><h2>Customer Input</h2></section>
+      <section class="card" id="strategy"><h2>Manufacturing Strategy</h2></section>
+      <section class="card" id="bom"><h2>BOM Components</h2></section>
+      <section class="card" id="component-costing"><h2>Component Costing</h2></section>
+      <section class="card" id="most"><h2>MOST Operations</h2></section>
+      <section class="card" id="financial"><h2>Financial Calculation</h2></section>
+      <section class="card" id="missing"><h2>Missing Confirmations</h2></section>
+      <section class="card wide" id="json"><h2>Unified JSON Output</h2></section>
+    </div>
+  </main>
+  <script>
+    const fmt = value => value === null || value === undefined ? "missing" : Number(value).toFixed(6);
+    const jsonBlock = (label, data) => `<details><summary>${label}</summary><pre>${JSON.stringify(data, null, 2)}</pre></details>`;
+    const badge = (text, cls = "gray") => `<span class="badge ${cls}">${text || "missing"}</span>`;
+
+    function setHtml(id, html) {
+      document.getElementById(id).innerHTML = html;
+    }
+
+    function render(data) {
+      const project = data.project || {};
+      const strategy = data.manufacturing_strategy || {};
+      const unit = data.unit_data || {};
+      const bom = data.bom || {};
+      const components = data.components || [];
+      const most = data.most_work_packages || [];
+      const financial = data.financial_calculation || {};
+
+      setHtml("customer", `<h2>Customer Input</h2>
+        <div class="metrics">
+          <div class="metric"><span>Project</span><strong>${project.project_code || ""}</strong></div>
+          <div class="metric"><span>Product</span><strong>${project.product_id || ""}</strong></div>
+          <div class="metric"><span>Annual Qty</span><strong>${project.annual_quantity || ""}</strong></div>
+        </div>
+        ${badge(project.product_line, "blue")} ${badge(project.customer_delivery_zone, "green")}
+        ${jsonBlock("Customer JSON", project)}`);
+
+      setHtml("strategy", `<h2>Manufacturing Strategy</h2>
+        <div class="metrics">
+          <div class="metric"><span>Plant</span><strong>${strategy.production_plant || ""}</strong></div>
+          <div class="metric"><span>Currency</span><strong>${unit.operating_currency || ""} -> ${unit.selling_currency || ""}</strong></div>
+          <div class="metric"><span>VAN</span><strong>${strategy.target_van_percent || ""}%</strong></div>
+        </div>
+        ${badge(strategy.status, "green")} ${badge(unit.status, "orange")}
+        ${jsonBlock("Strategy and unit table JSON", {strategy, unit})}`);
+
+      setHtml("bom", `<h2>BOM Components</h2>
+        <div class="list">${(bom.normalized_components || []).map(c => `
+          <div class="item">
+            <div class="item-title">${c.component_id}</div>
+            ${badge(c.component_type, "blue")} ${badge(c.costing_route, "gray")}
+          </div>`).join("")}</div>
+        ${jsonBlock("BOM raw and normalized JSON", bom)}`);
+
+      setHtml("component-costing", `<h2>Component Costing</h2>
+        <div class="list">${components.map(c => `
+          <div class="item">
+            <div class="item-title">${c.component_id}</div>
+            ${badge((c.agent_raw_output || {}).status || c.costing_status, "orange")}
+            ${badge(`${fmt((c.normalized_cost || {}).delivered_cost_per_piece)} ${(c.normalized_cost || {}).currency || ""}`, "green")}
+          </div>`).join("")}</div>
+        ${jsonBlock("Component costing JSON", components)}`);
+
+      setHtml("most", `<h2>MOST Operations</h2>
+        <div class="list">${most.map(w => `
+          <div class="item">
+            <div class="item-title">${w.operation_name}</div>
+            ${badge(w.component_id, "blue")} ${badge(`p_h ${(w.normalized_operation || {}).p_h}`, "green")}
+          </div>`).join("")}</div>
+        ${jsonBlock("MOST work package JSON", most)}`);
+
+      setHtml("financial", `<h2>Financial Calculation</h2>
+        <div class="metrics">
+          <div class="metric"><span>Material</span><strong>${fmt(financial.material_cost_per_piece)}</strong></div>
+          <div class="metric"><span>DL</span><strong>${fmt(financial.dl_cost_per_piece)}</strong></div>
+          <div class="metric"><span>VOH</span><strong>${fmt(financial.voh_cost_per_piece)}</strong></div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><span>Tooling Adder</span><strong>${fmt(financial.tooling_adder_per_piece)}</strong></div>
+          <div class="metric"><span>Prelim Direct</span><strong>${fmt(financial.preliminary_direct_cost_per_piece)}</strong></div>
+          <div class="metric"><span>Status</span><strong>${financial.status || ""}</strong></div>
+        </div>
+        ${jsonBlock("Financial calculation JSON", financial)}`);
+
+      setHtml("missing", `<h2>Missing Confirmations</h2>
+        <div class="list">${(data.missing_inputs || []).map(item => `<div class="item">${badge("missing", "orange")} ${item}</div>`).join("")}</div>`);
+
+      setHtml("json", `<h2>Unified JSON Output</h2>
+        ${badge(data.schema_version, "blue")} ${badge(data.agent_orchestration?.mode, "green")}
+        ${jsonBlock("Full standardized envelope", data)}`);
+    }
+
+    async function loadDemo() {
+      document.getElementById("status").textContent = "Loading...";
+      try {
+        const response = await fetch("/api/choke-orchestrator/demo/full-byd");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        render(data);
+        document.getElementById("status").textContent = "Loaded full demo";
+      } catch (error) {
+        document.getElementById("status").textContent = `Failed: ${error.message}`;
+      }
+    }
+
+    document.getElementById("load").addEventListener("click", loadDemo);
+    loadDemo();
+  </script>
+</body>
+</html>
