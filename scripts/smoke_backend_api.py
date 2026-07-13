@@ -36,9 +36,12 @@ def main():
     client = TestClient(app, raise_server_exceptions=False)
     checks = []
 
-    # The FastAPI root is intentionally not claimed; the standalone MCP server owns
-    # its own root behavior. A 404 here is acceptable and confirms no server error.
-    checks.append(check(client, "GET", "/", {200, 404})[0])
+    root_ok, root_response = check(client, "GET", "/", {200})
+    checks.append(root_ok)
+    if root_ok:
+        root_contract_ok = root_response.json().get("service") == "AVOCarbon Costing MCP"
+        print(f"{'PASS' if root_contract_ok else 'FAIL'} MCP root response contract")
+        checks.append(root_contract_ok)
 
     health_ok, health_response = check(client, "GET", "/api/health", {200})
     checks.append(health_ok)

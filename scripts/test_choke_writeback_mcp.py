@@ -243,12 +243,11 @@ def main() -> int:
     calculation = server.calculate_choke_from_saved_outputs(project_code=project_code, product_id=product_id)
     if calculation.get("success") is False:
         raise AssertionError(f"calculate_choke_from_saved_outputs failed: {calculation}")
-    financial = calculation.get("financial_calculation") or {}
-    if financial.get("manufacturing_cost_per_piece") is None:
-        raise AssertionError(f"manufacturing_cost_per_piece missing: {financial}")
-    print(f"  financial status: {financial.get('status')}")
-    print(f"  transport_cost_per_piece: {financial.get('transport_cost_per_piece')}")
-    print(f"  manufacturing_cost_per_piece: {financial.get('manufacturing_cost_per_piece')}")
+    if calculation.get("manufacturing_cost_per_piece") is None:
+        raise AssertionError(f"manufacturing_cost_per_piece missing: {calculation}")
+    print(f"  financial status: {calculation.get('status')}")
+    print(f"  transport_cost_per_piece: {calculation.get('transport_cost_per_piece')}")
+    print(f"  manufacturing_cost_per_piece: {calculation.get('manufacturing_cost_per_piece')}")
 
     print()
     print("Choke Costing Write-Back MCP tools OK")

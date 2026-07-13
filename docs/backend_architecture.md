@@ -119,3 +119,11 @@ Wildcard origins are ignored. Production deployments must configure the explicit
 ## Deployment note
 
 The FastAPI application exposes REST, OpenAPI, legacy HTML, and MCP together. A deployment that starts `server.py` directly is MCP-only and does not expose FastAPI `/docs` or `/api/*` routes. The backend deployment intended for the React application must start `app.main:app`.
+
+Azure App Service startup command:
+
+```bash
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Keep the existing ChatGPT MCP URL ending in `/mcp`. Configure `FRONTEND_ORIGINS` with the explicit deployed React origin. Because workflow state is currently file-backed, the Azure deployment must use writable persistent App Service storage and should remain on one instance until workflow state is moved to PostgreSQL or Blob storage.

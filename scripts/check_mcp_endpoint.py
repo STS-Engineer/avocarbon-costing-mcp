@@ -66,18 +66,18 @@ def main() -> int:
     print("CHOKE COSTING MCP ENDPOINT CHECK")
     print("=" * 78)
     print(f"available MCP endpoint path: {', '.join(available) if available else 'none'}")
-    if has_sse:
-        print(f"preferred endpoint path for ChatGPT custom MCP: /sse")
-        print(f"local URL: {local_base_url}/sse")
-        if public_base_url:
-            print(f"public URL: {public_base_url}/sse")
-        else:
-            print("public URL: not configured; set PUBLIC_BASE_URL to your ngrok/Azure App Service URL")
-    elif has_mcp:
+    if has_mcp:
         print("preferred endpoint path for ChatGPT custom MCP: /mcp")
         print(f"local URL: {local_base_url}/mcp")
         if public_base_url:
             print(f"public URL: {public_base_url}/mcp")
+        else:
+            print("public URL: not configured; set PUBLIC_BASE_URL to your ngrok/Azure App Service URL")
+    elif has_sse:
+        print(f"preferred endpoint path for ChatGPT custom MCP: /sse")
+        print(f"local URL: {local_base_url}/sse")
+        if public_base_url:
+            print(f"public URL: {public_base_url}/sse")
         else:
             print("public URL: not configured; set PUBLIC_BASE_URL to your ngrok/Azure App Service URL")
     else:

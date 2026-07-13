@@ -2,14 +2,18 @@ from contextlib import asynccontextmanager
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.choke_agent_integration_router import router as choke_agent_integration_router
 from app.routers.choke_costing_ui_router import router as choke_costing_ui_router
 from app.routers.choke_orchestrator_router import router as choke_orchestrator_router
 from app.routers.choke_workflow_router import router as choke_workflow_router
-from server import mcp
+from server import (
+    health_check as mcp_health_check,
+    mcp,
+    root_info as mcp_root_info,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -59,14 +63,14 @@ for route in mcp_streamable_http_app.routes:
         app.router.routes.append(route)
 
 
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "service": "AVOCarbon Costing API",
-        "mcp_sse_endpoint": "/sse",
-        "mcp_streamable_http_endpoint": "/mcp",
-    }
+@app.get("/", include_in_schema=False)
+async def root(request: Request):
+    return await mcp_root_info(request)
+
+
+@app.get("/health", include_in_schema=False)
+async def health(request: Request):
+    return await mcp_health_check(request)
 
 
 @app.get("/api/health", tags=["Health"])
