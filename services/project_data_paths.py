@@ -54,12 +54,35 @@ def portable_data_reference(path: Path) -> str:
 
 
 def resolve_data_reference(reference: str | Path) -> Path:
+    return data_reference_candidates(reference)[0]
+
+
+def data_reference_candidates(reference: str | Path) -> List[Path]:
     raw = Path(str(reference).replace("\\", "/"))
     if raw.is_absolute():
-        return raw.resolve()
-    if raw.parts and raw.parts[0].lower() == "data":
-        return DATA_ROOT.joinpath(*raw.parts[1:]).resolve()
-    return (BACKEND_ROOT / raw).resolve()
+        candidates = [raw.resolve()]
+    elif raw.parts and raw.parts[0].lower() == "data":
+        candidates = [
+            DATA_ROOT.joinpath(*raw.parts[1:]).resolve(),
+            (BACKEND_ROOT / raw).resolve(),
+            (PROJECT_ROOT / raw).resolve(),
+            (Path.cwd() / raw).resolve(),
+        ]
+    else:
+        candidates = [
+            (BACKEND_ROOT / raw).resolve(),
+            (DATA_ROOT / raw).resolve(),
+            (PROJECT_ROOT / raw).resolve(),
+            (Path.cwd() / raw).resolve(),
+        ]
+    return list(dict.fromkeys(candidates))
+
+
+def resolve_existing_data_reference(reference: str | Path) -> Path | None:
+    for candidate in data_reference_candidates(reference):
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
 
 
 def _allowed_customer_input_roots() -> List[Path]:

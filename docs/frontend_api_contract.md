@@ -159,6 +159,8 @@ Response example:
   "project_code": "24003-CHO-00",
   "product_id": "316-5001",
   "status": "found",
+  "raw_bom_available": true,
+  "normalized_bom_available": true,
   "raw_bom": {"bom": []},
   "normalized_bom": {"components": []},
   "components": [
@@ -170,7 +172,13 @@ Response example:
     }
   ],
   "process_scopes_for_most": [],
-  "points_to_confirm": []
+  "points_to_confirm": [],
+  "paths": {
+    "raw_bom_path": "data/costing_runs/24003-CHO-00/316-5001/agent_outputs/bom/raw_bom_agent_output.json",
+    "normalized_bom_path": "data/costing_runs/24003-CHO-00/316-5001/bom_normalized.json",
+    "resolved_raw_bom_path": "...",
+    "resolved_normalized_bom_path": "..."
+  }
 }
 ```
 

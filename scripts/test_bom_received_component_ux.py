@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -7,7 +8,14 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from fastapi.testclient import TestClient
+try:
+    from fastapi.testclient import TestClient
+except ModuleNotFoundError as exc:
+    venv_python = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
+    if exc.name in {"fastapi", "starlette"} and venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
+        print(f"{exc.name} is not installed for this Python; rerunning with .venv.")
+        os.execv(str(venv_python), [str(venv_python), str(Path(__file__).resolve())])
+    raise
 
 from app.main import app
 from services.choke_sequential_agent_workflow import save_bom_output, start_real_choke_workflow
@@ -92,7 +100,7 @@ def main():
     triggered = trigger_response.json()
     assert triggered["status"] == "components_triggered", triggered
     assert {item["component_id"] for item in triggered["component_triggers"]} == {
-        "ferrite_core", "magnet_wire",
+        "ferrite_core", "magnet_wire", "lead_tinning",
     }, triggered
 
     print("PASS saved BOM endpoint exposes bom[] components")

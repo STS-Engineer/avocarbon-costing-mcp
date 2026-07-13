@@ -18,8 +18,9 @@ from services.project_data_paths import (
     BACKEND_ROOT,
     COSTING_RUNS_DIR,
     CUSTOMER_INPUT_DIR,
+    DATA_ROOT,
+    data_reference_candidates,
     portable_data_reference,
-    resolve_data_reference,
     resolve_customer_input_path,
 )
 from services.workspace_agent_client import trigger_workspace_agent
@@ -132,6 +133,18 @@ def _state_path(project_code: str, product_id: str) -> Path:
     return _run_dir(project_code, product_id) / "workflow_state.json"
 
 
+def _state_path_candidates(project_code: str, product_id: str) -> List[Path]:
+    canonical = _state_path(project_code, product_id).resolve()
+    reference = (
+        Path("data")
+        / "costing_runs"
+        / _safe_part(project_code, "project_code")
+        / _safe_part(product_id, "product_id")
+        / "workflow_state.json"
+    )
+    return list(dict.fromkeys([canonical, *data_reference_candidates(reference)]))
+
+
 def _bom_raw_path(project_code: str, product_id: str) -> Path:
     return _run_dir(project_code, product_id) / "agent_outputs" / "bom" / "raw_bom_agent_output.json"
 
@@ -207,7 +220,11 @@ def _project_from_input(customer_input: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _load_state(project_code: str, product_id: str) -> Dict[str, Any]:
-    state = _read_json(_state_path(project_code, product_id), None)
+    state = None
+    for candidate in _state_path_candidates(project_code, product_id):
+        state = _read_json(candidate, None)
+        if isinstance(state, dict):
+            break
     if isinstance(state, dict):
         state.setdefault("bom", {"status": "pending"})
         state.setdefault("components", {})
@@ -575,7 +592,7 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
         component_id = _component_id(component, index)
         component_type = _component_type(component)
         route_type = _external_costing_route(component)
-        is_external_costing = route_type in {"ferrite", "enameled_wire"}
+        is_external_costing = route_type in {"ferrite", "enameled_wire", "tin"}
         normalized = {
             "component_id": component_id,
             "component_type": component_type or route_type or "component",
@@ -796,6 +813,10 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
+    existing_state_path = next(
+        (path for path in _state_path_candidates(project_code, product_id) if path.exists()),
+        None,
+    )
     raw_path = _bom_raw_path(project_code, product_id)
     _write_json(raw_path, raw_json)
     normalized = normalize_bom(raw_json)
@@ -812,11 +833,12 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
     master_data_refresh = _refresh_master_data_for_state(state)
     state["status"] = "bom_received"
     state["current_step"] = "Step 2 External Component Costing Agent"
+    existing_bom = dict(state.get("bom") or {})
     state["bom"] = {
+        **existing_bom,
         "status": "received",
         "save_path": _relative(raw_path),
         "normalized_path": _relative(normalized_path),
-        "trigger_result": (state.get("bom") or {}).get("trigger_result"),
         "received_at": _now_iso(),
     }
     state["technical_fields_extracted_from_bom"] = bool(customer_input_update.get("extracted"))
@@ -828,7 +850,16 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
         for item in normalized.get("external_components") or []
     ]
     _save_state(state)
-    return {"status": "saved", "normalized_bom": normalized, "state": state}
+    return {
+        "status": "saved",
+        "normalized_bom": normalized,
+        "state": state,
+        "state_merge": {
+            "existing_state_found": existing_state_path is not None,
+            "existing_state_path": str(existing_state_path) if existing_state_path else None,
+            "saved_state_path": str(_state_path(project_code, product_id).resolve()),
+        },
+    }
 
 
 def _load_normalized_bom(project_code: str, product_id: str) -> Dict[str, Any]:
@@ -843,14 +874,21 @@ def _load_normalized_bom(project_code: str, product_id: str) -> Dict[str, Any]:
     return normalized
 
 
-def _read_state_bom_file(state: Dict[str, Any], key: str, fallback: Path) -> Any:
+def _state_bom_path_candidates(state: Dict[str, Any], key: str, fallback: Path) -> List[Path]:
+    candidates: List[Path] = []
     reference = (state.get("bom") or {}).get(key)
     if reference:
-        candidate = resolve_data_reference(reference)
-        payload = _read_json(candidate, None)
+        candidates.extend(data_reference_candidates(reference))
+    candidates.append(fallback.resolve())
+    return list(dict.fromkeys(candidates))
+
+
+def _read_first_json(paths: List[Path]) -> tuple[Any, Optional[Path]]:
+    for path in paths:
+        payload = _read_json(path, None)
         if payload is not None:
-            return payload
-    return _read_json(fallback, None)
+            return payload, path
+    return None, None
 
 
 def _first_list(payload: Any, keys: List[str]) -> List[Any]:
@@ -869,31 +907,42 @@ def _first_list(payload: Any, keys: List[str]) -> List[Any]:
 
 def get_bom_output(project_code: str, product_id: str) -> Dict[str, Any]:
     state = _load_state(project_code, product_id)
-    raw_bom = _read_state_bom_file(
+    raw_candidates = _state_bom_path_candidates(
         state,
         "save_path",
         _bom_raw_path(project_code, product_id),
     )
-    normalized_bom = _read_state_bom_file(
+    normalized_candidates = _state_bom_path_candidates(
         state,
         "normalized_path",
         _bom_normalized_path(project_code, product_id),
     )
+    raw_bom, resolved_raw_path = _read_first_json(raw_candidates)
+    normalized_bom, resolved_normalized_path = _read_first_json(normalized_candidates)
+    state_bom = state.get("bom") or {}
     if raw_bom is None and normalized_bom is None:
         return {
             "project_code": project_code,
             "product_id": product_id,
             "status": "missing",
+            "raw_bom_available": False,
+            "normalized_bom_available": False,
             "raw_bom": None,
             "normalized_bom": None,
             "components": [],
             "process_scopes_for_most": [],
             "points_to_confirm": [],
             "technical_fields": {},
+            "state_bom": state_bom,
+            "attempted_paths": [str(path) for path in [*raw_candidates, *normalized_candidates]],
+            "data_root": str(DATA_ROOT),
+            "cwd": str(Path.cwd().resolve()),
         }
     if not isinstance(normalized_bom, dict):
         normalized_bom = normalize_bom(raw_bom or {})
-        _write_json(_bom_normalized_path(project_code, product_id), normalized_bom)
+        generated_path = _bom_normalized_path(project_code, product_id)
+        _write_json(generated_path, normalized_bom)
+        resolved_normalized_path = generated_path
 
     components = []
     for item in normalized_bom.get("components") or []:
@@ -928,12 +977,20 @@ def get_bom_output(project_code: str, product_id: str) -> Dict[str, Any]:
         "project_code": project_code,
         "product_id": product_id,
         "status": "found",
+        "raw_bom_available": raw_bom is not None,
+        "normalized_bom_available": normalized_bom is not None,
         "raw_bom": raw_bom,
         "normalized_bom": normalized_bom,
         "components": components,
         "process_scopes_for_most": process_scopes,
         "points_to_confirm": points_to_confirm,
         "technical_fields": extract_bom_technical_fields(raw_bom or {}),
+        "paths": {
+            "raw_bom_path": state_bom.get("save_path") or _relative(_bom_raw_path(project_code, product_id)),
+            "normalized_bom_path": state_bom.get("normalized_path") or _relative(_bom_normalized_path(project_code, product_id)),
+            "resolved_raw_bom_path": str(resolved_raw_path) if resolved_raw_path else None,
+            "resolved_normalized_bom_path": str(resolved_normalized_path) if resolved_normalized_path else None,
+        },
     }
 
 

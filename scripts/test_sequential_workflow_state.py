@@ -94,7 +94,7 @@ def main():
     }, indent=2))
     assert_condition(bom_saved["state"]["status"] == "bom_received", "BOM state should be received")
     assert_condition(
-        {item["component_id"] for item in normalized["external_components"]} == {"ferrite_core", "magnet_wire"},
+        {item["component_id"] for item in normalized["external_components"]} == {"ferrite_core", "magnet_wire", "lead_tin_plating"},
         "external component calls must be derived from saved BOM",
     )
 
@@ -102,7 +102,10 @@ def main():
     components_triggered = trigger_next_component_costing(PROJECT_CODE, PRODUCT_ID, dry_run=True)
     component_keys = set(components_triggered["state"]["components"].keys())
     print(json.dumps(components_triggered["component_triggers"], indent=2))
-    assert_condition(component_keys == {"ferrite_core", "magnet_wire"}, "should trigger ferrite_core and magnet_wire only")
+    assert_condition(
+        component_keys == {"ferrite_core", "magnet_wire", "lead_tin_plating"},
+        "should trigger ferrite_core, magnet_wire and lead_tin_plating",
+    )
     assert_condition("ferrite" not in component_keys and "wire" not in component_keys, "must not use old fallback component IDs")
 
     section("SAVE FAKE COMPONENT OUTPUTS")
@@ -114,13 +117,22 @@ def main():
             "supply_chain": {"delivered_cost": 0.129},
         },
     })
-    component_saved = save_component_output(PROJECT_CODE, PRODUCT_ID, "magnet_wire", {
+    save_component_output(PROJECT_CODE, PRODUCT_ID, "magnet_wire", {
         "component_id": "magnet_wire",
         "component_type": "enameled_wire",
         "normalized_cost": {
             "currency": "CNY",
             "delivered_cost_per_piece": 0.333,
             "material_cost_per_piece": 0.328,
+        },
+    })
+    component_saved = save_component_output(PROJECT_CODE, PRODUCT_ID, "lead_tin_plating", {
+        "component_id": "lead_tin_plating",
+        "component_type": "tin",
+        "normalized_cost": {
+            "currency": "CNY",
+            "delivered_cost_per_piece": 0.001,
+            "material_cost_per_piece": 0.001,
         },
     })
     print(json.dumps({
