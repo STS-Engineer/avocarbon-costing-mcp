@@ -19,6 +19,7 @@ from services.project_data_paths import (
     COSTING_RUNS_DIR,
     CUSTOMER_INPUT_DIR,
     portable_data_reference,
+    resolve_data_reference,
     resolve_customer_input_path,
 )
 from services.workspace_agent_client import trigger_workspace_agent
@@ -495,6 +496,7 @@ def _extract_component_list(raw_bom: Any) -> List[Dict[str, Any]]:
         raw_bom.get("components"),
         raw_bom.get("normalized_components"),
         raw_bom.get("bom"),
+        raw_bom.get("line_items"),
         raw_bom.get("bill_of_material"),
         raw_bom.get("bill_of_materials"),
         raw_bom.get("material_lines"),
@@ -503,7 +505,7 @@ def _extract_component_list(raw_bom: Any) -> List[Dict[str, Any]]:
         if isinstance(candidate, list):
             return [item for item in candidate if isinstance(item, dict)]
         if isinstance(candidate, dict):
-            for key in ["components", "lines", "items", "materials"]:
+            for key in ["components", "lines", "line_items", "items", "materials", "bom"]:
                 nested = candidate.get(key)
                 if isinstance(nested, list):
                     return [item for item in nested if isinstance(item, dict)]
@@ -558,6 +560,11 @@ def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
         return "enameled_wire"
     if any(term in text for term in ["lead tin", "tin plating", "tinning"]):
         return "tin"
+    if any(term in text for term in ["glue", "adhesive", "epoxy"]):
+        relevance = component.get("costing_relevance")
+        status = str(component.get("status") or component.get("presence") or "").lower()
+        if relevance is True or status in {"present", "required", "to_confirm", "to confirm"}:
+            return "glue"
     return None
 
 
@@ -568,20 +575,38 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
         component_id = _component_id(component, index)
         component_type = _component_type(component)
         route_type = _external_costing_route(component)
+        is_external_costing = route_type in {"ferrite", "enameled_wire"}
         normalized = {
             "component_id": component_id,
             "component_type": component_type or route_type or "component",
+            "component": (
+                component.get("component")
+                or component.get("product")
+                or component.get("designation")
+                or component.get("description")
+                or component_type
+                or route_type
+                or "component"
+            ),
+            "category": (
+                component.get("category")
+                or component.get("component_category")
+                or component.get("component_family")
+                or component.get("family")
+                or route_type
+            ),
             "quantity_per_product": (
                 component.get("quantity_per_product")
+                or component.get("quantity_per_assembly")
                 or component.get("quantity")
                 or component.get("qty")
             ),
             "component_definition": component,
-            "costing_route": "external_component_costing_agent" if route_type in {"ferrite", "enameled_wire"} else "not_external_agent",
+            "costing_route": "external_component_costing_agent" if is_external_costing else "not_external_agent",
             "external_component_type": route_type,
         }
         components.append(normalized)
-        if route_type in {"ferrite", "enameled_wire"}:
+        if is_external_costing:
             external_components.append(normalized)
     return {
         "status": "normalized",
@@ -818,6 +843,155 @@ def _load_normalized_bom(project_code: str, product_id: str) -> Dict[str, Any]:
     return normalized
 
 
+def _read_state_bom_file(state: Dict[str, Any], key: str, fallback: Path) -> Any:
+    reference = (state.get("bom") or {}).get(key)
+    if reference:
+        candidate = resolve_data_reference(reference)
+        payload = _read_json(candidate, None)
+        if payload is not None:
+            return payload
+    return _read_json(fallback, None)
+
+
+def _first_list(payload: Any, keys: List[str]) -> List[Any]:
+    if not isinstance(payload, dict):
+        return []
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = _first_list(value, keys)
+            if nested:
+                return nested
+    return []
+
+
+def get_bom_output(project_code: str, product_id: str) -> Dict[str, Any]:
+    state = _load_state(project_code, product_id)
+    raw_bom = _read_state_bom_file(
+        state,
+        "save_path",
+        _bom_raw_path(project_code, product_id),
+    )
+    normalized_bom = _read_state_bom_file(
+        state,
+        "normalized_path",
+        _bom_normalized_path(project_code, product_id),
+    )
+    if raw_bom is None and normalized_bom is None:
+        return {
+            "project_code": project_code,
+            "product_id": product_id,
+            "status": "missing",
+            "raw_bom": None,
+            "normalized_bom": None,
+            "components": [],
+            "process_scopes_for_most": [],
+            "points_to_confirm": [],
+            "technical_fields": {},
+        }
+    if not isinstance(normalized_bom, dict):
+        normalized_bom = normalize_bom(raw_bom or {})
+        _write_json(_bom_normalized_path(project_code, product_id), normalized_bom)
+
+    components = []
+    for item in normalized_bom.get("components") or []:
+        if not isinstance(item, dict):
+            continue
+        definition = item.get("component_definition") or {}
+        components.append({
+            "component_id": item.get("component_id"),
+            "component": item.get("component") or item.get("component_type"),
+            "quantity_per_product": item.get("quantity_per_product"),
+            "category": item.get("category") or item.get("external_component_type"),
+            "costing_route": item.get("costing_route"),
+            "costing_relevance": definition.get("costing_relevance") if isinstance(definition, dict) else None,
+        })
+
+    process_scopes = _first_list(
+        raw_bom,
+        ["process_scopes_for_most", "process_scopes", "most_scopes", "work_packages"],
+    )
+    if not process_scopes:
+        try:
+            process = decompose_choke_process(raw_bom or {}, state.get("customer_input") or {})
+            process_scopes = process.get("work_packages") or []
+        except (TypeError, ValueError, KeyError):
+            process_scopes = []
+
+    points_to_confirm = _first_list(
+        raw_bom,
+        ["points_to_confirm", "points_to_confirm_or_validate", "items_to_confirm", "open_points"],
+    )
+    return {
+        "project_code": project_code,
+        "product_id": product_id,
+        "status": "found",
+        "raw_bom": raw_bom,
+        "normalized_bom": normalized_bom,
+        "components": components,
+        "process_scopes_for_most": process_scopes,
+        "points_to_confirm": points_to_confirm,
+        "technical_fields": extract_bom_technical_fields(raw_bom or {}),
+    }
+
+
+def update_commercial_fields(
+    project_code: str,
+    product_id: str,
+    fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    state = _load_state(project_code, product_id)
+    allowed_fields = {
+        "customer",
+        "final_customer",
+        "customer_delivery_zone",
+        "annual_quantity",
+        "currency",
+        "target_price",
+        "sop_date",
+    }
+    updates = {
+        key: value
+        for key, value in fields.items()
+        if key in allowed_fields
+    }
+    annual_quantity = updates.get("annual_quantity")
+    if annual_quantity not in [None, ""]:
+        try:
+            number = float(annual_quantity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("annual_quantity must be numeric.") from exc
+        if number <= 0:
+            raise ValueError("annual_quantity must be greater than zero.")
+        updates["annual_quantity"] = int(number) if number.is_integer() else number
+
+    customer_input = {**(state.get("customer_input") or {}), **updates}
+    customer_input["project_code"] = project_code
+    customer_input.setdefault("workflow_product_id", product_id)
+    state["customer_input"] = customer_input
+
+    input_path = _customer_input_path_from_state(state)
+    if input_path:
+        stored_input = _read_json(input_path, {}) or {}
+        stored_input.update(updates)
+        stored_input["project_code"] = project_code
+        stored_input.setdefault("workflow_product_id", product_id)
+        _write_json(input_path, stored_input)
+
+    state["master_data_refresh"] = _refresh_master_data_for_state(state)
+    _save_state(state)
+    return {
+        "status": "updated",
+        "project_code": project_code,
+        "product_id": product_id,
+        "updated_fields": updates,
+        "customer_input": state["customer_input"],
+        "state": state,
+    }
+
+
 def trigger_next_component_costing(project_code: str, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
     state = _load_state(project_code, product_id)
     if (state.get("bom") or {}).get("status") != "received":
@@ -826,11 +1000,21 @@ def trigger_next_component_costing(project_code: str, product_id: str, dry_run: 
     customer_input = state.get("customer_input") or {}
     master_data_refresh = _refresh_master_data_for_state(state)
     unit_data = state.get("unit_data") or {}
-    missing_stage_inputs = []
+    missing_commercial_inputs = []
     if customer_input.get("annual_quantity") in [None, "", 0]:
-        missing_stage_inputs.append("annual_quantity")
+        missing_commercial_inputs.append("annual_quantity")
     if not customer_input.get("customer_delivery_zone"):
-        missing_stage_inputs.append("delivery_zone")
+        missing_commercial_inputs.append("customer_delivery_zone")
+    if not customer_input.get("currency"):
+        missing_commercial_inputs.append("currency")
+    if missing_commercial_inputs:
+        return {
+            "status": "blocked",
+            "missing_inputs": missing_commercial_inputs,
+            "message": "Complete commercial fields before external component costing.",
+            "state": state,
+        }
+    missing_stage_inputs = []
     if not customer_input.get("product"):
         missing_stage_inputs.append("product")
     if not unit_data.get("plant"):

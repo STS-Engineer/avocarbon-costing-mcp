@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from services.choke_sequential_agent_workflow import (
     calculate_final_choke_costing_from_saved_outputs,
     calculate_from_real_outputs,
+    get_bom_output,
     get_workflow_state,
     save_bom_output,
     save_component_output,
@@ -14,6 +15,7 @@ from services.choke_sequential_agent_workflow import (
     start_real_choke_workflow,
     trigger_most_operations,
     trigger_next_component_costing,
+    update_commercial_fields,
 )
 from services.project_data_paths import COSTING_RUNS_DIR, CustomerInputFileNotFound
 
@@ -58,6 +60,18 @@ class CalculateRealOutputsRequest(BaseModel):
     unit_data: Dict[str, Any] | None = None
 
 
+class UpdateCommercialFieldsRequest(BaseModel):
+    project_code: str
+    product_id: str
+    customer: str | None = None
+    final_customer: str | None = None
+    customer_delivery_zone: str | None = None
+    annual_quantity: float | None = None
+    currency: str | None = None
+    target_price: float | None = None
+    sop_date: str | None = None
+
+
 def _handle(callback):
     try:
         return callback()
@@ -83,6 +97,22 @@ def start_workflow(request: Request, payload: StartWorkflowRequest):
 @router.get("/status/{project_code}/{product_id}")
 def workflow_status(project_code: str, product_id: str):
     return _handle(lambda: get_workflow_state(project_code, product_id))
+
+
+@router.get("/bom-output/{project_code}/{product_id}")
+def bom_output(project_code: str, product_id: str):
+    return _handle(lambda: get_bom_output(project_code, product_id))
+
+
+@router.post("/update-commercial-fields")
+def update_workflow_commercial_fields(request: UpdateCommercialFieldsRequest):
+    dump = getattr(request, "model_dump", request.dict)
+    fields = dump(exclude={"project_code", "product_id"}, exclude_unset=True)
+    return _handle(lambda: update_commercial_fields(
+        project_code=request.project_code,
+        product_id=request.product_id,
+        fields=fields,
+    ))
 
 
 @router.post("/save-bom-output")

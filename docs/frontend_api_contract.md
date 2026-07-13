@@ -148,6 +148,56 @@ Response example:
 Poll this endpoint after each real trigger. The UI should render `status`, `current_step`, per-item statuses, errors, warnings, and `missing_outputs`.
 For an unknown project/product pair, the current service returns a default state with `status: "created"`.
 
+### Get saved BOM output
+
+`GET /api/choke-workflow/bom-output/{project_code}/{product_id}`
+
+Response example:
+
+```json
+{
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "status": "found",
+  "raw_bom": {"bom": []},
+  "normalized_bom": {"components": []},
+  "components": [
+    {
+      "component_id": "ferrite_core",
+      "component": "Ferrite core",
+      "quantity_per_product": 1,
+      "category": "ferrite"
+    }
+  ],
+  "process_scopes_for_most": [],
+  "points_to_confirm": []
+}
+```
+
+Call this endpoint when workflow status reports `bom_received`. It reads both raw and normalized backend files and supports BOM lines under `bom`, `components`, `line_items`, or `bill_of_material`.
+
+### Update commercial fields
+
+`POST /api/choke-workflow/update-commercial-fields`
+
+Request:
+
+```json
+{
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "customer": "Zhejiang NBT",
+  "final_customer": "BYD",
+  "customer_delivery_zone": "China South Pacific",
+  "annual_quantity": 600000,
+  "currency": "RMB",
+  "target_price": 1.5,
+  "sop_date": null
+}
+```
+
+This updates both the saved customer-input JSON and active workflow context. Annual quantity, delivery zone, and currency are required before component costing, but not before BOM analysis.
+
 ### Save BOM output manually
 
 `POST /api/choke-workflow/save-bom-output`
@@ -211,6 +261,7 @@ Response example:
 ```
 
 The BOM must already be received. One agent call is created per external component.
+If commercial inputs are incomplete, the endpoint returns HTTP 200 with `status: "blocked"`, a `missing_inputs` list, and the message `Complete commercial fields before external component costing.`
 
 ### Save one component output manually
 
