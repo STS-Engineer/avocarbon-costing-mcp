@@ -15,11 +15,18 @@ from services.azure_blob_storage_service import (
     upload_file_to_blob,
 )
 from services.choke_orchestrator import run_choke_orchestration
+from services.project_data_paths import (
+    BACKEND_ROOT,
+    COSTING_RUNS_DIR,
+    CUSTOMER_INPUT_DIR,
+    CustomerInputFileNotFound,
+    portable_data_reference,
+    resolve_customer_input_path,
+)
 
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-CUSTOMER_INPUT_DIR = BASE_DIR / "data" / "customer_inputs"
-RESULTS_DIR = BASE_DIR / "data" / "costing_runs"
+BASE_DIR = BACKEND_ROOT
+RESULTS_DIR = COSTING_RUNS_DIR
 
 router = APIRouter(tags=["Choke Costing UI"])
 
@@ -30,27 +37,16 @@ class ChokeCostingRunRequest(BaseModel):
 
 
 def _safe_customer_input_path(input_file: str) -> Path:
-    raw_path = Path(input_file)
-    if raw_path.is_absolute():
-        candidate = raw_path
-    else:
-        candidate = BASE_DIR / raw_path
-    candidate = candidate.resolve()
-    allowed_root = CUSTOMER_INPUT_DIR.resolve()
-    if allowed_root not in candidate.parents and candidate != allowed_root:
-        raise HTTPException(
-            status_code=400,
-            detail="input_file must be inside data/customer_inputs",
-        )
-    if candidate.suffix.lower() != ".json":
-        raise HTTPException(status_code=400, detail="input_file must be a JSON file")
-    if not candidate.exists():
-        raise HTTPException(status_code=404, detail=f"Customer input file not found: {input_file}")
-    return candidate
+    try:
+        return resolve_customer_input_path(input_file)
+    except CustomerInputFileNotFound as exc:
+        raise HTTPException(status_code=404, detail=exc.details) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _relative_to_base(path: Path) -> str:
-    return path.resolve().relative_to(BASE_DIR.resolve()).as_posix()
+    return portable_data_reference(path)
 
 
 def _safe_slug(value: Any, fallback: str = "input") -> str:
@@ -315,6 +311,7 @@ async def create_customer_input(request: Request):
     }
 
     output_path = CUSTOMER_INPUT_DIR / f"{safe_project_code}_{safe_product_id}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(customer_input, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",

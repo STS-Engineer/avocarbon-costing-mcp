@@ -5,11 +5,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.choke_orchestrator import run_choke_orchestration
+from services.project_data_paths import (
+    BACKEND_ROOT,
+    COSTING_RUNS_DIR,
+    CUSTOMER_INPUT_DIR,
+    portable_data_reference,
+)
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-RUNS_DIR = BASE_DIR / "data" / "costing_runs"
-CUSTOMER_INPUT_DIR = BASE_DIR / "data" / "customer_inputs"
+BASE_DIR = BACKEND_ROOT
+RUNS_DIR = COSTING_RUNS_DIR
 
 
 def _now_iso() -> str:
@@ -32,7 +37,7 @@ def _run_dir(project_code: str, product_id: str) -> Path:
 
 
 def _relative(path: Path) -> str:
-    return path.resolve().relative_to(BASE_DIR.resolve()).as_posix()
+    return portable_data_reference(path)
 
 
 def _write_json(path: Path, payload: Any) -> str:

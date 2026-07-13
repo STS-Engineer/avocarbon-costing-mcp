@@ -20,6 +20,7 @@ from services.costing_master_data_service import (
     get_master_unit_data,
 )
 from services.customer_input_schema import normalize_customer_input
+from services.project_data_paths import resolve_data_reference
 from services.workspace_agent_client import trigger_workspace_agent
 
 
@@ -37,7 +38,7 @@ def _save_address(project_code, product_id, filename):
 
 
 def _absolute_save_path(save_address):
-    return BASE_DIR / save_address.replace("/", os.sep)
+    return resolve_data_reference(save_address)
 
 
 def _write_json(save_address, data):

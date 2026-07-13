@@ -1,0 +1,19 @@
+{
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "component_id": "316-5001-wire",
+  "component_type": "enameled_wire",
+  "scope_note": "raw_material_only",
+  "component_definition": {
+    "description": "Enameled copper wire for choke component",
+    "wire_diameter_mm": 1.18,
+    "material": "enameled copper wire",
+    "thermal_class": "to be confirmed",
+    "scope_note": "raw_material_only"
+  },
+  "annual_quantity": 600000,
+  "destination_zone": "China",
+  "production_plant": "Kunshan",
+  "reporting_currency": "CNY",
+  "save_address": "data/costing_runs/24003-CHO-00/component_costing/316-5001-wire.json"
+}

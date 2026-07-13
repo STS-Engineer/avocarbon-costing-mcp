@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,10 +15,10 @@ from services.choke_sequential_agent_workflow import (
     trigger_most_operations,
     trigger_next_component_costing,
 )
+from services.project_data_paths import COSTING_RUNS_DIR, CustomerInputFileNotFound
 
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
-BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 class StartWorkflowRequest(BaseModel):
@@ -62,6 +61,8 @@ class CalculateRealOutputsRequest(BaseModel):
 def _handle(callback):
     try:
         return callback()
+    except CustomerInputFileNotFound as exc:
+        raise HTTPException(status_code=404, detail=exc.details) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -153,9 +154,7 @@ def get_final_result(project_code: str, product_id: str):
     if any(part in {"", ".", ".."} or "/" in part or "\\" in part for part in [project_code, product_id]):
         raise HTTPException(status_code=400, detail="Invalid project_code or product_id")
     path = (
-        BASE_DIR
-        / "data"
-        / "costing_runs"
+        COSTING_RUNS_DIR
         / project_code
         / product_id
         / "final_choke_costing_result.json"

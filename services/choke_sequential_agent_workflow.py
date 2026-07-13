@@ -14,12 +14,18 @@ from services.costing_master_data_service import (
     get_master_unit_data,
 )
 from services.customer_input_schema import normalize_customer_input
+from services.project_data_paths import (
+    BACKEND_ROOT,
+    COSTING_RUNS_DIR,
+    CUSTOMER_INPUT_DIR,
+    portable_data_reference,
+    resolve_customer_input_path,
+)
 from services.workspace_agent_client import trigger_workspace_agent
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-CUSTOMER_INPUT_DIR = BASE_DIR / "data" / "customer_inputs"
-RUNS_DIR = BASE_DIR / "data" / "costing_runs"
+BASE_DIR = BACKEND_ROOT
+RUNS_DIR = COSTING_RUNS_DIR
 
 
 def _now_iso() -> str:
@@ -67,7 +73,7 @@ def _slug(value: Any, fallback: str = "item") -> str:
 
 
 def _relative(path: Path) -> str:
-    return path.resolve().relative_to(BASE_DIR.resolve()).as_posix()
+    return portable_data_reference(path)
 
 
 def _public_base_url(request_base_url: Optional[str] = None) -> str:
@@ -142,14 +148,7 @@ def _most_output_path(project_code: str, product_id: str, work_package_id: str) 
 
 
 def _load_customer_input(input_file: str) -> Dict[str, Any]:
-    path = Path(input_file)
-    candidate = path if path.is_absolute() else BASE_DIR / path
-    candidate = candidate.resolve()
-    allowed_root = CUSTOMER_INPUT_DIR.resolve()
-    if allowed_root not in candidate.parents and candidate != allowed_root:
-        raise ValueError("input_file must be inside data/customer_inputs")
-    if not candidate.exists():
-        raise FileNotFoundError(f"Customer input file not found: {input_file}")
+    candidate = resolve_customer_input_path(input_file)
     payload = _read_json(candidate, {}) or {}
     payload["_input_file"] = _relative(candidate)
     return payload
@@ -408,7 +407,7 @@ def start_real_choke_workflow(
     project_code = project["project_code"]
     product_id = project["product_id"]
     if project.get("generated_fields"):
-        input_path = BASE_DIR / customer_input["_input_file"]
+        input_path = resolve_customer_input_path(customer_input["_input_file"])
         stored_input = _read_json(input_path, {}) or {}
         stored_input.update(project["generated_fields"])
         stored_input.setdefault("technical_fields_pending_bom", True)
@@ -682,13 +681,10 @@ def _customer_input_path_from_state(state: Dict[str, Any]) -> Optional[Path]:
     input_file = state.get("input_file")
     if not input_file:
         return None
-    path = Path(input_file)
-    candidate = path if path.is_absolute() else BASE_DIR / path
-    candidate = candidate.resolve()
-    allowed_root = CUSTOMER_INPUT_DIR.resolve()
-    if allowed_root not in candidate.parents and candidate != allowed_root:
+    try:
+        return resolve_customer_input_path(input_file)
+    except (FileNotFoundError, ValueError):
         return None
-    return candidate if candidate.exists() else None
 
 
 def _update_customer_input_from_bom(

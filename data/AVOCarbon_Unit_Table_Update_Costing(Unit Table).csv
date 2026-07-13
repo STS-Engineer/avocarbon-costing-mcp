@@ -1,0 +1,11 @@
+Unit,Unit Type,Zone,Country,Selling currency,Operating currency,Direct labor cost / hour (operating currency),Base variable overhead cost / hour (operating currency),Number of shifts,Hour per shift,% FOH/DC,% FEE/DC,% Company tax,Y-1 sales (selling currency),% 1 shift premium,% 2 shift premium,% 3 shift premium,Fully loaded hourly cost (operating currency)
+SAME ,Factory,Europe,Tunisia,EUR,TND,,,,,,,,,,,,
+Kunshan,Factory,Asia,China,CNY,CNY,,,,,,,,,,,,
+Daegu,Factory,Asia,South Korea,KRW,KRW,,,,,,,,,,,,
+Poitiers,Factory,Europe,France,EUR,EUR,,,,,,,,,,,,
+Tianjin,Factory,Asia,China,CNY,CNY,,,,,,,,,,,,
+CYCLAM,Factory,Europe,France,EUR,EUR,,,,,,,,,,,,
+Frankfurt,Factory,Europe,Germany,EUR,EUR,,,,,,,,,,,,
+Mexico ,Factory,North America,Mexico,USD,MXN,,,,,,,,,,,,
+Chennai,Factory,India,India,INR,INR,,,,,,,,,,,,
+SCEET,Factory,Europe,Tunisia,EUR,TND,,,,,,,,,,,,

@@ -1,0 +1,18 @@
+{
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "component_id": "316-5001-ferrite",
+  "component_type": "ferrite",
+  "component_definition": {
+    "description": "Ferrite rod core for choke component",
+    "diameter_mm": 5,
+    "length_mm": 16,
+    "material_family": "ferrite",
+    "technical_note": "Bought ferrite component only, not complete choke"
+  },
+  "annual_quantity": 600000,
+  "destination_zone": "China",
+  "production_plant": "Kunshan",
+  "reporting_currency": "CNY",
+  "save_address": "data/costing_runs/24003-CHO-00/component_costing/316-5001-ferrite.json"
+}
