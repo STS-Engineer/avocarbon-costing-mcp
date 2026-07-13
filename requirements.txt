@@ -1,1 +1,205 @@
-  a i o f i l e = = 3 . 1 1 . 1   a l t a i r = = 6 . 2 . 2   a n n o t a t e d - d o c = = 0 . 0 . 4   a n n o t a t e d - t y p e s = = 0 . 7 . 0   a n y i o = = 4 . 1 4 . 0   a t t r s = = 2 6 . 1 . 0   A u t h l i b = = 1 . 7 . 2   a z u r e - c o r e = = 1 . 4 1 . 0   a z u r e - s t o r a g e - b l o b = = 1 2 . 3 0 . 0   b e a r t y p e = = 0 . 2 2 . 9   b l i n k e r = = 1 . 9 . 0   c a c h e t o o l s = = 7 . 1 . 4   c a i o = = 0 . 9 . 2 5   c e r t i f i = = 2 0 2 6 . 6 . 1 7   c f f i = = 2 . 0 . 0   c h a r s e t - n o r m a l i z e r = = 3 . 4 . 7   c l i c k = = 8 . 4 . 1   c o l o r a m a = = 0 . 4 . 6   c r y p t o g r a p h y = = 4 9 . 0 . 0   c y c l o p t s = = 4 . 1 9 . 0   d n s p y t h o n = = 2 . 8 . 0   d o c s t r i n g _ p a r s e r = = 0 . 1 8 . 0   e m a i l - v a l i d a t o r = = 2 . 3 . 0   e x c e p t i o n g r o u p = = 1 . 3 . 1   f a s t a p i = = 0 . 1 3 9 . 0   f a s t m c p = = 3 . 4 . 2   f a s t m c p - s l i m = = 3 . 4 . 2   g i t d b = = 4 . 0 . 1 2   G i t P y t h o n = = 3 . 1 . 5 0   g r e e n l e t = = 3 . 5 . 3   g r i f f e l i b = = 2 . 1 . 0   h 1 1 = = 0 . 1 6 . 0   h t t p c o r e = = 1 . 0 . 9   h t t p t o o l s = = 0 . 8 . 0   h t t p x = = 0 . 2 8 . 1   h t t p x - s s e = = 0 . 4 . 3   i d n a = = 3 . 1 8   i s o d a t e = = 0 . 7 . 2   i t s d a n g e r o u s = = 2 . 2 . 0   j a r a c o . c l a s s e s = = 3 . 4 . 0   j a r a c o . c o n t e x t = = 6 . 1 . 2   j a r a c o . f u n c t o o l s = = 4 . 5 . 0   J i n j a 2 = = 3 . 1 . 6   j o s e r f c = = 1 . 7 . 1   j s o n r e f = = 1 . 1 . 0   j s o n s c h e m a = = 4 . 2 6 . 0   j s o n s c h e m a - p a t h = = 0 . 5 . 0   j s o n s c h e m a - s p e c i f i c a t i o n s = = 2 0 2 5 . 9 . 1   k e y r i n g = = 2 5 . 7 . 0   m a r k d o w n - i t - p y = = 4 . 2 . 0   M a r k u p S a f e = = 3 . 0 . 3   m c p = = 1 . 2 8 . 0   m d u r l = = 0 . 1 . 2   m o r e - i t e r t o o l s = = 1 1 . 1 . 0   n a r w h a l s = = 2 . 2 2 . 1   n u m p y = = 2 . 5 . 0   o p e n a p i - p y d a n t i c = = 0 . 5 . 1   o p e n t e l e m e t r y - a p i = = 1 . 4 2 . 1   p a c k a g i n g = = 2 6 . 2   p a n d a s = = 3 . 0 . 3   p a t h a b l e = = 0 . 6 . 0   p i l l o w = = 1 2 . 2 . 0   p l a t f o r m d i r s = = 4 . 1 0 . 0   p r o t o b u f = = 7 . 3 5 . 1   p s y c o p g 2 - b i n a r y = = 2 . 9 . 1 2   p y - k e y - v a l u e - a i o = = 0 . 4 . 5   p y a r r o w = = 2 4 . 0 . 0   p y c p a r s e r = = 3 . 0   p y d a n t i c = = 2 . 1 3 . 4   p y d a n t i c - s e t t i n g s = = 2 . 1 4 . 2   p y d a n t i c _ c o r e = = 2 . 4 6 . 4   p y d e c k = = 0 . 9 . 2   P y g m e n t s = = 2 . 2 0 . 0   P y J W T = = 2 . 1 3 . 0   p y p e r c l i p = = 1 . 1 1 . 0   p y t h o n - d a t e u t i l = = 2 . 9 . 0 . p o s t 0   p y t h o n - d o t e n v = = 1 . 2 . 2   p y t h o n - m u l t i p a r t = = 0 . 0 . 3 2    p y w i n 3 2 - c t y p e s = = 0 . 2 . 3   P y Y A M L = = 6 . 0 . 3   r e f e r e n c i n g = = 0 . 3 7 . 0   r e q u e s t s = = 2 . 3 4 . 2   r i c h = = 1 5 . 0 . 0   r i c h - r s t = = 2 . 0 . 1   r p d s - p y = = 2 0 2 6 . 5 . 1   s i x = = 1 . 1 7 . 0   s m m a p = = 5 . 0 . 3   S Q L A l c h e m y = = 2 . 0 . 5 1   s s e - s t a r l e t t e = = 3 . 4 . 5   s t a r l e t t e = = 1 . 3 . 1   s t r e a m l i t = = 1 . 5 8 . 0   t e n a c i t y = = 9 . 1 . 4   t o m l = = 0 . 1 0 . 2   t y p i n g - i n s p e c t i o n = = 0 . 4 . 2   t y p i n g _ e x t e n s i o n s = = 4 . 1 5 . 0   t z d a t a = = 2 0 2 6 . 2   u n c a l l e d - f o r = = 0 . 3 . 2   u r l l i b 3 = = 2 . 7 . 0   u v i c o r n = = 0 . 4 9 . 0   w a t c h d o g = = 6 . 0 . 0   w a t c h f i l e s = = 1 . 2 . 0   w e b s o c k e t s = = 1 6 . 0   
+aiofile==3.11.1
+
+altair==6.2.2
+
+annotated-doc==0.0.4
+
+annotated-types==0.7.0
+
+anyio==4.14.0
+
+attrs==26.1.0
+
+Authlib==1.7.2
+
+azure-core==1.41.0
+
+azure-storage-blob==12.30.0
+
+beartype==0.22.9
+
+blinker==1.9.0
+
+cachetools==7.1.4
+
+caio==0.9.25
+
+certifi==2026.6.17
+
+cffi==2.0.0
+
+charset-normalizer==3.4.7
+
+click==8.4.1
+
+colorama==0.4.6
+
+cryptography==49.0.0
+
+cyclopts==4.19.0
+
+dnspython==2.8.0
+
+docstring_parser==0.18.0
+
+email-validator==2.3.0
+
+exceptiongroup==1.3.1
+
+fastapi==0.139.0
+
+fastmcp==3.4.2
+
+fastmcp-slim==3.4.2
+
+gitdb==4.0.12
+
+GitPython==3.1.50
+
+greenlet==3.5.3
+
+griffelib==2.1.0
+
+h11==0.16.0
+
+httpcore==1.0.9
+
+httptools==0.8.0
+
+httpx==0.28.1
+
+httpx-sse==0.4.3
+
+idna==3.18
+
+isodate==0.7.2
+
+itsdangerous==2.2.0
+
+jaraco.classes==3.4.0
+
+jaraco.context==6.1.2
+
+jaraco.functools==4.5.0
+
+Jinja2==3.1.6
+
+joserfc==1.7.1
+
+jsonref==1.1.0
+
+jsonschema==4.26.0
+
+jsonschema-path==0.5.0
+
+jsonschema-specifications==2025.9.1
+
+keyring==25.7.0
+
+markdown-it-py==4.2.0
+
+MarkupSafe==3.0.3
+
+mcp==1.28.0
+
+mdurl==0.1.2
+
+more-itertools==11.1.0
+
+narwhals==2.22.1
+
+numpy==2.5.0
+
+openapi-pydantic==0.5.1
+
+opentelemetry-api==1.42.1
+
+packaging==26.2
+
+pandas==3.0.3
+
+pathable==0.6.0
+
+pillow==12.2.0
+
+platformdirs==4.10.0
+
+protobuf==7.35.1
+
+psycopg2-binary==2.9.12
+
+py-key-value-aio==0.4.5
+
+pyarrow==24.0.0
+
+pycparser==3.0
+
+pydantic==2.13.4
+
+pydantic-settings==2.14.2
+
+pydantic_core==2.46.4
+
+pydeck==0.9.2
+
+Pygments==2.20.0
+
+PyJWT==2.13.0
+
+pyperclip==1.11.0
+
+python-dateutil==2.9.0.post0
+
+python-dotenv==1.2.2
+
+python-multipart==0.0.32
+
+
+pywin32-ctypes==0.2.3
+
+PyYAML==6.0.3
+
+referencing==0.37.0
+
+requests==2.34.2
+
+rich==15.0.0
+
+rich-rst==2.0.1
+
+rpds-py==2026.5.1
+
+six==1.17.0
+
+smmap==5.0.3
+
+SQLAlchemy==2.0.51
+
+sse-starlette==3.4.5
+
+starlette==1.3.1
+
+streamlit==1.58.0
+
+tenacity==9.1.4
+
+toml==0.10.2
+
+typing-inspection==0.4.2
+
+typing_extensions==4.15.0
+
+tzdata==2026.2
+
+uncalled-for==0.3.2
+
+urllib3==2.7.0
+
+uvicorn==0.49.0
+
+watchdog==6.0.0
+
+watchfiles==1.2.0
+
+websockets==16.0
+
