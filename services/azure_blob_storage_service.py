@@ -51,7 +51,11 @@ def _connection_string() -> Optional[str]:
 
 def _container_name() -> str:
     _load_env()
-    return os.getenv("AZURE_STORAGE_CONTAINER_NAME") or DEFAULT_CONTAINER
+    return (
+        os.getenv("AZURE_STORAGE_CONTAINER")
+        or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
+        or DEFAULT_CONTAINER
+    )
 
 
 def _expiry_hours(expiry_hours: Optional[int] = None) -> int:

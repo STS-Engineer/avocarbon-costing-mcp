@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
@@ -17,6 +19,7 @@ from services.choke_sequential_agent_workflow import (
 
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 class StartWorkflowRequest(BaseModel):
@@ -143,3 +146,29 @@ def calculate_final_outputs(request: CalculateRealOutputsRequest):
         product_id=request.product_id,
         unit_data_override=request.unit_data,
     ))
+
+
+@router.get("/final-result/{project_code}/{product_id}")
+def get_final_result(project_code: str, product_id: str):
+    if any(part in {"", ".", ".."} or "/" in part or "\\" in part for part in [project_code, product_id]):
+        raise HTTPException(status_code=400, detail="Invalid project_code or product_id")
+    path = (
+        BASE_DIR
+        / "data"
+        / "costing_runs"
+        / project_code
+        / product_id
+        / "final_choke_costing_result.json"
+    )
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Final Choke costing result not found. "
+                "Call POST /api/choke-workflow/calculate-final after all agent outputs are saved."
+            ),
+        )
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="Saved final result is not valid JSON") from exc
