@@ -1,5 +1,8 @@
 import logging
 import os
+import json
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -17,10 +20,15 @@ except Exception:
 
 
 DATA_ROOT_RAW = os.getenv("DATA_ROOT")
+WORKFLOW_PATH_VERSION = "canonical-v1"
 
 
 def _absolute_root(value: str | None, default: Path) -> Path:
     if not value:
+        return default.resolve()
+    normalized_value = str(value).strip().replace("\\", "/")
+    if os.name == "nt" and normalized_value.startswith("/") and not is_azure_environment():
+        logger.info("Ignoring Azure/POSIX DATA_ROOT on local Windows: %s", value)
         return default.resolve()
     configured = Path(os.path.expandvars(value)).expanduser()
     if not configured.is_absolute():
@@ -40,6 +48,95 @@ def get_data_root(create: bool = True) -> Path:
     if create:
         root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def is_azure_environment() -> bool:
+    return bool(os.getenv("WEBSITE_SITE_NAME") or os.getenv("WEBSITE_INSTANCE_ID"))
+
+
+def persistent_storage_enabled() -> bool:
+    value = str(os.getenv("WEBSITES_ENABLE_APP_SERVICE_STORAGE") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def get_git_commit() -> str | None:
+    for name in ("GIT_COMMIT_SHA", "BUILD_SOURCEVERSION", "WEBSITE_DEPLOYMENT_ID"):
+        value = str(os.getenv(name) or "").strip()
+        if value:
+            return value
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=BACKEND_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def validate_data_root_configuration() -> Dict[str, Any]:
+    root = get_data_root(create=False)
+    errors: List[str] = []
+    if is_azure_environment():
+        if not str(DATA_ROOT_RAW or "").strip():
+            errors.append("DATA_ROOT must be configured explicitly on Azure.")
+        raw_normalized = str(DATA_ROOT_RAW or "").strip().replace("\\", "/").lower()
+        if raw_normalized == "/tmp" or raw_normalized.startswith("/tmp/"):
+            errors.append(f"Azure DATA_ROOT is not persistent: {DATA_ROOT_RAW}")
+        if raw_normalized == "/root/data" or raw_normalized.startswith("/root/data/"):
+            errors.append(f"Azure DATA_ROOT is not persistent: {DATA_ROOT_RAW}")
+        disallowed_roots = [Path("/tmp"), Path("/root/data")]
+        if any(root == item or item in root.parents for item in disallowed_roots):
+            errors.append(f"Azure DATA_ROOT is not persistent: {root}")
+        if root == BACKEND_ROOT or BACKEND_ROOT in root.parents:
+            errors.append("Azure DATA_ROOT must not be inside the application deployment directory.")
+        if not persistent_storage_enabled():
+            errors.append("WEBSITES_ENABLE_APP_SERVICE_STORAGE must be true on Azure.")
+    return {
+        "healthy": not errors,
+        "errors": errors,
+        "data_root_raw": DATA_ROOT_RAW,
+        "data_root_resolved": str(root),
+        "persistent_storage_enabled": persistent_storage_enabled(),
+        "workflow_path_version": WORKFLOW_PATH_VERSION,
+        "process_id": os.getpid(),
+        "cwd": str(Path.cwd().resolve()),
+        "startup_module": "app.main:app",
+        "git_commit": get_git_commit(),
+    }
+
+
+def ensure_workflow_storage_ready() -> None:
+    status = validate_data_root_configuration()
+    if not status["healthy"]:
+        raise RuntimeError(" ".join(status["errors"]))
+    get_data_root(create=True)
+
+
+def atomic_write_json(path: Path, payload: Any) -> Path:
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(payload, stream, ensure_ascii=False, indent=2, default=str)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        return path
+    finally:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
 
 
 def _safe_workflow_part(value: Any, field_name: str) -> str:
@@ -107,6 +204,10 @@ def workflow_path_diagnostics(project_code: str, product_id: str) -> Dict[str, A
         "workflow_state_path_exists": paths["workflow_state_path"].exists(),
         "project_code": project_code,
         "product_id": product_id,
+        "git_commit": get_git_commit(),
+        "workflow_path_version": WORKFLOW_PATH_VERSION,
+        "persistent_storage_enabled": persistent_storage_enabled(),
+        "startup_module": "app.main:app",
     }
 
 

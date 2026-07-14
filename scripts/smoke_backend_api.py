@@ -51,7 +51,7 @@ def main():
             "service": "avocarbon-costing-backend",
         }
         payload = health_response.json()
-        shape_ok = payload == expected_health
+        shape_ok = all(payload.get(key) == value for key, value in expected_health.items())
         print(f"{'PASS' if shape_ok else 'FAIL'} /api/health response contract")
         checks.append(shape_ok)
 

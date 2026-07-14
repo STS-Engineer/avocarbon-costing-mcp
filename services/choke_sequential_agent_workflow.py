@@ -19,13 +19,16 @@ from services.costing_master_data_service import (
     get_master_unit_data,
 )
 from services.customer_input_schema import normalize_customer_input
+from services.agent_file_proxy_service import build_agent_file_url, verify_agent_pdf_url
 from services.project_data_paths import (
     BACKEND_ROOT,
     COSTING_RUNS_DIR,
     CUSTOMER_INPUT_DIR,
     DATA_ROOT,
     PROJECT_ROOT,
+    atomic_write_json,
     data_reference_candidates,
+    ensure_workflow_storage_ready,
     get_legacy_workflow_state_paths,
     get_workflow_run_paths,
     portable_data_reference,
@@ -113,18 +116,20 @@ def _drawing_file_url_from_path(
     if not project_code or not filename or filename != Path(filename).name:
         return None
     base_url = _public_base_url(request_base_url)
-    return (
-        f"{base_url}/api/choke-costing/files/"
-        f"{quote(project_code, safe='')}/{quote(filename, safe='')}"
-    )
+    try:
+        expiry_seconds = max(7200, int(os.getenv("AGENT_FILE_URL_EXPIRY_SECONDS", "14400")))
+        return build_agent_file_url(
+            base_url,
+            project_code,
+            filename,
+            expiry_seconds=expiry_seconds,
+        )
+    except (RuntimeError, ValueError):
+        return None
 
 
 def _write_json(path: Path, payload: Any) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    atomic_write_json(path, payload)
     return _relative(path)
 
 
@@ -203,6 +208,7 @@ def _project_from_input(customer_input: Dict[str, Any]) -> Dict[str, Any]:
         "drawing_file_path",
         "drawing_file_url",
         "drawing_file_url_local",
+        "drawing_agent_proxy_url",
         "drawing_access_mode",
         "drawing_blob_url",
         "drawing_sas_url",
@@ -429,6 +435,10 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
             "canonical_workflow_state_path": path_diagnostics["resolved_workflow_state_path"],
             "process_id": path_diagnostics["process_id"],
             "cwd": path_diagnostics["cwd"],
+            "git_commit": path_diagnostics.get("git_commit"),
+            "workflow_path_version": path_diagnostics.get("workflow_path_version"),
+            "persistent_storage_enabled": path_diagnostics.get("persistent_storage_enabled"),
+            "startup_module": path_diagnostics.get("startup_module"),
         }
         if raw_exists:
             response["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
@@ -461,7 +471,59 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
     state["canonical_workflow_state_path"] = path_diagnostics["resolved_workflow_state_path"]
     state["process_id"] = path_diagnostics["process_id"]
     state["cwd"] = path_diagnostics["cwd"]
+    state["git_commit"] = path_diagnostics.get("git_commit")
+    state["workflow_path_version"] = path_diagnostics.get("workflow_path_version")
+    state["persistent_storage_enabled"] = path_diagnostics.get("persistent_storage_enabled")
+    state["startup_module"] = path_diagnostics.get("startup_module")
     return state
+
+
+def run_storage_self_test() -> Dict[str, Any]:
+    ensure_workflow_storage_ready()
+    suffix = uuid.uuid4().hex[:12]
+    project_code = f"STORAGE-SELF-TEST-{suffix}"
+    product_id = "SELF-TEST-PRODUCT"
+    paths = get_workflow_run_paths(project_code, product_id)
+    run_dir = paths["run_dir"]
+    try:
+        state = _load_state(project_code, product_id)
+        state.update({
+            "status": "starting",
+            "input_file": "storage-self-test",
+            "customer_input": {"project_code": project_code, "product_id": product_id},
+        })
+        _save_state(state)
+        rest_write_path = str(paths["workflow_state_path"])
+
+        mcp_read_state, mcp_read_state_path = _existing_state(project_code, product_id)
+        writeback = save_bom_output(
+            project_code=project_code,
+            product_id=product_id,
+            raw_json={"bom": []},
+        )
+        rest_read_state, rest_read_state_path = _existing_state(project_code, product_id)
+        mcp_write_path = str(writeback.get("workflow_state_path") or "")
+        mcp_read_path = str(mcp_read_state_path or "")
+        rest_read_path = str(rest_read_state_path or "")
+        identical = len({rest_write_path, mcp_read_path, mcp_write_path, rest_read_path}) == 1
+        success = bool(
+            identical
+            and mcp_read_state
+            and rest_read_state
+            and writeback.get("success")
+        )
+        return {
+            "success": success,
+            "rest_write_path": rest_write_path,
+            "mcp_read_path": mcp_read_path,
+            "mcp_write_path": mcp_write_path,
+            "rest_read_path": rest_read_path,
+            "all_paths_identical": identical,
+        }
+    finally:
+        canonical_root = get_workflow_run_paths(project_code, product_id)["run_dir"]
+        if canonical_root == run_dir and DATA_ROOT in run_dir.parents and run_dir.exists():
+            shutil.rmtree(run_dir)
 
 
 def _trigger_status(trigger_result: Dict[str, Any]) -> str:
@@ -640,13 +702,16 @@ def _build_bom_trigger_payload(
     drawing_file_path = normalized_input.get("drawing_file_path")
     generated_local_url = _drawing_file_url_from_path(drawing_file_path, request_base_url)
     drawing_file_url = (
-        normalized_input.get("drawing_sas_url")
-        or normalized_input.get("drawing_blob_url")
-        or normalized_input.get("drawing_file_url")
+        normalized_input.get("drawing_agent_proxy_url")
         or generated_local_url
+        or normalized_input.get("drawing_file_url")
+        or normalized_input.get("drawing_sas_url")
+        or normalized_input.get("drawing_blob_url")
     )
     drawing_access_mode = normalized_input.get("drawing_access_mode")
-    if not drawing_access_mode:
+    if normalized_input.get("drawing_agent_proxy_url") or generated_local_url:
+        drawing_access_mode = "backend_signed_proxy"
+    elif not drawing_access_mode:
         if normalized_input.get("drawing_sas_url"):
             drawing_access_mode = "azure_blob_sas"
         elif normalized_input.get("drawing_blob_url"):
@@ -677,6 +742,7 @@ def _build_bom_trigger_payload(
         "project_code": project_code,
         "product_id": product_id,
         "drawing_file_url": drawing_file_url,
+        "drawing_agent_proxy_url": normalized_input.get("drawing_agent_proxy_url") or generated_local_url,
         "drawing_reference": normalized_input.get("drawing_reference"),
         "save_address": save_address,
         "instruction": writeback_instruction,
@@ -688,6 +754,7 @@ def _build_bom_trigger_payload(
         "save_address": save_address,
         "drawing_file_path": drawing_file_path,
         "drawing_file_url": drawing_file_url,
+        "drawing_agent_proxy_url": normalized_input.get("drawing_agent_proxy_url") or generated_local_url,
         "drawing_access_mode": drawing_access_mode,
         "drawing_blob_url": normalized_input.get("drawing_blob_url"),
         "drawing_sas_url": normalized_input.get("drawing_sas_url"),
@@ -757,6 +824,7 @@ def start_real_choke_workflow(
     dry_run: bool = False,
     request_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
+    ensure_workflow_storage_ready()
     customer_input = _load_customer_input(input_file)
     project = _project_from_input(customer_input)
     normalized_input = project["normalized_input"]
@@ -791,6 +859,50 @@ def start_real_choke_workflow(
     save_address = bom_trigger["save_address"]
     existing_state = _load_state(project_code, product_id)
     status_before = existing_state.get("status")
+    state = existing_state
+    state.update({
+        "input_file": customer_input["_input_file"],
+        "drawing_file_path": normalized_input.get("drawing_file_path"),
+        "drawing_file_url": bom_trigger.get("drawing_file_url"),
+        "drawing_agent_proxy_url": bom_trigger.get("drawing_agent_proxy_url"),
+        "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
+        "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
+        "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
+        "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
+        "status": "starting",
+        "current_step": "Step 1 BOM Agent",
+        "manufacturing_strategy": manufacturing_strategy,
+        "unit_data": unit_data,
+        "customer_input": normalized_input,
+        "components": state.get("components") or {},
+        "most": state.get("most") or {},
+        "process_decomposition": state.get("process_decomposition"),
+        "missing_outputs": ["bom"],
+        "warnings": bom_trigger.get("warnings") or [],
+    })
+    state["bom"] = {
+        **dict(state.get("bom") or {}),
+        "status": "pending",
+        "save_path": save_address,
+        "drawing_file_path": bom_trigger.get("drawing_file_path"),
+        "drawing_file_url": bom_trigger.get("drawing_file_url"),
+        "drawing_agent_proxy_url": bom_trigger.get("drawing_agent_proxy_url"),
+        "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
+        "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
+        "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
+        "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
+        "warnings": bom_trigger.get("warnings") or [],
+        "trigger_result": None,
+        "trigger_attempts": [],
+        "retryable": False,
+        "input_text": input_text,
+    }
+    _save_state(state)
+    persisted_state, persisted_path = _existing_state(project_code, product_id)
+    if persisted_state is None or persisted_path is None or not persisted_path.exists():
+        raise RuntimeError(
+            "Canonical workflow state persistence verification failed; Agent was not triggered."
+        )
     append_workflow_event(
         project_code,
         product_id,
@@ -805,6 +917,33 @@ def start_real_choke_workflow(
             if key not in {"project_code", "product_id"}
         },
     )
+
+    pdf_url_check = {"success": True, "skipped": bool(dry_run)}
+    if not dry_run:
+        pdf_url_check = verify_agent_pdf_url(bom_trigger.get("drawing_file_url"))
+        if not pdf_url_check.get("success"):
+            persisted_state["status"] = "blocked"
+            persisted_state["bom"] = {
+                **dict(persisted_state.get("bom") or {}),
+                "status": "failed",
+                "retryable": False,
+                "pdf_url_check": pdf_url_check,
+            }
+            persisted_state.setdefault("errors", []).append({
+                "stage": "bom_pdf_access",
+                "message": "Agent PDF proxy validation failed; Workspace Agent was not triggered.",
+                "details": pdf_url_check,
+            })
+            _save_state(persisted_state)
+            return {
+                "message": "Agent PDF proxy validation failed; Workspace Agent was not triggered.",
+                "status": "blocked",
+                "state": persisted_state,
+                "canonical_workflow_state_path": str(persisted_path),
+                "workflow_state_exists_before_trigger": True,
+                "data_root": str(DATA_ROOT),
+                "pdf_url_check": pdf_url_check,
+            }
     trigger_result = _trigger_bom_agent_with_retries(
         project_code=project_code,
         product_id=product_id,
@@ -828,43 +967,23 @@ def start_real_choke_workflow(
         if retryable_failure
         else "failed"
     )
-    state = existing_state
-    state.update({
-        "input_file": customer_input["_input_file"],
-        "drawing_file_path": normalized_input.get("drawing_file_path"),
-        "drawing_file_url": bom_trigger.get("drawing_file_url"),
-        "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
-        "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
-        "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
-        "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
-        "status": workflow_status,
-        "current_step": "Step 1 BOM Agent",
-        "manufacturing_strategy": manufacturing_strategy,
-        "unit_data": unit_data,
-        "customer_input": normalized_input,
-        "components": {},
-        "most": {},
-        "process_decomposition": None,
-        "missing_outputs": ["bom"],
-        "warnings": bom_trigger.get("warnings") or [],
-    })
-    state["bom"] = {
-        "status": bom_status,
-        "save_path": save_address,
-        "drawing_file_path": bom_trigger.get("drawing_file_path"),
-        "drawing_file_url": bom_trigger.get("drawing_file_url"),
-        "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
-        "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
-        "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
-        "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
-        "warnings": bom_trigger.get("warnings") or [],
-        "trigger_result": trigger_result,
-        "trigger_attempts": trigger_result.get("attempts") or [],
-        "retryable": retryable_failure,
-        "input_text": input_text,
-    }
-    if not accepted:
-        state.setdefault("errors", []).append({"stage": "bom", "trigger_result": trigger_result})
+    latest_state, _ = _existing_state(project_code, product_id)
+    state = latest_state or persisted_state
+    if (state.get("bom") or {}).get("status") != "received":
+        state["status"] = workflow_status
+        state["current_step"] = "Step 1 BOM Agent"
+        state["bom"] = {
+            **dict(state.get("bom") or {}),
+            "status": bom_status,
+            "trigger_result": trigger_result,
+            "trigger_attempts": trigger_result.get("attempts") or [],
+            "retryable": retryable_failure,
+            "pdf_url_check": pdf_url_check,
+        }
+        if not accepted:
+            state.setdefault("errors", []).append({"stage": "bom", "trigger_result": trigger_result})
+    else:
+        _apply_bom_received_precedence(state)
     _save_state(state)
     event_paths = {
         "input_file": customer_input["_input_file"],
@@ -891,6 +1010,10 @@ def start_real_choke_workflow(
             "most_triggered": [],
         },
         "path_diagnostics": path_diagnostics,
+        "status": state.get("status"),
+        "canonical_workflow_state_path": str(persisted_path),
+        "workflow_state_exists_before_trigger": True,
+        "data_root": str(DATA_ROOT),
     }
 
 

@@ -15,6 +15,7 @@ from services.choke_sequential_agent_workflow import (
     save_component_output,
     save_most_output,
     retry_bom_agent,
+    run_storage_self_test,
     test_bom_agent_trigger,
     start_real_choke_workflow,
     trigger_most_operations,
@@ -111,6 +112,11 @@ def start_workflow(request: Request, payload: StartWorkflowRequest):
         dry_run=payload.dry_run,
         request_base_url=str(request.base_url),
     ))
+
+
+@router.post("/storage-self-test")
+def storage_self_test():
+    return _handle(run_storage_self_test)
 
 
 @router.get("/status/{project_code}/{product_id}")

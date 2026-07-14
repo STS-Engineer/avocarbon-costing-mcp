@@ -3,6 +3,7 @@ import logging
 import os
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.choke_agent_integration_router import router as choke_agent_integration_router
@@ -14,6 +15,7 @@ from server import (
     mcp,
     root_info as mcp_root_info,
 )
+from services.project_data_paths import get_data_root, validate_data_root_configuration
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,11 @@ mcp_streamable_http_app = mcp.streamable_http_app()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    storage_status = validate_data_root_configuration()
+    if storage_status["healthy"]:
+        logger.info("CANONICAL_DATA_ROOT=%s", get_data_root())
+    else:
+        logger.critical("Invalid workflow storage configuration: %s", storage_status["errors"])
     async with mcp.session_manager.run():
         yield
 
@@ -75,7 +82,22 @@ async def health(request: Request):
 
 @app.get("/api/health", tags=["Health"])
 def api_health():
-    return {
-        "status": "ok",
+    storage_status = validate_data_root_configuration()
+    payload = {
+        "status": "ok" if storage_status["healthy"] else "unhealthy",
         "service": "avocarbon-costing-backend",
+        **{key: storage_status[key] for key in (
+            "git_commit",
+            "data_root_raw",
+            "data_root_resolved",
+            "persistent_storage_enabled",
+            "workflow_path_version",
+            "process_id",
+            "cwd",
+            "startup_module",
+        )},
     }
+    if not storage_status["healthy"]:
+        payload["storage_errors"] = storage_status["errors"]
+        return JSONResponse(payload, status_code=503)
+    return payload

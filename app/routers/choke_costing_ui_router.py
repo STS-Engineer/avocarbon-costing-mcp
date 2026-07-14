@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -14,12 +14,18 @@ from services.azure_blob_storage_service import (
     is_azure_blob_configured,
     upload_file_to_blob,
 )
+from services.agent_file_proxy_service import (
+    build_agent_file_url,
+    uploaded_pdf_path,
+    validate_agent_file_token,
+)
 from services.choke_orchestrator import run_choke_orchestration
 from services.project_data_paths import (
     BACKEND_ROOT,
     COSTING_RUNS_DIR,
     CUSTOMER_INPUT_DIR,
     CustomerInputFileNotFound,
+    atomic_write_json,
     portable_data_reference,
     resolve_customer_input_path,
 )
@@ -111,6 +117,28 @@ def get_public_file_url(request: Request, drawing_file_path: str) -> str | None:
     return f"{_public_base_url(request)}/api/choke-costing/files/{project_code}/{filename}"
 
 
+def get_agent_file_url(request: Request, drawing_file_path: str) -> str | None:
+    if not drawing_file_path:
+        return None
+    parts = str(drawing_file_path).replace("\\", "/").split("/")
+    try:
+        upload_index = parts.index("uploads")
+        project_code = parts[upload_index + 1]
+        filename = parts[upload_index + 2]
+    except (ValueError, IndexError):
+        return None
+    try:
+        expiry_seconds = max(7200, int(os.getenv("AGENT_FILE_URL_EXPIRY_SECONDS", "14400")))
+        return build_agent_file_url(
+            _public_base_url(request),
+            project_code,
+            filename,
+            expiry_seconds=expiry_seconds,
+        )
+    except (RuntimeError, ValueError):
+        return None
+
+
 def _load_json_file(path: Path) -> Dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -180,6 +208,7 @@ def list_customer_inputs(request: Request):
             "drawing_file_path": payload.get("drawing_file_path"),
             "drawing_file_url": drawing_file_url,
             "drawing_file_url_local": payload.get("drawing_file_url_local"),
+            "drawing_agent_proxy_url": payload.get("drawing_agent_proxy_url"),
             "drawing_access_mode": payload.get("drawing_access_mode"),
             "drawing_blob_url": payload.get("drawing_blob_url"),
             "drawing_sas_url": payload.get("drawing_sas_url"),
@@ -247,10 +276,11 @@ async def create_customer_input(request: Request):
     drawing_reference = Path(drawing_pdf.filename).name
     drawing_file_path = _relative_to_base(upload_path)
     drawing_file_url_local = get_public_file_url(request, drawing_file_path)
-    drawing_file_url = drawing_file_url_local
+    drawing_agent_proxy_url = get_agent_file_url(request, drawing_file_path)
+    drawing_file_url = drawing_agent_proxy_url or drawing_file_url_local
     drawing_blob_url = None
     drawing_sas_url = None
-    drawing_access_mode = "local"
+    drawing_access_mode = "backend_signed_proxy" if drawing_agent_proxy_url else "local"
     warnings = []
     azure_upload_result = {
         "status": "not_configured",
@@ -265,8 +295,10 @@ async def create_customer_input(request: Request):
         if azure_upload_result.get("status") == "uploaded":
             drawing_blob_url = azure_upload_result.get("blob_url")
             drawing_sas_url = azure_upload_result.get("sas_url")
-            drawing_file_url = drawing_sas_url or drawing_blob_url
-            drawing_access_mode = "azure_blob_sas" if drawing_sas_url else "azure_blob"
+            drawing_file_url = drawing_agent_proxy_url or drawing_sas_url or drawing_blob_url
+            drawing_access_mode = "backend_signed_proxy" if drawing_agent_proxy_url else (
+                "azure_blob_sas" if drawing_sas_url else "azure_blob"
+            )
         else:
             warnings.append(
                 "Azure Blob upload failed; using local PDF URL fallback. "
@@ -290,6 +322,7 @@ async def create_customer_input(request: Request):
         "drawing_reference": drawing_reference,
         "drawing_file_path": drawing_file_path,
         "drawing_file_url_local": drawing_file_url_local,
+        "drawing_agent_proxy_url": drawing_agent_proxy_url,
         "drawing_file_url": drawing_file_url,
         "drawing_blob_url": drawing_blob_url,
         "drawing_sas_url": drawing_sas_url,
@@ -313,10 +346,7 @@ async def create_customer_input(request: Request):
 
     output_path = CUSTOMER_INPUT_DIR / f"{safe_project_code}_{safe_product_id}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(customer_input, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    atomic_write_json(output_path, customer_input)
     append_workflow_event(
         project_code,
         product_id,
@@ -351,6 +381,29 @@ def get_uploaded_drawing_file(project_code: str, filename: str):
         candidate,
         media_type="application/pdf",
         filename=filename,
+    )
+
+
+@router.get("/api/choke-costing/agent-files/{project_code}/{filename}")
+def get_agent_drawing_file(
+    project_code: str,
+    filename: str,
+    token: str = Query(..., min_length=10),
+):
+    try:
+        if not validate_agent_file_token(project_code, filename, token):
+            raise HTTPException(status_code=403, detail="Invalid or expired Agent file token")
+        candidate = uploaded_pdf_path(project_code, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Uploaded drawing PDF not found")
+    return FileResponse(
+        candidate,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 

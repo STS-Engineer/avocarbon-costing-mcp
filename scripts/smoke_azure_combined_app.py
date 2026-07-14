@@ -123,7 +123,8 @@ def run_in_process():
 
     api_payload = responses["/api/health"].json() if responses["/api/health"].status_code == 200 else {}
     checks.append(print_check(
-        api_payload == {"status": "ok", "service": "avocarbon-costing-backend"},
+        api_payload.get("status") == "ok"
+        and api_payload.get("service") == "avocarbon-costing-backend",
         "REST health response",
     ))
 
@@ -159,7 +160,7 @@ def run_in_process():
         f"HTTP {status_response.status_code}",
     ))
 
-    storage_path = Path(workflow_service.RUNS_DIR).resolve()
+    storage_path = Path(workflow_service.COSTING_RUNS_DIR).resolve()
     checks.append(print_check(
         "services.choke_sequential_agent_workflow" in sys.modules,
         "REST and MCP share workflow service",
