@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -14,6 +14,7 @@ from services.choke_sequential_agent_workflow import (
     save_component_output,
     save_most_output,
     retry_bom_agent,
+    test_bom_agent_trigger,
     start_real_choke_workflow,
     trigger_most_operations,
     trigger_next_component_costing,
@@ -45,6 +46,13 @@ class TriggerStageRequest(BaseModel):
 class RetryBomRequest(BaseModel):
     project_code: str
     product_id: str
+
+
+class TestBomAgentTriggerRequest(BaseModel):
+    project_code: str
+    product_id: str
+    drawing_file_url: str
+    drawing_reference: Optional[str] = None
 
 
 class SaveComponentOutputRequest(BaseModel):
@@ -141,6 +149,16 @@ def retry_bom(request: RetryBomRequest):
     return _handle(lambda: retry_bom_agent(
         project_code=request.project_code,
         product_id=request.product_id,
+    ))
+
+
+@router.post("/test-bom-agent-trigger")
+def test_bom_trigger(request: TestBomAgentTriggerRequest):
+    return _handle(lambda: test_bom_agent_trigger(
+        project_code=request.project_code,
+        product_id=request.product_id,
+        drawing_file_url=request.drawing_file_url,
+        drawing_reference=request.drawing_reference,
     ))
 
 

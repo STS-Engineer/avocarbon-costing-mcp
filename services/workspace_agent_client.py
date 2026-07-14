@@ -1,11 +1,14 @@
 import json
+import logging
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 
 
 WORKSPACE_AGENT_API_BASE_URL = "https://api.chatgpt.com/v1/workspace_agents"
+logger = logging.getLogger(__name__)
 
 
 def clean_agent_id(agent_id):
@@ -18,6 +21,42 @@ def clean_agent_id(agent_id):
     return cleaned_id
 
 
+def _trigger_base_url():
+    configured = (
+        os.getenv("CHATGPT_WORKSPACE_AGENT_TRIGGER_BASE_URL")
+        or os.getenv("WORKSPACE_AGENT_TRIGGER_BASE_URL")
+        or WORKSPACE_AGENT_API_BASE_URL
+    )
+    base_url = str(configured).strip().rstrip("/")
+    if base_url.endswith("/mcp") or "mcp-costing.azurewebsites.net" in base_url.lower():
+        raise ValueError("Workspace Agent trigger URL must not use the Azure MCP endpoint.")
+    return base_url
+
+
+def _safe_agent_id_prefix(agent_id):
+    cleaned = clean_agent_id(agent_id)
+    return f"{cleaned[:10]}..." if len(cleaned) > 10 else cleaned
+
+
+def _response_payload(text):
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _correlation_id(headers):
+    if not headers:
+        return None
+    for name in ["x-request-id", "request-id", "x-correlation-id", "cf-ray"]:
+        value = headers.get(name)
+        if value:
+            return value
+    return None
+
+
 def trigger_workspace_agent(
     agent_id,
     access_token,
@@ -28,11 +67,25 @@ def trigger_workspace_agent(
     timeout_seconds=None,
 ):
     cleaned_agent_id = clean_agent_id(agent_id)
-    access_token = (
+    access_token = str(
         access_token
         or os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN")
         or os.getenv("WORKSPACE_AGENT_ACCESS_TOKEN")
-    )
+        or ""
+    ).strip()
+    try:
+        base_url = _trigger_base_url()
+    except ValueError as exc:
+        return {
+            "status": "blocked",
+            "error_type": "invalid_trigger_url",
+            "message": str(exc),
+            "endpoint": None,
+            "agent_id_prefix": _safe_agent_id_prefix(cleaned_agent_id),
+            "token_present": bool(access_token),
+        }
+    endpoint = f"{base_url}/{cleaned_agent_id}/trigger"
+    safe_endpoint = f"{base_url}/{{agent_id}}/trigger"
 
     if dry_run:
         return {
@@ -41,6 +94,9 @@ def trigger_workspace_agent(
             "conversation_key": conversation_key,
             "idempotency_key": idempotency_key,
             "input_text": input_text,
+            "endpoint": safe_endpoint,
+            "agent_id_prefix": _safe_agent_id_prefix(cleaned_agent_id),
+            "token_present": bool(access_token),
         }
 
     missing_inputs = []
@@ -58,11 +114,17 @@ def trigger_workspace_agent(
             "status": "blocked",
             "missing_inputs": missing_inputs,
             "message": "Workspace Agent trigger cannot run without required inputs.",
+            "endpoint": safe_endpoint,
+            "method": "POST",
+            "agent_id_prefix": _safe_agent_id_prefix(cleaned_agent_id),
+            "token_present": bool(access_token),
+            "payload_size": 0,
         }
 
-    body = {"input": input_text}
+    body = {"input": str(input_text).strip()}
     if conversation_key:
-        body["conversation_key"] = conversation_key
+        body["conversation_key"] = str(conversation_key).strip()
+    request_data = json.dumps(body, ensure_ascii=False).encode("utf-8")
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -72,8 +134,8 @@ def trigger_workspace_agent(
         headers["Idempotency-Key"] = idempotency_key
 
     request = urllib.request.Request(
-        f"{WORKSPACE_AGENT_API_BASE_URL}/{cleaned_agent_id}/trigger",
-        data=json.dumps(body).encode("utf-8"),
+        endpoint.strip(),
+        data=request_data,
         headers=headers,
         method="POST",
     )
@@ -86,24 +148,39 @@ def trigger_workspace_agent(
     except (TypeError, ValueError):
         timeout = 60.0
 
+    diagnostic = {
+        "endpoint": safe_endpoint,
+        "method": "POST",
+        "agent_id_prefix": _safe_agent_id_prefix(cleaned_agent_id),
+        "token_present": bool(access_token),
+        "payload_size": len(request_data),
+    }
+    logger.info("Workspace Agent trigger request: %s", json.dumps(diagnostic))
+    started_at = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status_code = response.getcode()
-            return {
+            response_text = response.read().decode("utf-8", errors="replace")
+            result = {
                 "status": "accepted" if status_code == 202 else "failed",
                 "http_status": status_code,
                 "note": "Workspace Agent trigger accepted. Output must be saved by agent/MCP or loaded from save_address.",
+                "response": _response_payload(response_text),
+                "request_correlation_id": _correlation_id(response.headers),
             }
     except urllib.error.HTTPError as exc:
-        return {
+        response_text = exc.read().decode("utf-8", errors="replace")
+        result = {
             "status": "failed",
             "http_status": exc.code,
             "note": "Workspace Agent trigger failed.",
-            "error": exc.read().decode("utf-8", errors="replace"),
+            "error": response_text,
+            "response": _response_payload(response_text),
             "error_type": "http_error",
+            "request_correlation_id": _correlation_id(exc.headers),
         }
     except (TimeoutError, socket.timeout) as exc:
-        return {
+        result = {
             "status": "failed",
             "http_status": None,
             "note": "Workspace Agent trigger timed out.",
@@ -113,7 +190,7 @@ def trigger_workspace_agent(
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
         error_type = "timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "connection_error"
-        return {
+        result = {
             "status": "failed",
             "http_status": None,
             "note": "Workspace Agent trigger connection failed.",
@@ -121,7 +198,7 @@ def trigger_workspace_agent(
             "error_type": error_type,
         }
     except ConnectionError as exc:
-        return {
+        result = {
             "status": "failed",
             "http_status": None,
             "note": "Workspace Agent trigger connection failed.",
@@ -129,10 +206,23 @@ def trigger_workspace_agent(
             "error_type": "connection_error",
         }
     except Exception as exc:
-        return {
+        result = {
             "status": "failed",
             "http_status": None,
             "note": "Workspace Agent trigger failed.",
             "error": str(exc),
             "error_type": "unexpected_error",
         }
+    result.update(diagnostic)
+    result["elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
+    logger.info(
+        "Workspace Agent trigger response: %s",
+        json.dumps({
+            **diagnostic,
+            "elapsed_seconds": result["elapsed_seconds"],
+            "http_status": result.get("http_status"),
+            "response": result.get("response") or result.get("error"),
+            "request_correlation_id": result.get("request_correlation_id"),
+        }, default=str),
+    )
+    return result

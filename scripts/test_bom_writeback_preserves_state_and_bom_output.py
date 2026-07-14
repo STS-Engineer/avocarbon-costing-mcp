@@ -93,7 +93,13 @@ def main():
     assert state["drawing_file_path"] == drawing_path_before, state
     assert state["drawing_file_url"] == drawing_url_before, state
     assert state["customer_input"], state
-    assert state["bom"]["trigger_result"] == trigger_result_before, state["bom"]
+    resolved_trigger_result = state["bom"]["trigger_result"]
+    assert all(
+        resolved_trigger_result.get(key) == value
+        for key, value in trigger_result_before.items()
+    ), state["bom"]
+    assert resolved_trigger_result["resolved_by_writeback"] is True, resolved_trigger_result
+    assert resolved_trigger_result["effective_status"] == "received", resolved_trigger_result
     assert state["bom"]["drawing_file_path"], state["bom"]
     assert state["bom"]["drawing_file_url"], state["bom"]
 

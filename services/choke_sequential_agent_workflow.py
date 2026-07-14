@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
@@ -295,6 +296,48 @@ def _save_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+def _is_resolved_bom_trigger_error(error: Any) -> bool:
+    if not isinstance(error, dict) or error.get("stage") != "bom":
+        return False
+    trigger_result = error.get("trigger_result") or {}
+    return (
+        trigger_result.get("status") == "failed"
+        or trigger_result.get("http_status") is not None
+        or "trigger" in str(error.get("message") or "").lower()
+    )
+
+
+def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
+    existing_bom = dict(state.get("bom") or {})
+    trigger_result = dict(existing_bom.get("trigger_result") or {})
+    if trigger_result:
+        trigger_result["resolved_by_writeback"] = True
+        trigger_result["effective_status"] = "received"
+
+    active_errors = list(state.get("errors") or [])
+    resolved_errors = [error for error in active_errors if _is_resolved_bom_trigger_error(error)]
+    remaining_errors = [error for error in active_errors if not _is_resolved_bom_trigger_error(error)]
+    historical_errors = list(state.get("historical_errors") or [])
+    for error in resolved_errors:
+        if error not in historical_errors:
+            historical_errors.append(error)
+
+    state["status"] = "bom_received"
+    state["current_step"] = "Step 2 External Component Costing Agent"
+    state["retry_available"] = False
+    state["retryable"] = False
+    state["errors"] = remaining_errors
+    state["historical_errors"] = historical_errors
+    state["bom"] = {
+        **existing_bom,
+        "status": "received",
+        "retryable": False,
+        "retry_available": False,
+        **({"trigger_result": trigger_result} if trigger_result else {}),
+    }
+    return state
+
+
 def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
     state, state_path = _existing_state(project_code, product_id)
     raw_path = _bom_raw_path(project_code, product_id)
@@ -329,6 +372,23 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
     state.setdefault("most", {})
     state.setdefault("missing_outputs", [])
     state.setdefault("errors", [])
+    normalized_reference = (
+        (state.get("bom") or {}).get("normalized_path")
+        or _relative(_bom_normalized_path(project_code, product_id))
+    )
+    normalized_exists = any(
+        path.exists() for path in data_reference_candidates(normalized_reference)
+    )
+    if (state.get("bom") or {}).get("status") == "received" or normalized_exists:
+        was_inconsistent = (
+            state.get("status") != "bom_received"
+            or (state.get("bom") or {}).get("retryable") is not False
+            or state.get("retry_available") is not False
+            or any(_is_resolved_bom_trigger_error(error) for error in state.get("errors") or [])
+        )
+        _apply_bom_received_precedence(state)
+        if was_inconsistent:
+            _save_state(state)
     if state.get("status") in {"created", "pending"} and raw_exists:
         state["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
     return state
@@ -395,7 +455,12 @@ def _is_retryable_trigger_result(result: Dict[str, Any]) -> bool:
 
 
 def _trigger_response_body(result: Dict[str, Any]) -> Any:
-    body = result.get("error") or result.get("response_body") or result.get("note")
+    body = (
+        result.get("response")
+        or result.get("error")
+        or result.get("response_body")
+        or result.get("note")
+    )
     if isinstance(body, str):
         try:
             return json.loads(body)
@@ -416,6 +481,7 @@ def _trigger_bom_agent_with_retries(
     backoffs = _trigger_backoff_seconds()
     attempts = []
     last_result: Dict[str, Any] = {}
+    idempotency_key = f"{project_code}:{product_id}:sequential:bom:{uuid.uuid4()}"
 
     for attempt_number in range(1, max_attempts + 1):
         result = _trigger(
@@ -423,7 +489,7 @@ def _trigger_bom_agent_with_retries(
             "Choke BOM Analyzer",
             input_text,
             f"{project_code}:{product_id}:sequential:bom",
-            f"{project_code}:{product_id}:sequential:bom:v1",
+            idempotency_key,
             dry_run=dry_run,
         )
         last_result = result or {}
@@ -534,51 +600,18 @@ def _build_bom_trigger_payload(
         )
 
     writeback_instruction = (
-        "After producing the BOM JSON, you must call the write-back tool save_bom_output. "
-        "Do not only return the JSON in chat. The backend workflow will not continue until "
-        "save_bom_output is called."
+        "Analyze the drawing according to your permanent agent instructions and call "
+        "save_bom_output with the complete BOM JSON."
     )
     payload = {
         "project_code": project_code,
         "product_id": product_id,
-        "product_family": normalized_input.get("product_line") or "Chokes",
-        "product_line": normalized_input.get("product_line") or "Chokes",
-        "drawing_reference": normalized_input.get("drawing_reference"),
-        "drawing_file_path": drawing_file_path,
         "drawing_file_url": drawing_file_url,
-        "drawing_access_mode": drawing_access_mode,
-        "drawing_blob_url": normalized_input.get("drawing_blob_url"),
-        "drawing_sas_url": normalized_input.get("drawing_sas_url"),
-        "drawing_original_filename": normalized_input.get("drawing_original_filename"),
-        "annual_quantity": normalized_input.get("annual_quantity"),
-        "delivery_zone": normalized_input.get("customer_delivery_zone"),
-        "customer_input": normalized_input,
+        "drawing_reference": normalized_input.get("drawing_reference"),
         "save_address": save_address,
-        "writeback_instructions": writeback_instruction,
-        "write_back_instruction": writeback_instruction,
-        "warnings": warnings,
+        "instruction": writeback_instruction,
     }
-    input_text = _json_input_text(
-        [
-            (
-                "Analyze the PDF drawing available at drawing_file_url. This is the source of truth "
-                "for technical BOM extraction. Extract part number, drawing number, product name, "
-                "revision, ferrite, wire, tin/plating, glue/locking clues, dimensions, manufacturing "
-                "operations, assumptions and points to confirm. Return structured BOM JSON only."
-            ),
-            "Trigger only the BOM analysis step.",
-            "Do not calculate final product price.",
-            "Do not trigger component costing or MOST.",
-            "Return JSON only.",
-            (
-                "After producing the BOM JSON, you must call the write-back tool save_bom_output. "
-                "Do not only return the JSON in chat. The backend workflow will not continue until "
-                "save_bom_output is called."
-            ),
-        ],
-        payload,
-        save_address,
-    )
+    input_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
     return {
         "payload": payload,
         "input_text": input_text,
@@ -610,6 +643,42 @@ def build_bom_trigger_preview(
         "project_code": project["project_code"],
         "product_id": project["product_id"],
         **trigger_payload,
+    }
+
+
+def test_bom_agent_trigger(
+    project_code: str,
+    product_id: str,
+    drawing_file_url: str,
+    drawing_reference: Optional[str] = None,
+) -> Dict[str, Any]:
+    _load_env()
+    normalized_input = {
+        "drawing_file_url": str(drawing_file_url or "").strip(),
+        "drawing_reference": str(drawing_reference or "").strip() or None,
+        "drawing_access_mode": "diagnostic_url",
+    }
+    trigger = _build_bom_trigger_payload(project_code, product_id, normalized_input)
+    result = trigger_workspace_agent(
+        agent_id=str(os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID") or "").strip(),
+        access_token=str(os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN") or "").strip(),
+        input_text=trigger["input_text"],
+        conversation_key=f"diagnostic:{project_code}:{product_id}",
+        idempotency_key=f"diagnostic:{project_code}:{product_id}:{uuid.uuid4()}",
+        dry_run=False,
+    )
+    return {
+        "endpoint": result.get("endpoint"),
+        "method": result.get("method"),
+        "agent_id_prefix": result.get("agent_id_prefix"),
+        "token_present": result.get("token_present"),
+        "payload_size": result.get("payload_size"),
+        "http_status": result.get("http_status"),
+        "response": result.get("response") or result.get("error") or result.get("message"),
+        "elapsed_seconds": result.get("elapsed_seconds"),
+        "request_correlation_id": result.get("request_correlation_id"),
+        "status": result.get("status"),
+        "error_type": result.get("error_type"),
     }
 
 
@@ -1178,8 +1247,6 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
         if input_path:
             state["customer_input"] = _read_json(input_path, state.get("customer_input") or {}) or {}
     master_data_refresh = _refresh_master_data_for_state(state)
-    state["status"] = "bom_received"
-    state["current_step"] = "Step 2 External Component Costing Agent"
     existing_bom = dict(state.get("bom") or {})
     state["bom"] = {
         **existing_bom,
@@ -1188,6 +1255,7 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
         "normalized_path": _relative(normalized_path),
         "received_at": _now_iso(),
     }
+    _apply_bom_received_precedence(state)
     state["technical_fields_extracted_from_bom"] = bool(customer_input_update.get("extracted"))
     state["technical_fields_from_bom"] = customer_input_update.get("extracted") or {}
     state["customer_input_update"] = customer_input_update
