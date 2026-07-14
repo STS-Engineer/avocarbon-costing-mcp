@@ -16,10 +16,13 @@ except Exception:
     pass
 
 
+DATA_ROOT_RAW = os.getenv("DATA_ROOT")
+
+
 def _absolute_root(value: str | None, default: Path) -> Path:
     if not value:
         return default.resolve()
-    configured = Path(value).expanduser()
+    configured = Path(os.path.expandvars(value)).expanduser()
     if not configured.is_absolute():
         configured = BACKEND_ROOT / configured
     return configured.resolve()
@@ -28,11 +31,86 @@ def _absolute_root(value: str | None, default: Path) -> Path:
 def _default_data_root() -> Path:
     if os.getenv("WEBSITE_SITE_NAME") or os.getenv("WEBSITE_INSTANCE_ID"):
         azure_home = Path(os.getenv("HOME") or "/home")
-        return azure_home / "data"
+        return azure_home / "data" / "avocarbon-costing"
     return BACKEND_ROOT / "data"
 
 
-DATA_ROOT = _absolute_root(os.getenv("DATA_ROOT"), _default_data_root())
+def get_data_root(create: bool = True) -> Path:
+    root = _absolute_root(DATA_ROOT_RAW, _default_data_root())
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_workflow_part(value: Any, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required.")
+    if text in {".", ".."} or "/" in text or "\\" in text:
+        raise ValueError(f"{field_name} must not contain path separators.")
+    return text
+
+
+def get_workflow_run_paths(project_code: str, product_id: str) -> Dict[str, Path]:
+    project = _safe_workflow_part(project_code, "project_code")
+    product = _safe_workflow_part(product_id, "product_id")
+    run_dir = (get_data_root() / "costing_runs" / project / product).resolve()
+    components_dir = (run_dir / "agent_outputs" / "components").resolve()
+    most_dir = (run_dir / "agent_outputs" / "most").resolve()
+    return {
+        "run_dir": run_dir,
+        "workflow_state_path": (run_dir / "workflow_state.json").resolve(),
+        "raw_bom_path": (
+            run_dir / "agent_outputs" / "bom" / "raw_bom_agent_output.json"
+        ).resolve(),
+        "normalized_bom_path": (run_dir / "bom_normalized.json").resolve(),
+        "components_dir": components_dir,
+        "most_dir": most_dir,
+        "workflow_events_path": (run_dir / "workflow_events.jsonl").resolve(),
+    }
+
+
+def get_legacy_workflow_state_paths(project_code: str, product_id: str) -> List[Path]:
+    project = _safe_workflow_part(project_code, "project_code")
+    product = _safe_workflow_part(product_id, "product_id")
+    canonical = get_workflow_run_paths(project, product)["workflow_state_path"]
+    roots = [
+        (BACKEND_ROOT / "data").resolve(),
+        (PROJECT_ROOT / "data").resolve(),
+    ]
+    configured_legacy = os.getenv("LEGACY_DATA_ROOTS", "")
+    roots.extend(
+        _absolute_root(item.strip(), BACKEND_ROOT / "data")
+        for item in configured_legacy.split(",")
+        if item.strip()
+    )
+    if os.name != "nt":
+        roots.extend(path.resolve() for path in Path("/tmp").glob("*/data"))
+        roots.append(Path("/root/data").resolve())
+    candidates = []
+    for root in roots:
+        candidate = (root / "costing_runs" / project / product / "workflow_state.json").resolve()
+        if candidate != canonical and candidate.exists() and candidate.is_file():
+            candidates.append(candidate)
+    return list(dict.fromkeys(candidates))
+
+
+def workflow_path_diagnostics(project_code: str, product_id: str) -> Dict[str, Any]:
+    paths = get_workflow_run_paths(project_code, product_id)
+    return {
+        "process_id": os.getpid(),
+        "cwd": str(Path.cwd().resolve()),
+        "configured_data_root_raw": DATA_ROOT_RAW,
+        "resolved_data_root": str(get_data_root()),
+        "resolved_run_directory": str(paths["run_dir"]),
+        "resolved_workflow_state_path": str(paths["workflow_state_path"]),
+        "workflow_state_path_exists": paths["workflow_state_path"].exists(),
+        "project_code": project_code,
+        "product_id": product_id,
+    }
+
+
+DATA_ROOT = get_data_root()
 CUSTOMER_INPUT_DIR = (DATA_ROOT / "customer_inputs").resolve()
 COSTING_RUNS_DIR = (DATA_ROOT / "costing_runs").resolve()
 LEGACY_CUSTOMER_INPUT_DIRS = tuple(dict.fromkeys([
@@ -73,14 +151,12 @@ def data_reference_candidates(reference: str | Path) -> List[Path]:
             DATA_ROOT.joinpath(*raw.parts[1:]).resolve(),
             (BACKEND_ROOT / raw).resolve(),
             (PROJECT_ROOT / raw).resolve(),
-            (Path.cwd() / raw).resolve(),
         ]
     else:
         candidates = [
             (BACKEND_ROOT / raw).resolve(),
             (DATA_ROOT / raw).resolve(),
             (PROJECT_ROOT / raw).resolve(),
-            (Path.cwd() / raw).resolve(),
         ]
     return list(dict.fromkeys(candidates))
 

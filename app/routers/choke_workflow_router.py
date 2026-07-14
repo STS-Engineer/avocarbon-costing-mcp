@@ -21,7 +21,10 @@ from services.choke_sequential_agent_workflow import (
     trigger_next_component_costing,
     update_commercial_fields,
 )
-from services.project_data_paths import COSTING_RUNS_DIR, CustomerInputFileNotFound
+from services.project_data_paths import (
+    CustomerInputFileNotFound,
+    get_workflow_run_paths,
+)
 
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
@@ -228,9 +231,7 @@ def get_final_result(project_code: str, product_id: str):
     if any(part in {"", ".", ".."} or "/" in part or "\\" in part for part in [project_code, product_id]):
         raise HTTPException(status_code=400, detail="Invalid project_code or product_id")
     path = (
-        COSTING_RUNS_DIR
-        / project_code
-        / product_id
+        get_workflow_run_paths(project_code, product_id)["run_dir"]
         / "final_choke_costing_result.json"
     )
     if not path.exists():

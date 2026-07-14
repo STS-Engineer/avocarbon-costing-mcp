@@ -7,14 +7,13 @@ from typing import Any, Dict, List, Optional
 from services.choke_orchestrator import run_choke_orchestration
 from services.project_data_paths import (
     BACKEND_ROOT,
-    COSTING_RUNS_DIR,
     CUSTOMER_INPUT_DIR,
+    get_workflow_run_paths,
     portable_data_reference,
 )
 
 
 BASE_DIR = BACKEND_ROOT
-RUNS_DIR = COSTING_RUNS_DIR
 
 
 def _now_iso() -> str:
@@ -31,9 +30,7 @@ def _safe_part(value: Any, field_name: str) -> str:
 
 
 def _run_dir(project_code: str, product_id: str) -> Path:
-    project = _safe_part(project_code, "project_code")
-    product = _safe_part(product_id, "product_id")
-    return RUNS_DIR / project / product
+    return get_workflow_run_paths(project_code, product_id)["run_dir"]
 
 
 def _relative(path: Path) -> str:

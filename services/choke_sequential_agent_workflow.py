@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
+import unicodedata
 import uuid
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -24,14 +26,16 @@ from services.project_data_paths import (
     DATA_ROOT,
     PROJECT_ROOT,
     data_reference_candidates,
+    get_legacy_workflow_state_paths,
+    get_workflow_run_paths,
     portable_data_reference,
     resolve_customer_input_path,
+    workflow_path_diagnostics,
 )
 from services.workspace_agent_client import clean_agent_id, trigger_workspace_agent
 
 
 BASE_DIR = BACKEND_ROOT
-RUNS_DIR = COSTING_RUNS_DIR
 logger = logging.getLogger(__name__)
 
 
@@ -131,43 +135,41 @@ def _read_json(path: Path, default: Any = None) -> Any:
 
 
 def _run_dir(project_code: str, product_id: str) -> Path:
-    return RUNS_DIR / _safe_part(project_code, "project_code") / _safe_part(product_id, "product_id")
+    return get_workflow_run_paths(project_code, product_id)["run_dir"]
 
 
 def _state_path(project_code: str, product_id: str) -> Path:
-    return _run_dir(project_code, product_id) / "workflow_state.json"
+    return get_workflow_run_paths(project_code, product_id)["workflow_state_path"]
 
 
 def _events_path(project_code: str, product_id: str) -> Path:
-    return _run_dir(project_code, product_id) / "workflow_events.jsonl"
+    return get_workflow_run_paths(project_code, product_id)["workflow_events_path"]
 
 
 def _state_path_candidates(project_code: str, product_id: str) -> List[Path]:
-    canonical = _state_path(project_code, product_id).resolve()
-    reference = (
-        Path("data")
-        / "costing_runs"
-        / _safe_part(project_code, "project_code")
-        / _safe_part(product_id, "product_id")
-        / "workflow_state.json"
-    )
-    return list(dict.fromkeys([canonical, *data_reference_candidates(reference)]))
+    return [_state_path(project_code, product_id)]
 
 
 def _bom_raw_path(project_code: str, product_id: str) -> Path:
-    return _run_dir(project_code, product_id) / "agent_outputs" / "bom" / "raw_bom_agent_output.json"
+    return get_workflow_run_paths(project_code, product_id)["raw_bom_path"]
 
 
 def _bom_normalized_path(project_code: str, product_id: str) -> Path:
-    return _run_dir(project_code, product_id) / "bom_normalized.json"
+    return get_workflow_run_paths(project_code, product_id)["normalized_bom_path"]
 
 
 def _component_output_path(project_code: str, product_id: str, component_id: str) -> Path:
-    return _run_dir(project_code, product_id) / "agent_outputs" / "components" / f"{_safe_part(component_id, 'component_id')}.json"
+    return (
+        get_workflow_run_paths(project_code, product_id)["components_dir"]
+        / f"{_safe_part(component_id, 'component_id')}.json"
+    )
 
 
 def _most_output_path(project_code: str, product_id: str, work_package_id: str) -> Path:
-    return _run_dir(project_code, product_id) / "agent_outputs" / "most" / f"{_safe_part(work_package_id, 'work_package_id')}.json"
+    return (
+        get_workflow_run_paths(project_code, product_id)["most_dir"]
+        / f"{_safe_part(work_package_id, 'work_package_id')}.json"
+    )
 
 
 def _load_customer_input(input_file: str) -> Dict[str, Any]:
@@ -263,11 +265,56 @@ def _load_state(project_code: str, product_id: str) -> Dict[str, Any]:
 
 
 def _existing_state(project_code: str, product_id: str) -> tuple[Optional[Dict[str, Any]], Optional[Path]]:
-    for candidate in _state_path_candidates(project_code, product_id):
-        state = _read_json(candidate, None)
-        if isinstance(state, dict):
-            return state, candidate
+    candidate = _state_path(project_code, product_id)
+    state = _read_json(candidate, None)
+    if isinstance(state, dict):
+        return state, candidate
     return None, None
+
+
+def recover_legacy_workflow_state(
+    project_code: str,
+    product_id: str,
+    apply: bool = True,
+) -> Dict[str, Any]:
+    canonical_paths = get_workflow_run_paths(project_code, product_id)
+    canonical_state_path = canonical_paths["workflow_state_path"]
+    if canonical_state_path.exists():
+        return {
+            "status": "canonical_found",
+            "canonical_state_path": str(canonical_state_path),
+            "legacy_state_paths": [],
+            "migrated": False,
+        }
+    legacy_states = get_legacy_workflow_state_paths(project_code, product_id)
+    if not legacy_states:
+        return {
+            "status": "not_found",
+            "canonical_state_path": str(canonical_state_path),
+            "legacy_state_paths": [],
+            "migrated": False,
+        }
+    if len(legacy_states) > 1:
+        return {
+            "status": "split_state",
+            "canonical_state_path": str(canonical_state_path),
+            "legacy_state_paths": [str(path) for path in legacy_states],
+            "migrated": False,
+        }
+    source_state = legacy_states[0]
+    if apply:
+        canonical_paths["run_dir"].parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            source_state.parent,
+            canonical_paths["run_dir"],
+            dirs_exist_ok=True,
+        )
+    return {
+        "status": "migrated" if apply else "recoverable",
+        "canonical_state_path": str(canonical_state_path),
+        "legacy_state_paths": [str(source_state)],
+        "migrated": apply,
+    }
 
 
 def append_workflow_event(
@@ -347,6 +394,8 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
+    path_diagnostics = workflow_path_diagnostics(project_code, product_id)
+    logger.info("workflow status path: %s", json.dumps(path_diagnostics, default=str))
     state, state_path = _existing_state(project_code, product_id)
     raw_path = _bom_raw_path(project_code, product_id)
     raw_reference = (
@@ -362,6 +411,11 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
         workflow_state_exists=state is not None,
         raw_bom_exists=raw_exists,
         status_before=(state or {}).get("status"),
+        **{
+            key: value
+            for key, value in path_diagnostics.items()
+            if key not in {"project_code", "product_id"}
+        },
     )
     if state is None:
         response = {
@@ -371,6 +425,10 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
             "product_id": product_id,
             "debug_url": f"/api/choke-workflow/debug/{project_code}/{product_id}",
             "debug_hint": f"Use /api/choke-workflow/debug/{project_code}/{product_id}",
+            "canonical_data_root": path_diagnostics["resolved_data_root"],
+            "canonical_workflow_state_path": path_diagnostics["resolved_workflow_state_path"],
+            "process_id": path_diagnostics["process_id"],
+            "cwd": path_diagnostics["cwd"],
         }
         if raw_exists:
             response["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
@@ -399,6 +457,10 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
             _save_state(state)
     if state.get("status") in {"created", "pending"} and raw_exists:
         state["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
+    state["canonical_data_root"] = path_diagnostics["resolved_data_root"]
+    state["canonical_workflow_state_path"] = path_diagnostics["resolved_workflow_state_path"]
+    state["process_id"] = path_diagnostics["process_id"]
+    state["cwd"] = path_diagnostics["cwd"]
     return state
 
 
@@ -714,6 +776,8 @@ def start_real_choke_workflow(
         normalized_input.get("customer_delivery_zone"),
     )
     unit_data = get_master_unit_data(manufacturing_strategy.get("production_plant"))
+    path_diagnostics = workflow_path_diagnostics(project_code, product_id)
+    logger.info("workflow start path: %s", json.dumps(path_diagnostics, default=str))
     run_dir = _run_dir(project_code, product_id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -735,6 +799,11 @@ def start_real_choke_workflow(
         drawing_file_path=normalized_input.get("drawing_file_path"),
         drawing_file_url=bom_trigger.get("drawing_file_url"),
         status_before=status_before,
+        **{
+            key: value
+            for key, value in path_diagnostics.items()
+            if key not in {"project_code", "product_id"}
+        },
     )
     trigger_result = _trigger_bom_agent_with_retries(
         project_code=project_code,
@@ -821,6 +890,7 @@ def start_real_choke_workflow(
             "components_triggered": [],
             "most_triggered": [],
         },
+        "path_diagnostics": path_diagnostics,
     }
 
 
@@ -913,16 +983,35 @@ def _extract_component_list(raw_bom: Any) -> List[Dict[str, Any]]:
         raw_bom.get("line_items"),
         raw_bom.get("bill_of_material"),
         raw_bom.get("bill_of_materials"),
+        raw_bom.get("materials"),
         raw_bom.get("material_lines"),
+        raw_bom.get("nomenclature"),
+        raw_bom.get("tableau_nomenclature"),
+        raw_bom.get("liste_matieres"),
     ]
     for candidate in candidates:
         if isinstance(candidate, list):
             return [item for item in candidate if isinstance(item, dict)]
         if isinstance(candidate, dict):
-            for key in ["components", "lines", "line_items", "items", "materials", "bom"]:
+            for key in [
+                "components",
+                "lines",
+                "line_items",
+                "items",
+                "materials",
+                "materiaux",
+                "matieres",
+                "bom",
+                "nomenclature",
+            ]:
                 nested = candidate.get(key)
                 if isinstance(nested, list):
                     return [item for item in nested if isinstance(item, dict)]
+    for value in raw_bom.values():
+        if isinstance(value, dict):
+            nested = _extract_component_list(value)
+            if nested:
+                return nested
     return []
 
 
@@ -938,10 +1027,28 @@ def _component_type(component: Dict[str, Any]) -> str:
         or component.get("family")
         or component.get("type")
         or component.get("product")
+        or component.get("poste")
+        or component.get("produit_designation")
+        or component.get("produit")
         or component.get("designation")
         or component.get("description")
         or ""
     )
+
+
+def _normalized_component_identity_text(component: Dict[str, Any]) -> str:
+    values = [
+        component.get("component_id"),
+        component.get("component_type"),
+        component.get("component_family"),
+        component.get("poste"),
+        component.get("produit_designation"),
+        component.get("product"),
+        component.get("designation"),
+        component.get("description"),
+    ]
+    text = " ".join(str(value) for value in values if value not in [None, ""])
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
 
 def _component_id(component: Dict[str, Any], index: int) -> str:
@@ -953,18 +1060,64 @@ def _component_id(component: Dict[str, Any], index: int) -> str:
         or component.get("id")
     )
     if explicit:
-        return _slug(explicit, f"component_{index}")
-    text = _component_text(component)
+        explicit_id = _slug(explicit, f"component_{index}")
+        aliases = {
+            "ferrite": "ferrite_core",
+            "core": "ferrite_core",
+            "copper_wire": "magnet_wire",
+            "enameled_wire": "magnet_wire",
+            "enamelled_wire": "magnet_wire",
+            "tin_plating": "lead_tinning",
+            "lead_tin_plating": "lead_tinning",
+            "tinning": "lead_tinning",
+            "etamage": "lead_tinning",
+            "adhesive": "glue",
+            "epoxy": "glue",
+            "colle": "glue",
+        }
+        return aliases.get(explicit_id, explicit_id)
+    text = _normalized_component_identity_text(component)
+    if any(term in text for term in ["glue", "adhesive", "epoxy", "colle"]):
+        return "glue"
+    if any(term in text for term in ["tinning", "tin plating", "etamage", "etain"]):
+        return "lead_tinning"
+    if any(term in text for term in [
+        "magnet wire",
+        "copper wire",
+        "enameled",
+        "enamelled",
+        "wire",
+        "fil cuivre",
+        "fil bobine",
+        " fil ",
+    ]):
+        return "magnet_wire"
     if any(term in text for term in ["ferrite", "core", "magnetic"]):
         return "ferrite_core"
-    if any(term in text for term in ["magnet wire", "copper wire", "enameled", "enamelled", "wire"]):
-        return "magnet_wire"
-    if any(term in text for term in ["tin", "tinning", "plating"]):
-        return "lead_tin_plating"
     return _slug(_component_type(component), f"component_{index}")
 
 
 def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
+    canonical_id = _component_id(component, 1)
+    if canonical_id == "glue":
+        text = _component_text(component)
+        if any(term in text for term in [
+            "present",
+            "required",
+            "to_confirm",
+            "to confirm",
+            "a confirmer",
+            "ambigu",
+            "impossible de conclure",
+        ]):
+            return "glue"
+        return None
+    if canonical_id == "lead_tinning":
+        return "tin"
+    if canonical_id == "magnet_wire":
+        return "enameled_wire"
+    if canonical_id == "ferrite_core":
+        return "ferrite"
     text = _component_text(component)
     if any(term in text for term in ["complete choke", "full choke", "assembly"]):
         return None
@@ -985,8 +1138,12 @@ def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
 def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
     components = []
     external_components = []
+    seen_component_ids = set()
     for index, component in enumerate(_extract_component_list(raw_bom), start=1):
         component_id = _component_id(component, index)
+        if component_id in seen_component_ids:
+            continue
+        seen_component_ids.add(component_id)
         component_type = _component_type(component)
         route_type = _external_costing_route(component)
         is_external_costing = route_type in {"ferrite", "enameled_wire", "tin"}
@@ -996,6 +1153,8 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
             "component": (
                 component.get("component")
                 or component.get("product")
+                or component.get("produit_designation")
+                or component.get("poste")
                 or component.get("designation")
                 or component.get("description")
                 or component_type
@@ -1014,6 +1173,7 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
                 or component.get("quantity_per_assembly")
                 or component.get("quantity")
                 or component.get("qty")
+                or component.get("quantite")
             ),
             "component_definition": component,
             "costing_route": "external_component_costing_agent" if is_external_costing else "not_external_agent",
@@ -1209,7 +1369,12 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
+def save_bom_output(
+    project_code: str,
+    product_id: str,
+    raw_json: Dict[str, Any],
+    allow_create_without_start: bool = False,
+) -> Dict[str, Any]:
     raw_keys = list(raw_json.keys()) if isinstance(raw_json, dict) else []
     correlation_id = None
     if isinstance(raw_json, dict):
@@ -1259,13 +1424,54 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
 
     try:
         existing_state, existing_state_path = _existing_state(project_code, product_id)
+        recovery = None
+        if existing_state is None:
+            recovery = recover_legacy_workflow_state(project_code, product_id, apply=True)
+            if recovery.get("status") == "split_state":
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error_code": "split_state",
+                    "message": "Multiple legacy workflow states exist; repair is required before write-back.",
+                    "project_code": project_code,
+                    "product_id": product_id,
+                    "workflow_state_path": recovery.get("canonical_state_path"),
+                    "legacy_state_paths": recovery.get("legacy_state_paths"),
+                }
+            if recovery.get("migrated"):
+                existing_state, existing_state_path = _existing_state(project_code, product_id)
+        if existing_state is None and not allow_create_without_start:
+            missing_response = {
+                "success": False,
+                "status": "failed",
+                "error_code": "workflow_state_not_found",
+                "message": "Workflow state not found. Start the workflow before BOM write-back.",
+                "project_code": project_code,
+                "product_id": product_id,
+                "workflow_state_path": str(_state_path(project_code, product_id)),
+            }
+            append_workflow_event(
+                project_code,
+                product_id,
+                "save_bom_output_failed",
+                error_code=missing_response["error_code"],
+                message=missing_response["message"],
+                workflow_state_path=missing_response["workflow_state_path"],
+            )
+            return missing_response
         status_before = (existing_state or {}).get("status")
         run_dir = _run_dir(project_code, product_id).resolve()
         state_path = _state_path(project_code, product_id).resolve()
         raw_path = _bom_raw_path(project_code, product_id).resolve()
         normalized_path = _bom_normalized_path(project_code, product_id).resolve()
+        canonical_diagnostics = workflow_path_diagnostics(project_code, product_id)
         path_debug = {
             **initial_debug,
+            **{
+                key: value
+                for key, value in canonical_diagnostics.items()
+                if key not in {"project_code", "product_id"}
+            },
             "resolved_run_directory": str(run_dir),
             "workflow_state_path": str(state_path),
             "raw_bom_path": str(raw_path),
@@ -1315,7 +1521,7 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
         )
 
         state = existing_state if isinstance(existing_state, dict) else _load_state(project_code, product_id)
-        if existing_state is None:
+        if existing_state is None and allow_create_without_start:
             state["writeback_created_state_without_start"] = True
             state.setdefault("warnings", []).append(
                 "BOM write-back created workflow state because no started workflow state was found."
@@ -1341,11 +1547,11 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
         state["technical_fields_from_bom"] = customer_input_update.get("extracted") or {}
         state["customer_input_update"] = customer_input_update
         state["master_data_refresh"] = master_data_refresh
-        state["missing_outputs"] = [
+        state["missing_outputs"] = list(dict.fromkeys(
             f"component:{item['component_id']}"
             for item in normalized.get("external_components") or []
             if isinstance(item, dict) and item.get("component_id")
-        ]
+        ))
         _save_state(state)
 
         completed_debug = {
@@ -1427,7 +1633,9 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
                 project_code,
                 product_id,
                 "save_bom_output_failed",
-                **error_response,
+                error_code=error_response["error_code"],
+                message=error_response["message"],
+                workflow_state_path=error_response["workflow_state_path"],
                 request_correlation_id=correlation_id,
             )
         except (OSError, ValueError):
