@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from urllib.parse import quote
@@ -19,6 +20,7 @@ from services.project_data_paths import (
     COSTING_RUNS_DIR,
     CUSTOMER_INPUT_DIR,
     DATA_ROOT,
+    PROJECT_ROOT,
     data_reference_candidates,
     portable_data_reference,
     resolve_customer_input_path,
@@ -28,6 +30,7 @@ from services.workspace_agent_client import trigger_workspace_agent
 
 BASE_DIR = BACKEND_ROOT
 RUNS_DIR = COSTING_RUNS_DIR
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -131,6 +134,10 @@ def _run_dir(project_code: str, product_id: str) -> Path:
 
 def _state_path(project_code: str, product_id: str) -> Path:
     return _run_dir(project_code, product_id) / "workflow_state.json"
+
+
+def _events_path(project_code: str, product_id: str) -> Path:
+    return _run_dir(project_code, product_id) / "workflow_events.jsonl"
 
 
 def _state_path_candidates(project_code: str, product_id: str) -> List[Path]:
@@ -253,6 +260,34 @@ def _load_state(project_code: str, product_id: str) -> Dict[str, Any]:
     }
 
 
+def _existing_state(project_code: str, product_id: str) -> tuple[Optional[Dict[str, Any]], Optional[Path]]:
+    for candidate in _state_path_candidates(project_code, product_id):
+        state = _read_json(candidate, None)
+        if isinstance(state, dict):
+            return state, candidate
+    return None, None
+
+
+def append_workflow_event(
+    project_code: str,
+    product_id: str,
+    event: str,
+    **details: Any,
+) -> Dict[str, Any]:
+    payload = {
+        "timestamp": _now_iso(),
+        "event": event,
+        "project_code": project_code,
+        "product_id": product_id,
+        **{key: value for key, value in details.items() if value is not None},
+    }
+    path = _events_path(project_code, product_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    return payload
+
+
 def _save_state(state: Dict[str, Any]) -> Dict[str, Any]:
     state["updated_at"] = _now_iso()
     _write_json(_state_path(state["project_code"], state["product_id"]), state)
@@ -260,7 +295,41 @@ def _save_state(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
-    return _load_state(project_code, product_id)
+    state, state_path = _existing_state(project_code, product_id)
+    raw_path = _bom_raw_path(project_code, product_id)
+    raw_reference = (
+        ((state or {}).get("bom") or {}).get("save_path")
+        or _relative(raw_path)
+    )
+    raw_exists = any(path.exists() for path in data_reference_candidates(raw_reference))
+    append_workflow_event(
+        project_code,
+        product_id,
+        "get_status_called",
+        workflow_state_path=str(state_path or _state_path(project_code, product_id).resolve()),
+        workflow_state_exists=state is not None,
+        raw_bom_exists=raw_exists,
+        status_before=(state or {}).get("status"),
+    )
+    if state is None:
+        response = {
+            "status": "not_found",
+            "message": "Workflow state not found",
+            "project_code": project_code,
+            "product_id": product_id,
+            "debug_hint": f"Use /api/choke-workflow/debug/{project_code}/{product_id}",
+        }
+        if raw_exists:
+            response["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
+        return response
+    state.setdefault("bom", {"status": "pending"})
+    state.setdefault("components", {})
+    state.setdefault("most", {})
+    state.setdefault("missing_outputs", [])
+    state.setdefault("errors", [])
+    if state.get("status") in {"created", "pending"} and raw_exists:
+        state["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
+    return state
 
 
 def _trigger_status(trigger_result: Dict[str, Any]) -> str:
@@ -493,6 +562,21 @@ def start_real_choke_workflow(
     if bom_status == "failed":
         state.setdefault("errors", []).append({"stage": "bom", "trigger_result": trigger_result})
     _save_state(state)
+    event_paths = {
+        "input_file": customer_input["_input_file"],
+        "workflow_state_path": str(_state_path(project_code, product_id).resolve()),
+        "run_dir": str(run_dir.resolve()),
+        "status_after": state.get("status"),
+    }
+    append_workflow_event(project_code, product_id, "workflow_started", **event_paths)
+    append_workflow_event(
+        project_code,
+        product_id,
+        "bom_agent_triggered",
+        **event_paths,
+        bom_status=bom_status,
+        raw_bom_save_path=save_address,
+    )
     return {
         "message": "BOM Agent triggered first. Waiting for BOM output write-back.",
         "state": state,
@@ -813,17 +897,44 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
-    existing_state_path = next(
-        (path for path in _state_path_candidates(project_code, product_id) if path.exists()),
-        None,
-    )
+    existing_state, existing_state_path = _existing_state(project_code, product_id)
+    status_before = (existing_state or {}).get("status")
+    run_dir = _run_dir(project_code, product_id).resolve()
+    state_path = _state_path(project_code, product_id).resolve()
     raw_path = _bom_raw_path(project_code, product_id)
+    normalized_path = _bom_normalized_path(project_code, product_id)
+    raw_keys = list(raw_json.keys()) if isinstance(raw_json, dict) else []
+    called_debug = {
+        "project_code_received": project_code,
+        "product_id_received": product_id,
+        "raw_json_type": type(raw_json).__name__,
+        "raw_json_top_level_keys": raw_keys,
+        "data_root": str(DATA_ROOT),
+        "workflow_run_directory": str(run_dir),
+        "workflow_state_path": str(state_path),
+        "raw_bom_save_path": str(raw_path.resolve()),
+        "normalized_bom_path": str(normalized_path.resolve()),
+        "state_exists_before_save": existing_state is not None,
+        "state_status_before_save": status_before,
+    }
+    logger.info("save_bom_output called: %s", json.dumps(called_debug, default=str))
+    append_workflow_event(
+        project_code,
+        product_id,
+        "save_bom_output_called",
+        **called_debug,
+        status_before=status_before,
+    )
     _write_json(raw_path, raw_json)
     normalized = normalize_bom(raw_json)
-    normalized_path = _bom_normalized_path(project_code, product_id)
     _write_json(normalized_path, normalized)
 
-    state = _load_state(project_code, product_id)
+    state = existing_state if isinstance(existing_state, dict) else _load_state(project_code, product_id)
+    if existing_state is None:
+        state["writeback_created_state_without_start"] = True
+        state.setdefault("warnings", []).append(
+            "BOM write-back created workflow state because no started workflow state was found."
+        )
     extracted = extract_bom_technical_fields(raw_json)
     customer_input_update = _update_customer_input_from_bom(state, extracted)
     if customer_input_update.get("status") in {"updated", "extracted"}:
@@ -850,10 +961,44 @@ def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]
         for item in normalized.get("external_components") or []
     ]
     _save_state(state)
+    component_ids = [
+        item.get("component_id")
+        for item in normalized.get("components") or []
+        if item.get("component_id")
+    ]
+    debug = {
+        "success": True,
+        "tool": "save_bom_output",
+        "project_code": project_code,
+        "product_id": product_id,
+        **called_debug,
+        "state_status_after_save": state.get("status"),
+        "raw_bom_saved": raw_path.exists(),
+        "normalized_bom_saved": normalized_path.exists(),
+        "component_ids": component_ids,
+        "missing_outputs_after_save": state.get("missing_outputs") or [],
+        "errors": [],
+    }
+    logger.info("save_bom_output completed: %s", json.dumps(debug, default=str))
+    append_workflow_event(
+        project_code,
+        product_id,
+        "save_bom_output_completed",
+        workflow_state_path=str(state_path),
+        raw_bom_save_path=str(raw_path.resolve()),
+        normalized_bom_path=str(normalized_path.resolve()),
+        state_exists_before_save=existing_state is not None,
+        status_before=status_before,
+        status_after=state.get("status"),
+        component_ids=component_ids,
+        missing_outputs=state.get("missing_outputs") or [],
+    )
     return {
+        **debug,
         "status": "saved",
         "normalized_bom": normalized,
         "state": state,
+        "debug": debug,
         "state_merge": {
             "existing_state_found": existing_state_path is not None,
             "existing_state_path": str(existing_state_path) if existing_state_path else None,
@@ -992,6 +1137,92 @@ def get_bom_output(project_code: str, product_id: str) -> Dict[str, Any]:
             "resolved_normalized_bom_path": str(resolved_normalized_path) if resolved_normalized_path else None,
         },
     }
+
+
+def get_workflow_debug(project_code: str, product_id: str) -> Dict[str, Any]:
+    state, existing_state_path = _existing_state(project_code, product_id)
+    canonical_state_path = _state_path(project_code, product_id).resolve()
+    canonical_raw_path = _bom_raw_path(project_code, product_id).resolve()
+    canonical_normalized_path = _bom_normalized_path(project_code, product_id).resolve()
+    raw_candidates = _state_bom_path_candidates(state or {}, "save_path", canonical_raw_path)
+    normalized_candidates = _state_bom_path_candidates(
+        state or {},
+        "normalized_path",
+        canonical_normalized_path,
+    )
+    raw_bom, resolved_raw_path = _read_first_json(raw_candidates)
+    normalized_bom, resolved_normalized_path = _read_first_json(normalized_candidates)
+    raw_path = resolved_raw_path or canonical_raw_path
+    normalized_path = resolved_normalized_path or canonical_normalized_path
+
+    run_roots = list(dict.fromkeys([
+        COSTING_RUNS_DIR.resolve(),
+        (BACKEND_ROOT / "data" / "costing_runs").resolve(),
+        (PROJECT_ROOT / "data" / "costing_runs").resolve(),
+        (Path.cwd() / "data" / "costing_runs").resolve(),
+    ]))
+    matching_run_dirs = []
+    for root in run_roots:
+        project_dir = root / project_code
+        if project_dir.exists() and project_dir.is_dir():
+            matching_run_dirs.extend(
+                str(path.resolve()) for path in project_dir.iterdir() if path.is_dir()
+            )
+
+    customer_roots = list(dict.fromkeys([
+        CUSTOMER_INPUT_DIR.resolve(),
+        (BACKEND_ROOT / "data" / "customer_inputs").resolve(),
+        (PROJECT_ROOT / "data" / "customer_inputs").resolve(),
+    ]))
+    matching_customer_inputs = []
+    for root in customer_roots:
+        if root.exists():
+            matching_customer_inputs.extend(
+                str(path.resolve()) for path in root.glob(f"{project_code}*.json")
+            )
+
+    normalized_component_ids = []
+    if isinstance(normalized_bom, dict):
+        normalized_component_ids = [
+            item.get("component_id")
+            for item in normalized_bom.get("components") or []
+            if isinstance(item, dict) and item.get("component_id")
+        ]
+    response = {
+        "project_code": project_code,
+        "product_id": product_id,
+        "data_root": str(DATA_ROOT),
+        "cwd": str(Path.cwd().resolve()),
+        "run_dir": str(_run_dir(project_code, product_id).resolve()),
+        "workflow_state_path": str(existing_state_path or canonical_state_path),
+        "workflow_state_exists": state is not None,
+        "workflow_state": state,
+        "raw_bom_path": str(raw_path),
+        "raw_bom_exists": raw_path.exists(),
+        "raw_bom_preview_keys": list(raw_bom.keys()) if isinstance(raw_bom, dict) else [],
+        "normalized_bom_path": str(normalized_path),
+        "normalized_bom_exists": normalized_path.exists(),
+        "normalized_component_ids": normalized_component_ids,
+        "matching_run_dirs_for_project": sorted(set(matching_run_dirs)),
+        "matching_customer_input_files": sorted(set(matching_customer_inputs)),
+        "workflow_state_attempted_paths": [
+            str(path) for path in _state_path_candidates(project_code, product_id)
+        ],
+        "raw_bom_attempted_paths": [str(path) for path in raw_candidates],
+        "normalized_bom_attempted_paths": [str(path) for path in normalized_candidates],
+    }
+    append_workflow_event(
+        project_code,
+        product_id,
+        "get_debug_called",
+        workflow_state_path=response["workflow_state_path"],
+        workflow_state_exists=response["workflow_state_exists"],
+        raw_bom_path=response["raw_bom_path"],
+        raw_bom_exists=response["raw_bom_exists"],
+        normalized_bom_path=response["normalized_bom_path"],
+        normalized_bom_exists=response["normalized_bom_exists"],
+    )
+    return response
 
 
 def update_commercial_fields(

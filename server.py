@@ -650,7 +650,15 @@ def save_bom_output(
         return workflow_response
     except Exception as exc:
         logger.exception("save_bom_output failed")
-        return error("Failed to save BOM output.", exc)
+        return {
+            "success": False,
+            "tool": "save_bom_output",
+            "project_code": project_code,
+            "product_id": product_id,
+            "raw_json_type": type(raw_json).__name__,
+            "raw_json_top_level_keys": list(raw_json.keys()) if isinstance(raw_json, dict) else [],
+            "errors": [str(exc)],
+        }
 
 
 @mcp.tool()

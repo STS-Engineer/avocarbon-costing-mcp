@@ -1,0 +1,33 @@
+{
+  "project_code": "RFQ-20260714-091820",
+  "customer": null,
+  "final_customer": null,
+  "product_line": "Chokes",
+  "product": null,
+  "product_id": "UNKNOWN-PART-20260714-091820",
+  "workflow_product_id": "UNKNOWN-PART-20260714-091820",
+  "part_number": null,
+  "drawing_reference": "drawing-only-test.pdf",
+  "drawing_file_path": "data/customer_inputs/uploads/RFQ-20260714-091820/drawing-only-test.pdf",
+  "drawing_file_url_local": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/files/RFQ-20260714-091820/drawing-only-test.pdf",
+  "drawing_file_url": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/files/RFQ-20260714-091820/drawing-only-test.pdf",
+  "drawing_blob_url": null,
+  "drawing_sas_url": null,
+  "drawing_access_mode": "local",
+  "drawing_azure_upload": {
+    "status": "not_configured",
+    "message": "AZURE_STORAGE_CONNECTION_STRING is not configured"
+  },
+  "drawing_original_filename": "drawing-only-test.pdf",
+  "customer_delivery_zone": null,
+  "annual_quantity": null,
+  "currency": null,
+  "target_price": null,
+  "sop_date": null,
+  "technical_fields_pending_bom": true,
+  "technical_fields_extracted_from_bom": false,
+  "warnings": [
+    "Azure Blob is not configured; using local PDF URL fallback. Cloud Workspace Agents cannot access localhost URLs."
+  ],
+  "created_at": "2026-07-14T09:18:20"
+}

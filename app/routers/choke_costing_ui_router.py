@@ -23,6 +23,7 @@ from services.project_data_paths import (
     portable_data_reference,
     resolve_customer_input_path,
 )
+from services.choke_sequential_agent_workflow import append_workflow_event
 
 
 BASE_DIR = BACKEND_ROOT
@@ -315,6 +316,16 @@ async def create_customer_input(request: Request):
     output_path.write_text(
         json.dumps(customer_input, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
+    )
+    append_workflow_event(
+        project_code,
+        product_id,
+        "customer_input_saved",
+        input_file=_relative_to_base(output_path),
+        customer_input_path=str(output_path.resolve()),
+        drawing_file_path=drawing_file_path,
+        drawing_file_url=drawing_file_url,
+        status_after="saved",
     )
     return {
         "status": "saved",

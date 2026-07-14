@@ -146,7 +146,13 @@ Response example:
 ```
 
 Poll this endpoint after each real trigger. The UI should render `status`, `current_step`, per-item statuses, errors, warnings, and `missing_outputs`.
-For an unknown project/product pair, the current service returns a default state with `status: "created"`.
+For an unknown project/product pair, the service returns `status: "not_found"` and a `debug_hint`; it does not create a synthetic workflow state.
+
+### Debug workflow storage
+
+`GET /api/choke-workflow/debug/{project_code}/{product_id}`
+
+Use this endpoint when REST status and MCP write-back appear inconsistent. It reports the configured data root, current working directory, workflow state path and contents, raw/normalized BOM paths, normalized component IDs, matching project run directories, matching customer-input files, and all attempted fallback paths. It does not modify workflow state, apart from appending a `get_debug_called` trace event.
 
 ### Get saved BOM output
 

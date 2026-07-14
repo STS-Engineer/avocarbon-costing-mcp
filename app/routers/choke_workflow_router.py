@@ -8,6 +8,7 @@ from services.choke_sequential_agent_workflow import (
     calculate_final_choke_costing_from_saved_outputs,
     calculate_from_real_outputs,
     get_bom_output,
+    get_workflow_debug,
     get_workflow_state,
     save_bom_output,
     save_component_output,
@@ -97,6 +98,11 @@ def start_workflow(request: Request, payload: StartWorkflowRequest):
 @router.get("/status/{project_code}/{product_id}")
 def workflow_status(project_code: str, product_id: str):
     return _handle(lambda: get_workflow_state(project_code, product_id))
+
+
+@router.get("/debug/{project_code}/{product_id}")
+def workflow_debug(project_code: str, product_id: str):
+    return _handle(lambda: get_workflow_debug(project_code, product_id))
 
 
 @router.get("/bom-output/{project_code}/{product_id}")
