@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 
@@ -24,6 +25,7 @@ def trigger_workspace_agent(
     conversation_key=None,
     idempotency_key=None,
     dry_run=True,
+    timeout_seconds=None,
 ):
     cleaned_agent_id = clean_agent_id(agent_id)
     access_token = (
@@ -75,9 +77,17 @@ def trigger_workspace_agent(
         headers=headers,
         method="POST",
     )
+    try:
+        timeout = float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else os.getenv("WORKSPACE_AGENT_TRIGGER_TIMEOUT_SECONDS", "60")
+        )
+    except (TypeError, ValueError):
+        timeout = 60.0
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             status_code = response.getcode()
             return {
                 "status": "accepted" if status_code == 202 else "failed",
@@ -90,6 +100,33 @@ def trigger_workspace_agent(
             "http_status": exc.code,
             "note": "Workspace Agent trigger failed.",
             "error": exc.read().decode("utf-8", errors="replace"),
+            "error_type": "http_error",
+        }
+    except (TimeoutError, socket.timeout) as exc:
+        return {
+            "status": "failed",
+            "http_status": None,
+            "note": "Workspace Agent trigger timed out.",
+            "error": str(exc),
+            "error_type": "timeout",
+        }
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        error_type = "timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "connection_error"
+        return {
+            "status": "failed",
+            "http_status": None,
+            "note": "Workspace Agent trigger connection failed.",
+            "error": str(reason),
+            "error_type": error_type,
+        }
+    except ConnectionError as exc:
+        return {
+            "status": "failed",
+            "http_status": None,
+            "note": "Workspace Agent trigger connection failed.",
+            "error": str(exc),
+            "error_type": "connection_error",
         }
     except Exception as exc:
         return {
@@ -97,4 +134,5 @@ def trigger_workspace_agent(
             "http_status": None,
             "note": "Workspace Agent trigger failed.",
             "error": str(exc),
+            "error_type": "unexpected_error",
         }

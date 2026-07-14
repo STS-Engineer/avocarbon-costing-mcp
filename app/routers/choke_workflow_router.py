@@ -13,6 +13,7 @@ from services.choke_sequential_agent_workflow import (
     save_bom_output,
     save_component_output,
     save_most_output,
+    retry_bom_agent,
     start_real_choke_workflow,
     trigger_most_operations,
     trigger_next_component_costing,
@@ -39,6 +40,11 @@ class TriggerStageRequest(BaseModel):
     project_code: str
     product_id: str
     dry_run: bool = False
+
+
+class RetryBomRequest(BaseModel):
+    project_code: str
+    product_id: str
 
 
 class SaveComponentOutputRequest(BaseModel):
@@ -127,6 +133,14 @@ def save_bom(request: SaveBomOutputRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         raw_json=request.raw_json,
+    ))
+
+
+@router.post("/retry-bom")
+def retry_bom(request: RetryBomRequest):
+    return _handle(lambda: retry_bom_agent(
+        project_code=request.project_code,
+        product_id=request.product_id,
     ))
 
 

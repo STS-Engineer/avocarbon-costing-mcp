@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,7 @@ from services.project_data_paths import (
     portable_data_reference,
     resolve_customer_input_path,
 )
-from services.workspace_agent_client import trigger_workspace_agent
+from services.workspace_agent_client import clean_agent_id, trigger_workspace_agent
 
 
 BASE_DIR = BACKEND_ROOT
@@ -317,6 +318,7 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
             "message": "Workflow state not found",
             "project_code": project_code,
             "product_id": product_id,
+            "debug_url": f"/api/choke-workflow/debug/{project_code}/{product_id}",
             "debug_hint": f"Use /api/choke-workflow/debug/{project_code}/{product_id}",
         }
         if raw_exists:
@@ -361,6 +363,134 @@ def _trigger(agent_id_env: str, fallback_agent_name: str, input_text: str, conve
         idempotency_key=idempotency_key,
         dry_run=dry_run,
     )
+
+
+RETRYABLE_TRIGGER_HTTP_STATUSES = {409, 429, 500, 502, 503, 504}
+RETRYABLE_TRIGGER_ERROR_TYPES = {"timeout", "connection_error"}
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _trigger_backoff_seconds() -> List[float]:
+    configured = os.getenv("WORKSPACE_AGENT_TRIGGER_BACKOFF_SECONDS", "5,15,30")
+    values = []
+    for item in configured.split(","):
+        try:
+            values.append(max(0.0, float(item.strip())))
+        except ValueError:
+            continue
+    return values or [5.0, 15.0, 30.0]
+
+
+def _is_retryable_trigger_result(result: Dict[str, Any]) -> bool:
+    return (
+        result.get("http_status") in RETRYABLE_TRIGGER_HTTP_STATUSES
+        or result.get("error_type") in RETRYABLE_TRIGGER_ERROR_TYPES
+    )
+
+
+def _trigger_response_body(result: Dict[str, Any]) -> Any:
+    body = result.get("error") or result.get("response_body") or result.get("note")
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return body
+    return body
+
+
+def _trigger_bom_agent_with_retries(
+    project_code: str,
+    product_id: str,
+    input_text: str,
+    dry_run: bool,
+    status_before: Optional[str],
+) -> Dict[str, Any]:
+    _load_env()
+    max_attempts = 1 if dry_run else _positive_int_env("WORKSPACE_AGENT_TRIGGER_MAX_ATTEMPTS", 3)
+    backoffs = _trigger_backoff_seconds()
+    attempts = []
+    last_result: Dict[str, Any] = {}
+
+    for attempt_number in range(1, max_attempts + 1):
+        result = _trigger(
+            "CHATGPT_CHOKE_BOM_AGENT_ID",
+            "Choke BOM Analyzer",
+            input_text,
+            f"{project_code}:{product_id}:sequential:bom",
+            f"{project_code}:{product_id}:sequential:bom:v1",
+            dry_run=dry_run,
+        )
+        last_result = result or {}
+        accepted = last_result.get("status") in {"accepted", "dry_run"}
+        retryable = not accepted and _is_retryable_trigger_result(last_result)
+        has_next_attempt = retryable and attempt_number < max_attempts
+        next_retry_seconds = (
+            backoffs[min(attempt_number - 1, len(backoffs) - 1)]
+            if has_next_attempt
+            else None
+        )
+        attempt = {
+            "attempt_number": attempt_number,
+            "timestamp": _now_iso(),
+            "http_status": last_result.get("http_status"),
+            "response_body": _trigger_response_body(last_result),
+            "result_status": last_result.get("status"),
+            "error_type": last_result.get("error_type"),
+            "retryable": retryable,
+            "next_retry_seconds": next_retry_seconds,
+        }
+        attempts.append(attempt)
+        append_workflow_event(
+            project_code,
+            product_id,
+            "bom_trigger_attempt",
+            attempt_number=attempt_number,
+            http_status=attempt.get("http_status"),
+            retryable=retryable,
+            next_retry_seconds=next_retry_seconds,
+            status_before=status_before,
+            result_status=attempt.get("result_status"),
+        )
+        if accepted:
+            append_workflow_event(
+                project_code,
+                product_id,
+                "bom_trigger_accepted",
+                attempt_number=attempt_number,
+                http_status=last_result.get("http_status"),
+                status_before=status_before,
+                status_after="bom_triggered",
+            )
+            break
+        if not has_next_attempt:
+            append_workflow_event(
+                project_code,
+                product_id,
+                "bom_trigger_failed_retryable" if retryable else "bom_trigger_failed_non_retryable",
+                attempt_number=attempt_number,
+                http_status=last_result.get("http_status"),
+                status_before=status_before,
+                status_after="bom_trigger_failed_retryable" if retryable else "blocked",
+            )
+            break
+        time.sleep(next_retry_seconds or 0)
+
+    final_retryable = (
+        last_result.get("status") not in {"accepted", "dry_run"}
+        and _is_retryable_trigger_result(last_result)
+    )
+    return {
+        **last_result,
+        "attempts": attempts,
+        "retryable": final_retryable,
+        "max_attempts": max_attempts,
+    }
 
 
 def _build_bom_trigger_payload(
@@ -518,16 +648,41 @@ def start_real_choke_workflow(
     )
     input_text = bom_trigger["input_text"]
     save_address = bom_trigger["save_address"]
-    trigger_result = _trigger(
-        "CHATGPT_CHOKE_BOM_AGENT_ID",
-        "Choke BOM Analyzer",
-        input_text,
-        f"{project_code}:{product_id}:sequential:bom",
-        f"{project_code}:{product_id}:sequential:bom:v1",
-        dry_run=dry_run,
+    existing_state = _load_state(project_code, product_id)
+    status_before = existing_state.get("status")
+    append_workflow_event(
+        project_code,
+        product_id,
+        "workflow_start_requested",
+        input_file=customer_input["_input_file"],
+        drawing_file_path=normalized_input.get("drawing_file_path"),
+        drawing_file_url=bom_trigger.get("drawing_file_url"),
+        status_before=status_before,
     )
-    bom_status = _trigger_status(trigger_result)
-    state = _load_state(project_code, product_id)
+    trigger_result = _trigger_bom_agent_with_retries(
+        project_code=project_code,
+        product_id=product_id,
+        input_text=input_text,
+        dry_run=dry_run,
+        status_before=status_before,
+    )
+    accepted = trigger_result.get("status") in {"accepted", "dry_run"}
+    retryable_failure = not accepted and trigger_result.get("retryable") is True
+    workflow_status = (
+        "bom_triggered"
+        if accepted
+        else "bom_trigger_failed_retryable"
+        if retryable_failure
+        else "blocked"
+    )
+    bom_status = (
+        "triggered"
+        if accepted
+        else "trigger_failed_retryable"
+        if retryable_failure
+        else "failed"
+    )
+    state = existing_state
     state.update({
         "input_file": customer_input["_input_file"],
         "drawing_file_path": normalized_input.get("drawing_file_path"),
@@ -536,7 +691,7 @@ def start_real_choke_workflow(
         "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
         "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
         "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
-        "status": "bom_triggered" if bom_status == "triggered" else "blocked",
+        "status": workflow_status,
         "current_step": "Step 1 BOM Agent",
         "manufacturing_strategy": manufacturing_strategy,
         "unit_data": unit_data,
@@ -558,8 +713,11 @@ def start_real_choke_workflow(
         "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
         "warnings": bom_trigger.get("warnings") or [],
         "trigger_result": trigger_result,
+        "trigger_attempts": trigger_result.get("attempts") or [],
+        "retryable": retryable_failure,
+        "input_text": input_text,
     }
-    if bom_status == "failed":
+    if not accepted:
         state.setdefault("errors", []).append({"stage": "bom", "trigger_result": trigger_result})
     _save_state(state)
     event_paths = {
@@ -575,6 +733,7 @@ def start_real_choke_workflow(
         "bom_agent_triggered",
         **event_paths,
         bom_status=bom_status,
+        trigger_attempts=trigger_result.get("attempts") or [],
         raw_bom_save_path=save_address,
     )
     return {
@@ -585,6 +744,83 @@ def start_real_choke_workflow(
             "components_triggered": [],
             "most_triggered": [],
         },
+    }
+
+
+def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise FileNotFoundError("Workflow state not found. Start the workflow before retrying the BOM Agent.")
+    status_before = state.get("status")
+    append_workflow_event(
+        project_code,
+        product_id,
+        "retry_bom_requested",
+        status_before=status_before,
+        workflow_state_path=str(_state_path(project_code, product_id).resolve()),
+    )
+
+    customer_input = dict(state.get("customer_input") or {})
+    existing_bom = dict(state.get("bom") or {})
+    for key in [
+        "drawing_file_path",
+        "drawing_file_url",
+        "drawing_access_mode",
+        "drawing_blob_url",
+        "drawing_sas_url",
+    ]:
+        value = state.get(key) or existing_bom.get(key)
+        if value not in [None, ""]:
+            customer_input[key] = value
+    customer_input.setdefault("project_code", project_code)
+    customer_input.setdefault("workflow_product_id", product_id)
+    customer_input.setdefault("product_id", product_id)
+    bom_trigger = _build_bom_trigger_payload(project_code, product_id, customer_input)
+    if not bom_trigger.get("drawing_file_url"):
+        raise ValueError("BOM Agent retry requires drawing_file_url in workflow state or customer_input.")
+
+    input_text = existing_bom.get("input_text") or bom_trigger["input_text"]
+    trigger_result = _trigger_bom_agent_with_retries(
+        project_code=project_code,
+        product_id=product_id,
+        input_text=input_text,
+        dry_run=False,
+        status_before=status_before,
+    )
+    accepted = trigger_result.get("status") == "accepted"
+    retryable_failure = not accepted and trigger_result.get("retryable") is True
+    state["status"] = (
+        "bom_triggered"
+        if accepted
+        else "bom_trigger_failed_retryable"
+        if retryable_failure
+        else "blocked"
+    )
+    state["current_step"] = "Step 1 BOM Agent"
+    state["missing_outputs"] = ["bom"]
+    state["bom"] = {
+        **existing_bom,
+        "status": (
+            "triggered"
+            if accepted
+            else "trigger_failed_retryable"
+            if retryable_failure
+            else "failed"
+        ),
+        "retryable": retryable_failure,
+        "trigger_result": trigger_result,
+        "trigger_attempts": trigger_result.get("attempts") or [],
+        "input_text": input_text,
+        "save_path": existing_bom.get("save_path") or bom_trigger.get("save_address"),
+    }
+    _save_state(state)
+    return {
+        "status": state["status"],
+        "project_code": project_code,
+        "product_id": product_id,
+        "bom": state["bom"],
+        "trigger_attempts": state["bom"]["trigger_attempts"],
+        "state": state,
     }
 
 
@@ -1140,6 +1376,7 @@ def get_bom_output(project_code: str, product_id: str) -> Dict[str, Any]:
 
 
 def get_workflow_debug(project_code: str, product_id: str) -> Dict[str, Any]:
+    _load_env()
     state, existing_state_path = _existing_state(project_code, product_id)
     canonical_state_path = _state_path(project_code, product_id).resolve()
     canonical_raw_path = _bom_raw_path(project_code, product_id).resolve()
@@ -1203,6 +1440,32 @@ def get_workflow_debug(project_code: str, product_id: str) -> Dict[str, Any]:
         "normalized_bom_path": str(normalized_path),
         "normalized_bom_exists": normalized_path.exists(),
         "normalized_component_ids": normalized_component_ids,
+        "bom_trigger_attempts": ((state or {}).get("bom") or {}).get("trigger_attempts") or [],
+        "last_bom_trigger_status": (
+            (((state or {}).get("bom") or {}).get("trigger_result") or {}).get("status")
+            or ((state or {}).get("bom") or {}).get("status")
+        ),
+        "drawing_file_url_present": bool(
+            (state or {}).get("drawing_file_url")
+            or ((state or {}).get("bom") or {}).get("drawing_file_url")
+            or ((state or {}).get("customer_input") or {}).get("drawing_file_url")
+        ),
+        "drawing_access_mode": (
+            (state or {}).get("drawing_access_mode")
+            or ((state or {}).get("bom") or {}).get("drawing_access_mode")
+            or ((state or {}).get("customer_input") or {}).get("drawing_access_mode")
+        ),
+        "agent_ids": {
+            "bom": clean_agent_id(os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID")),
+            "external_component": clean_agent_id(os.getenv("CHATGPT_EXTERNAL_COMPONENT_AGENT_ID")),
+            "most": clean_agent_id(os.getenv("CHATGPT_MOST_AGENT_ID")),
+        },
+        "env_checks": {
+            "CHATGPT_CHOKE_BOM_AGENT_ID_present": bool(os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID")),
+            "CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN_present": bool(os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN")),
+            "PUBLIC_BASE_URL": os.getenv("PUBLIC_BASE_URL"),
+            "DATA_ROOT": str(DATA_ROOT),
+        },
         "matching_run_dirs_for_project": sorted(set(matching_run_dirs)),
         "matching_customer_input_files": sorted(set(matching_customer_inputs)),
         "workflow_state_attempted_paths": [
