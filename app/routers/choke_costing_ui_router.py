@@ -29,6 +29,7 @@ from services.project_data_paths import (
     portable_data_reference,
     resolve_customer_input_path,
 )
+from services.public_url_service import get_public_rest_base_url
 from services.choke_sequential_agent_workflow import append_workflow_event
 
 
@@ -98,8 +99,7 @@ def _load_env() -> None:
 
 def _public_base_url(request: Request) -> str:
     _load_env()
-    base_url = os.getenv("PUBLIC_BASE_URL") or str(request.base_url)
-    return base_url.rstrip("/")
+    return get_public_rest_base_url(str(request.base_url))
 
 
 def get_public_file_url(request: Request, drawing_file_path: str) -> str | None:

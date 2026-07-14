@@ -36,12 +36,26 @@ def main():
     atomic_write_json(input_path, customer_input)
     observed = {}
 
+    def fake_verify(url, timeout_seconds=15.0):
+        state_path = get_workflow_run_paths(project_code, product_id)["workflow_state_path"]
+        observed["pdf_checked_before_trigger"] = True
+        observed["pdf_url"] = url
+        observed["state_exists_at_pdf_check"] = state_path.exists()
+        return {
+            "success": True,
+            "http_status": 200,
+            "content_type": "application/pdf",
+            "content_length": len(pdf_path.read_bytes()),
+        }
+
     def fake_trigger(**kwargs):
         state_path = get_workflow_run_paths(project_code, product_id)["workflow_state_path"]
         observed["exists"] = state_path.exists()
         observed["state"] = json.loads(state_path.read_text(encoding="utf-8"))
-        return {"status": "dry_run", "attempts": [], "retryable": False}
+        observed["pdf_was_checked"] = observed.get("pdf_checked_before_trigger") is True
+        return {"status": "accepted", "attempts": [], "retryable": False}
 
+    workflow.verify_agent_pdf_url = fake_verify
     workflow._trigger_bom_agent_with_retries = fake_trigger
     workflow.get_master_manufacturing_strategy = lambda *args: {
         "status": "not_found", "production_plant": None
@@ -49,10 +63,14 @@ def main():
     workflow.get_master_unit_data = lambda *args: {"status": "not_found"}
     result = workflow.start_real_choke_workflow(
         input_file=f"data/customer_inputs/{input_path.name}",
-        dry_run=True,
+        dry_run=False,
         request_base_url="https://backend.example.test/",
     )
     assert observed.get("exists") is True
+    assert observed.get("state_exists_at_pdf_check") is True
+    assert observed.get("pdf_was_checked") is True
+    assert "/api/choke-costing/agent-files/" in observed["pdf_url"]
+    assert "/mcp/api/" not in observed["pdf_url"]
     assert observed["state"]["status"] == "starting"
     assert observed["state"]["input_file"]
     assert observed["state"]["drawing_file_path"]

@@ -9,6 +9,7 @@ from typing import Any, Dict
 from urllib.parse import quote
 
 from services.project_data_paths import CUSTOMER_INPUT_DIR
+from services.public_url_service import normalize_public_rest_base_url
 
 
 def _safe_part(value: str, field_name: str) -> str:
@@ -80,7 +81,7 @@ def build_agent_file_url(
     project = _safe_part(project_code, "project_code")
     name = _safe_part(filename, "filename")
     token = create_agent_file_token(project, name, expiry_seconds=expiry_seconds)
-    base = str(public_base_url or "").strip().rstrip("/")
+    base = normalize_public_rest_base_url(public_base_url)
     if not base:
         raise ValueError("PUBLIC_BASE_URL is required to build the Agent PDF proxy URL.")
     return (

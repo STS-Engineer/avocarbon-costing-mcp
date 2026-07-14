@@ -16,6 +16,7 @@ from server import (
     root_info as mcp_root_info,
 )
 from services.project_data_paths import get_data_root, validate_data_root_configuration
+from services.public_url_service import get_public_url_diagnostics
 
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ async def health(request: Request):
 @app.get("/api/health", tags=["Health"])
 def api_health():
     storage_status = validate_data_root_configuration()
+    public_url_diagnostics = get_public_url_diagnostics()
     payload = {
         "status": "ok" if storage_status["healthy"] else "unhealthy",
         "service": "avocarbon-costing-backend",
@@ -96,6 +98,7 @@ def api_health():
             "cwd",
             "startup_module",
         )},
+        **public_url_diagnostics,
     }
     if not storage_status["healthy"]:
         payload["storage_errors"] = storage_status["errors"]

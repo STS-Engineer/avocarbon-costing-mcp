@@ -35,6 +35,7 @@ from services.project_data_paths import (
     resolve_customer_input_path,
     workflow_path_diagnostics,
 )
+from services.public_url_service import get_public_rest_base_url
 from services.workspace_agent_client import clean_agent_id, trigger_workspace_agent
 
 
@@ -92,7 +93,7 @@ def _relative(path: Path) -> str:
 
 def _public_base_url(request_base_url: Optional[str] = None) -> str:
     _load_env()
-    return (os.getenv("PUBLIC_BASE_URL") or request_base_url or "http://127.0.0.1:8000/").rstrip("/")
+    return get_public_rest_base_url(request_base_url)
 
 
 def _is_local_url(url: Optional[str]) -> bool:
