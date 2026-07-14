@@ -25,7 +25,14 @@ def _absolute_root(value: str | None, default: Path) -> Path:
     return configured.resolve()
 
 
-DATA_ROOT = _absolute_root(os.getenv("DATA_ROOT"), BACKEND_ROOT / "data")
+def _default_data_root() -> Path:
+    if os.getenv("WEBSITE_SITE_NAME") or os.getenv("WEBSITE_INSTANCE_ID"):
+        azure_home = Path(os.getenv("HOME") or "/home")
+        return azure_home / "data"
+    return BACKEND_ROOT / "data"
+
+
+DATA_ROOT = _absolute_root(os.getenv("DATA_ROOT"), _default_data_root())
 CUSTOMER_INPUT_DIR = (DATA_ROOT / "customer_inputs").resolve()
 COSTING_RUNS_DIR = (DATA_ROOT / "costing_runs").resolve()
 LEGACY_CUSTOMER_INPUT_DIRS = tuple(dict.fromkeys([

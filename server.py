@@ -636,28 +636,36 @@ def save_bom_output(
             product_id=product_id,
             raw_json=raw_json,
         )
-        traceability = _save_agent_json_traceability(
-            project_code=project_code,
-            product_id=product_id,
-            output_type="bom",
-            object_id="bom",
-            agent_name="choke_bom_agent",
-            status="received",
-            raw_json=raw_json,
-        )
-        if isinstance(workflow_response, dict):
-            workflow_response["traceability"] = traceability
+        if workflow_response.get("success"):
+            try:
+                traceability = _save_agent_json_traceability(
+                    project_code=project_code,
+                    product_id=product_id,
+                    output_type="bom",
+                    object_id="bom",
+                    agent_name="choke_bom_agent",
+                    status="received",
+                    raw_json=raw_json,
+                )
+                workflow_response["traceability"] = traceability
+            except Exception as exc:
+                logger.exception("BOM traceability save failed after workflow write-back")
+                workflow_response["traceability"] = {
+                    "status": "failed",
+                    "message": str(exc),
+                }
         return workflow_response
     except Exception as exc:
         logger.exception("save_bom_output failed")
         return {
             "success": False,
+            "status": "failed",
             "tool": "save_bom_output",
+            "error_code": "mcp_save_bom_output_failed",
+            "message": str(exc),
             "project_code": project_code,
             "product_id": product_id,
-            "raw_json_type": type(raw_json).__name__,
-            "raw_json_top_level_keys": list(raw_json.keys()) if isinstance(raw_json, dict) else [],
-            "errors": [str(exc)],
+            "workflow_state_path": None,
         }
 
 

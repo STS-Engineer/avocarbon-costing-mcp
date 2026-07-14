@@ -193,26 +193,32 @@ def save_choke_bom_result(
     raw_json: Dict[str, Any],
     save_to_database: bool = False,
 ) -> Dict[str, Any]:
-    run_dir = _run_dir(project_code, product_id)
-    path = run_dir / "agent_outputs" / "bom" / "raw_bom_agent_output.json"
-    relative_path = _write_json(path, raw_json)
+    from services.choke_sequential_agent_workflow import (
+        append_workflow_event,
+        save_bom_output,
+    )
 
-    status = _load_status(project_code, product_id)
-    status["bom"] = {
-        "status": "received",
-        "agent_name": agent_name,
-        "path": relative_path,
-        "received_at": _now_iso(),
-    }
-    _save_status(project_code, product_id, status)
+    append_workflow_event(
+        project_code,
+        product_id,
+        "legacy_save_choke_bom_result_called",
+        agent_name=agent_name,
+        delegated_tool="save_bom_output",
+    )
+    workflow_update = save_bom_output(project_code, product_id, raw_json)
+    if not workflow_update.get("success"):
+        return {
+            **workflow_update,
+            "legacy_tool": "save_choke_bom_result",
+            "delegated_tool": "save_bom_output",
+        }
 
-    workflow_update: Dict[str, Any] = {"status": "skipped"}
-    try:
-        from services.choke_sequential_agent_workflow import save_bom_output
-
-        workflow_update = save_bom_output(project_code, product_id, raw_json)
-    except Exception as exc:
-        workflow_update = {"status": "failed", "error": str(exc)}
+    relative_path = portable_data_reference(
+        _run_dir(project_code, product_id)
+        / "agent_outputs"
+        / "bom"
+        / "raw_bom_agent_output.json"
+    )
 
     db_result = _optional_database_write(
         project_code,
@@ -225,7 +231,9 @@ def save_choke_bom_result(
         save_to_database=save_to_database,
     )
     return {
-        "status": "saved",
+        **workflow_update,
+        "legacy_tool": "save_choke_bom_result",
+        "delegated_tool": "save_bom_output",
         "output_type": "bom",
         "path": relative_path,
         "next_step": "backend_can_trigger_component_costing",

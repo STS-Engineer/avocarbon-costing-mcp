@@ -322,8 +322,16 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
         if error not in historical_errors:
             historical_errors.append(error)
 
-    state["status"] = "bom_received"
-    state["current_step"] = "Step 2 External Component Costing Agent"
+    advanced_statuses = {
+        "components_received",
+        "most_triggering",
+        "most_received",
+        "calculated",
+        "blocked",
+    }
+    if state.get("status") not in advanced_statuses:
+        state["status"] = "bom_received"
+        state["current_step"] = "Step 2 External Component Costing Agent"
     state["retry_available"] = False
     state["retryable"] = False
     state["errors"] = remaining_errors
@@ -1202,113 +1210,229 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_bom_output(project_code: str, product_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
-    existing_state, existing_state_path = _existing_state(project_code, product_id)
-    status_before = (existing_state or {}).get("status")
-    run_dir = _run_dir(project_code, product_id).resolve()
-    state_path = _state_path(project_code, product_id).resolve()
-    raw_path = _bom_raw_path(project_code, product_id)
-    normalized_path = _bom_normalized_path(project_code, product_id)
     raw_keys = list(raw_json.keys()) if isinstance(raw_json, dict) else []
-    called_debug = {
+    correlation_id = None
+    if isinstance(raw_json, dict):
+        correlation_id = raw_json.get("request_correlation_id") or raw_json.get("correlation_id")
+        if correlation_id is not None:
+            correlation_id = str(correlation_id)[:128]
+    initial_debug = {
+        "timestamp": _now_iso(),
+        "tool": "save_bom_output",
         "project_code_received": project_code,
         "product_id_received": product_id,
         "raw_json_type": type(raw_json).__name__,
         "raw_json_top_level_keys": raw_keys,
         "data_root": str(DATA_ROOT),
-        "workflow_run_directory": str(run_dir),
-        "workflow_state_path": str(state_path),
-        "raw_bom_save_path": str(raw_path.resolve()),
-        "normalized_bom_path": str(normalized_path.resolve()),
-        "state_exists_before_save": existing_state is not None,
-        "state_status_before_save": status_before,
+        "request_correlation_id": correlation_id,
     }
-    logger.info("save_bom_output called: %s", json.dumps(called_debug, default=str))
-    append_workflow_event(
-        project_code,
-        product_id,
-        "save_bom_output_called",
-        **called_debug,
-        status_before=status_before,
-    )
-    _write_json(raw_path, raw_json)
-    normalized = normalize_bom(raw_json)
-    _write_json(normalized_path, normalized)
+    logger.info("save_bom_output called: %s", json.dumps(initial_debug, default=str))
 
-    state = existing_state if isinstance(existing_state, dict) else _load_state(project_code, product_id)
-    if existing_state is None:
-        state["writeback_created_state_without_start"] = True
-        state.setdefault("warnings", []).append(
-            "BOM write-back created workflow state because no started workflow state was found."
+    state_path: Optional[Path] = None
+    try:
+        _safe_part(project_code, "project_code")
+        _safe_part(product_id, "product_id")
+        if not isinstance(raw_json, dict):
+            raise ValueError("raw_json must be a JSON object.")
+    except (TypeError, ValueError) as exc:
+        error_response = {
+            "success": False,
+            "status": "failed",
+            "error_code": "invalid_writeback_payload",
+            "message": str(exc),
+            "project_code": project_code,
+            "product_id": product_id,
+            "workflow_state_path": None,
+        }
+        logger.warning("save_bom_output validation failed: %s", json.dumps(error_response, default=str))
+        try:
+            append_workflow_event(
+                project_code,
+                product_id,
+                "save_bom_output_validation_failed",
+                **initial_debug,
+                error=str(exc),
+            )
+        except (OSError, ValueError):
+            pass
+        return error_response
+
+    try:
+        existing_state, existing_state_path = _existing_state(project_code, product_id)
+        status_before = (existing_state or {}).get("status")
+        run_dir = _run_dir(project_code, product_id).resolve()
+        state_path = _state_path(project_code, product_id).resolve()
+        raw_path = _bom_raw_path(project_code, product_id).resolve()
+        normalized_path = _bom_normalized_path(project_code, product_id).resolve()
+        path_debug = {
+            **initial_debug,
+            "resolved_run_directory": str(run_dir),
+            "workflow_state_path": str(state_path),
+            "raw_bom_path": str(raw_path),
+            "normalized_bom_path": str(normalized_path),
+            "state_exists_before": existing_state is not None,
+            "state_status_before": status_before,
+        }
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_called",
+            **path_debug,
         )
-    extracted = extract_bom_technical_fields(raw_json)
-    customer_input_update = _update_customer_input_from_bom(state, extracted)
-    if customer_input_update.get("status") in {"updated", "extracted"}:
-        input_path = _customer_input_path_from_state(state)
-        if input_path:
-            state["customer_input"] = _read_json(input_path, state.get("customer_input") or {}) or {}
-    master_data_refresh = _refresh_master_data_for_state(state)
-    existing_bom = dict(state.get("bom") or {})
-    state["bom"] = {
-        **existing_bom,
-        "status": "received",
-        "save_path": _relative(raw_path),
-        "normalized_path": _relative(normalized_path),
-        "received_at": _now_iso(),
-    }
-    _apply_bom_received_precedence(state)
-    state["technical_fields_extracted_from_bom"] = bool(customer_input_update.get("extracted"))
-    state["technical_fields_from_bom"] = customer_input_update.get("extracted") or {}
-    state["customer_input_update"] = customer_input_update
-    state["master_data_refresh"] = master_data_refresh
-    state["missing_outputs"] = [
-        f"component:{item['component_id']}"
-        for item in normalized.get("external_components") or []
-    ]
-    _save_state(state)
-    component_ids = [
-        item.get("component_id")
-        for item in normalized.get("components") or []
-        if item.get("component_id")
-    ]
-    debug = {
-        "success": True,
-        "tool": "save_bom_output",
-        "project_code": project_code,
-        "product_id": product_id,
-        **called_debug,
-        "state_status_after_save": state.get("status"),
-        "raw_bom_saved": raw_path.exists(),
-        "normalized_bom_saved": normalized_path.exists(),
-        "component_ids": component_ids,
-        "missing_outputs_after_save": state.get("missing_outputs") or [],
-        "errors": [],
-    }
-    logger.info("save_bom_output completed: %s", json.dumps(debug, default=str))
-    append_workflow_event(
-        project_code,
-        product_id,
-        "save_bom_output_completed",
-        workflow_state_path=str(state_path),
-        raw_bom_save_path=str(raw_path.resolve()),
-        normalized_bom_path=str(normalized_path.resolve()),
-        state_exists_before_save=existing_state is not None,
-        status_before=status_before,
-        status_after=state.get("status"),
-        component_ids=component_ids,
-        missing_outputs=state.get("missing_outputs") or [],
-    )
-    return {
-        **debug,
-        "status": "saved",
-        "normalized_bom": normalized,
-        "state": state,
-        "debug": debug,
-        "state_merge": {
-            "existing_state_found": existing_state_path is not None,
-            "existing_state_path": str(existing_state_path) if existing_state_path else None,
-            "saved_state_path": str(_state_path(project_code, product_id).resolve()),
-        },
-    }
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_paths_resolved",
+            **path_debug,
+        )
+        logger.info("save_bom_output paths resolved: %s", json.dumps(path_debug, default=str))
+
+        _write_json(raw_path, raw_json)
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_raw_saved",
+            raw_bom_path=str(raw_path),
+            raw_bom_exists=raw_path.exists(),
+            request_correlation_id=correlation_id,
+        )
+
+        normalized = normalize_bom(raw_json)
+        _write_json(normalized_path, normalized)
+        component_ids = [
+            item.get("component_id")
+            for item in normalized.get("components") or []
+            if isinstance(item, dict) and item.get("component_id")
+        ]
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_normalized_saved",
+            normalized_bom_path=str(normalized_path),
+            normalized_bom_exists=normalized_path.exists(),
+            component_ids=component_ids,
+            request_correlation_id=correlation_id,
+        )
+
+        state = existing_state if isinstance(existing_state, dict) else _load_state(project_code, product_id)
+        if existing_state is None:
+            state["writeback_created_state_without_start"] = True
+            state.setdefault("warnings", []).append(
+                "BOM write-back created workflow state because no started workflow state was found."
+            )
+        extracted = extract_bom_technical_fields(raw_json)
+        customer_input_update = _update_customer_input_from_bom(state, extracted)
+        if customer_input_update.get("status") in {"updated", "extracted"}:
+            input_path = _customer_input_path_from_state(state)
+            if input_path:
+                state["customer_input"] = _read_json(input_path, state.get("customer_input") or {}) or {}
+        master_data_refresh = _refresh_master_data_for_state(state)
+        existing_bom = dict(state.get("bom") or {})
+        state["bom"] = {
+            **existing_bom,
+            "status": "received",
+            "save_path": _relative(raw_path),
+            "normalized_path": _relative(normalized_path),
+            "received_at": _now_iso(),
+            "retryable": False,
+        }
+        _apply_bom_received_precedence(state)
+        state["technical_fields_extracted_from_bom"] = bool(customer_input_update.get("extracted"))
+        state["technical_fields_from_bom"] = customer_input_update.get("extracted") or {}
+        state["customer_input_update"] = customer_input_update
+        state["master_data_refresh"] = master_data_refresh
+        state["missing_outputs"] = [
+            f"component:{item['component_id']}"
+            for item in normalized.get("external_components") or []
+            if isinstance(item, dict) and item.get("component_id")
+        ]
+        _save_state(state)
+
+        completed_debug = {
+            "workflow_state_path": str(state_path),
+            "raw_bom_path": str(raw_path),
+            "raw_bom_exists": raw_path.exists(),
+            "normalized_bom_path": str(normalized_path),
+            "normalized_bom_exists": normalized_path.exists(),
+            "component_ids": component_ids,
+            "state_status_after": state.get("status"),
+            "bom_status_after": (state.get("bom") or {}).get("status"),
+            "missing_outputs_after": state.get("missing_outputs") or [],
+            "request_correlation_id": correlation_id,
+        }
+        logger.info("save_bom_output completed: %s", json.dumps(completed_debug, default=str))
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_state_updated",
+            state_exists_before=existing_state is not None,
+            state_status_before=status_before,
+            **completed_debug,
+        )
+        # Kept for compatibility with existing diagnostics.
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_completed",
+            state_exists_before=existing_state is not None,
+            state_status_before=status_before,
+            **completed_debug,
+        )
+        debug = {
+            **path_debug,
+            **completed_debug,
+            "state_exists_before_save": existing_state is not None,
+            "state_status_before_save": status_before,
+            "state_status_after_save": state.get("status"),
+            "raw_bom_saved": raw_path.exists(),
+            "normalized_bom_saved": normalized_path.exists(),
+            "missing_outputs_after_save": state.get("missing_outputs") or [],
+            "errors": [],
+        }
+        return {
+            "success": True,
+            "status": "saved",
+            "tool": "save_bom_output",
+            "project_code": project_code,
+            "product_id": product_id,
+            "workflow_state_path": str(state_path),
+            "state_exists_before": existing_state is not None,
+            "state_status_before": status_before,
+            "state_status_after": state.get("status"),
+            "raw_bom_saved": raw_path.exists(),
+            "normalized_bom_saved": normalized_path.exists(),
+            "component_ids": component_ids,
+            "state": state,
+            "normalized_bom": normalized,
+            "debug": debug,
+            "state_merge": {
+                "existing_state_found": existing_state_path is not None,
+                "existing_state_path": str(existing_state_path) if existing_state_path else None,
+                "saved_state_path": str(state_path),
+            },
+        }
+    except Exception as exc:
+        error_response = {
+            "success": False,
+            "status": "failed",
+            "error_code": "bom_writeback_failed",
+            "message": str(exc),
+            "project_code": project_code,
+            "product_id": product_id,
+            "workflow_state_path": str(state_path) if state_path else None,
+        }
+        logger.exception("save_bom_output failed: %s", json.dumps(error_response, default=str))
+        try:
+            append_workflow_event(
+                project_code,
+                product_id,
+                "save_bom_output_failed",
+                **error_response,
+                request_correlation_id=correlation_id,
+            )
+        except (OSError, ValueError):
+            pass
+        return error_response
 
 
 def _load_normalized_bom(project_code: str, product_id: str) -> Dict[str, Any]:
@@ -1554,6 +1678,75 @@ def get_workflow_debug(project_code: str, product_id: str) -> Dict[str, Any]:
         normalized_bom_exists=response["normalized_bom_exists"],
     )
     return response
+
+
+def get_writeback_debug(project_code: str, product_id: str) -> Dict[str, Any]:
+    state, existing_state_path = _existing_state(project_code, product_id)
+    state = state or {}
+    canonical_state_path = _state_path(project_code, product_id).resolve()
+    raw_candidates = _state_bom_path_candidates(
+        state,
+        "save_path",
+        _bom_raw_path(project_code, product_id),
+    )
+    normalized_candidates = _state_bom_path_candidates(
+        state,
+        "normalized_path",
+        _bom_normalized_path(project_code, product_id),
+    )
+    raw_bom, resolved_raw_path = _read_first_json(raw_candidates)
+    normalized_bom, resolved_normalized_path = _read_first_json(normalized_candidates)
+    component_ids = []
+    if isinstance(normalized_bom, dict):
+        component_ids = [
+            item.get("component_id")
+            for item in normalized_bom.get("components") or []
+            if isinstance(item, dict) and item.get("component_id")
+        ]
+
+    events = []
+    events_path = _events_path(project_code, product_id).resolve()
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_name = str(event.get("event") or "")
+            if "save_bom_output" in event_name or event_name == "legacy_save_choke_bom_result_called":
+                events.append(event)
+
+    latest_error = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("event") in {
+                "save_bom_output_validation_failed",
+                "save_bom_output_failed",
+            }
+        ),
+        None,
+    )
+    raw_path = resolved_raw_path or _bom_raw_path(project_code, product_id).resolve()
+    normalized_path = (
+        resolved_normalized_path or _bom_normalized_path(project_code, product_id).resolve()
+    )
+    return {
+        "project_code": project_code,
+        "product_id": product_id,
+        "data_root": str(DATA_ROOT),
+        "workflow_state_path": str(existing_state_path or canonical_state_path),
+        "workflow_state_exists": bool(existing_state_path),
+        "raw_bom_path": str(raw_path),
+        "raw_bom_exists": raw_path.exists(),
+        "normalized_bom_path": str(normalized_path),
+        "normalized_bom_exists": normalized_path.exists(),
+        "workflow_events_path": str(events_path),
+        "workflow_events": events,
+        "latest_writeback_error": latest_error,
+        "component_ids": component_ids,
+        "raw_bom_top_level_keys": list(raw_bom.keys()) if isinstance(raw_bom, dict) else [],
+    }
 
 
 def update_commercial_fields(
