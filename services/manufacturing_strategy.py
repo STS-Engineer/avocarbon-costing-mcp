@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 
@@ -29,6 +30,84 @@ def _match_tokens(value):
 
 def _match_key(value):
     return " ".join(_match_tokens(value))
+
+
+def _ascii_match_key(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    return _match_key(text.encode("ascii", "ignore").decode("ascii"))
+
+
+def get_canonical_products(product_line=None, csv_path=None):
+    line_key = _match_key(product_line) if product_line else None
+    products = []
+    for row in load_product_matrix(csv_path):
+        if line_key and _match_key(row["product_line"]) != line_key:
+            continue
+        product = str(row["product"] or "").strip()
+        if product and product not in products:
+            products.append(product)
+    return products
+
+
+def resolve_canonical_product(product_line, evidence_values=None, part_number=None, csv_path=None):
+    canonical_products = get_canonical_products(product_line, csv_path)
+    evidence = [
+        str(value).strip()
+        for value in (evidence_values or [])
+        if value not in [None, "", [], {}]
+    ]
+    evidence_keys = [_ascii_match_key(value) for value in evidence]
+    part_key = re.sub(r"[^a-z0-9]+", "", str(part_number or "").lower())
+    candidates = []
+
+    def add_matching_product(expected_key):
+        for product in canonical_products:
+            if _ascii_match_key(product) == expected_key and product not in candidates:
+                candidates.append(product)
+
+    for value_key in evidence_keys:
+        for product in canonical_products:
+            product_key = _ascii_match_key(product)
+            if value_key == product_key and product not in candidates:
+                candidates.append(product)
+
+    combined = " ".join(evidence_keys)
+    if part_key.startswith("3165001"):
+        add_matching_product("fuse choke")
+    if any(term in combined for term in ["fuse choke", "choke fuse"]):
+        add_matching_product("fuse choke")
+    if "self avec fil emaille" in combined and "barre ferrite" in combined:
+        add_matching_product("fuse choke")
+    if any(term in combined for term in ["rod choke", "choke rod"]):
+        add_matching_product("rod choke")
+    if any(term in combined for term in ["torroid choke", "toroid choke", "toroidal choke"]):
+        add_matching_product("torroid choke")
+
+    if len(candidates) == 1:
+        return {
+            "status": "resolved",
+            "canonical_product": candidates[0],
+            "candidates": candidates,
+            "evidence": evidence,
+            "part_number": part_number,
+        }
+    if len(candidates) > 1:
+        return {
+            "status": "ambiguous",
+            "canonical_product": None,
+            "candidates": candidates,
+            "evidence": evidence,
+            "part_number": part_number,
+            "message": "Multiple Product Matrix products match; explicit selection is required.",
+        }
+    return {
+        "status": "not_resolved",
+        "canonical_product": None,
+        "candidates": canonical_products,
+        "evidence": evidence,
+        "part_number": part_number,
+        "message": "No unique Product Matrix product could be resolved.",
+    }
 
 
 def normalize_delivery_zone(value):

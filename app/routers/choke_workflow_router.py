@@ -83,6 +83,8 @@ class CalculateRealOutputsRequest(BaseModel):
 class UpdateCommercialFieldsRequest(BaseModel):
     project_code: str
     product_id: str
+    product: str | None = None
+    product_name: str | None = None
     customer: str | None = None
     final_customer: str | None = None
     customer_delivery_zone: str | None = None

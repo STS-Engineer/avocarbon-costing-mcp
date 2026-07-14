@@ -19,6 +19,7 @@ from services.costing_master_data_service import (
     get_master_unit_data,
 )
 from services.customer_input_schema import normalize_customer_input
+from services.manufacturing_strategy import resolve_canonical_product
 from services.agent_file_proxy_service import build_agent_file_url, verify_agent_pdf_url
 from services.project_data_paths import (
     BACKEND_ROOT,
@@ -1361,23 +1362,72 @@ def extract_bom_technical_fields(raw_bom: Any) -> Dict[str, Any]:
                 return value
         return None
 
-    return {
-        "product_name": quote_value(["product_name", "product", "product_description"]) or _find_recursive_value(raw_bom, [
+    root = raw_bom if isinstance(raw_bom, dict) else {}
+    source = root.get("source") if isinstance(root.get("source"), dict) else {}
+    product_metadata = []
+    for container_name in ["summary", "product_metadata", "metadata", "product_info"]:
+        container = root.get(container_name)
+        if isinstance(container, dict):
+            product_metadata.append(container)
+
+    product_evidence = []
+    for container in [quote_information, root, source, *product_metadata]:
+        for key in [
+            "product",
+            "product_name",
+            "product_type",
+            "product_description",
+            "product_designation",
+            "drawing_title",
+            "designation",
+            "title",
+        ]:
+            value = _scalar_from_value(container.get(key))
+            if value not in [None, "", [], {}] and str(value) not in product_evidence:
+                product_evidence.append(str(value))
+
+    product_name = (
+        quote_value(["product_name", "product", "product_description"])
+        or _scalar_from_value(source.get("product"))
+        or _scalar_from_value(source.get("product_name"))
+        or _scalar_from_value(source.get("drawing_title"))
+        or next(iter(product_evidence), None)
+        or _find_recursive_value(raw_bom, [
             "product_name",
             "product",
             "product_designation",
             "product_description",
             "choke_type",
             "product_type",
-        ]),
-        "part_number": quote_value(["part_number", "customer_part_number", "product_reference"]) or _find_recursive_value(raw_bom, [
+            "drawing_title",
+        ])
+    )
+    part_number = (
+        quote_value(["part_number", "part_no", "customer_part_number", "product_reference"])
+        or _scalar_from_value(source.get("part_no"))
+        or _scalar_from_value(source.get("part_number"))
+        or _find_recursive_value(raw_bom, [
             "part_number",
+            "part_no",
             "customer_part_number",
             "product_reference",
             "product_reference_number",
             "drawing_part_number",
             "item_number",
-        ]),
+        ])
+    )
+    product_resolution = resolve_canonical_product(
+        "Chokes",
+        evidence_values=product_evidence or [product_name],
+        part_number=part_number,
+    )
+
+    return {
+        "product_name": product_name,
+        "canonical_product": product_resolution.get("canonical_product"),
+        "product_candidates": product_resolution.get("candidates") or [],
+        "product_resolution": product_resolution,
+        "part_number": part_number,
         "drawing_number": quote_value(["drawing_number", "drawing_no", "drawing_reference"]) or _find_recursive_value(raw_bom, [
             "drawing_number",
             "drawing_no",
@@ -1415,24 +1465,26 @@ def _update_customer_input_from_bom(
     extracted: Dict[str, Any],
 ) -> Dict[str, Any]:
     path = _customer_input_path_from_state(state)
-    if not path:
-        return {"status": "skipped", "reason": "customer input file not available"}
-
-    current = _read_json(path, {}) or {}
+    current = dict(state.get("customer_input") or {})
+    if path:
+        current = {**current, **(_read_json(path, {}) or {})}
     updates: Dict[str, Any] = {}
 
     product_name = extracted.get("product_name")
+    canonical_product = extracted.get("canonical_product")
     part_number = extracted.get("part_number")
-    if product_name:
+    if canonical_product:
+        updates["product"] = canonical_product
+        updates["product_name"] = canonical_product
+        if product_name and product_name != canonical_product:
+            updates["bom_product_name_evidence"] = product_name
+    elif product_name:
         updates["product_name"] = product_name
-        if not current.get("product"):
-            updates["product"] = product_name
+    if extracted.get("product_candidates"):
+        updates["product_candidates"] = extracted["product_candidates"]
     if part_number:
         if not current.get("part_number"):
             updates["part_number"] = part_number
-        current_product_id = str(current.get("product_id") or "")
-        if not current_product_id or current_product_id.startswith("UNKNOWN-PART-"):
-            updates["product_id"] = part_number
     for field_name in ["drawing_number", "drawing_revision", "drawing_status"]:
         if extracted.get(field_name):
             updates[field_name] = extracted[field_name]
@@ -1451,12 +1503,15 @@ def _update_customer_input_from_bom(
         current.setdefault("workflow_product_id", state.get("product_id"))
     if updates:
         current.update(updates)
+    current.setdefault("workflow_product_id", state.get("product_id"))
+    state["customer_input"] = current
     if extracted_values or updates:
-        _write_json(path, current)
+        if path:
+            _write_json(path, current)
 
     return {
         "status": "updated" if updates else ("extracted" if extracted_values else "no_fields_found"),
-        "path": _relative(path),
+        "path": _relative(path) if path else None,
         "updates": updates,
         "extracted": extracted_values,
     }
@@ -1467,29 +1522,62 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
     product_line = customer_input.get("product_line") or "Chokes"
     product = customer_input.get("product")
     delivery_zone = customer_input.get("customer_delivery_zone")
-    if product and delivery_zone:
-        manufacturing_strategy = get_master_manufacturing_strategy(
-            product_line,
-            product,
-            delivery_zone,
-        )
+    product_resolution = resolve_canonical_product(
+        product_line,
+        evidence_values=[product] if product else [],
+        part_number=None,
+    )
+    canonical_product = product_resolution.get("canonical_product")
+    state["product_resolution"] = product_resolution
+    state["canonical_product"] = canonical_product
+    if canonical_product:
+        customer_input["canonical_product"] = canonical_product
+    else:
+        customer_input.pop("canonical_product", None)
+
+    if product and product_resolution.get("status") != "resolved":
+        manufacturing_strategy = {
+            "status": "product_not_mapped",
+            "product_received": product,
+            "available_product_candidates": product_resolution.get("candidates") or [],
+            "message": "Product is saved but no manufacturing strategy mapping was found.",
+        }
         state["manufacturing_strategy"] = manufacturing_strategy
-        state["unit_data"] = get_master_unit_data(manufacturing_strategy.get("production_plant"))
+        state["unit_data"] = get_master_unit_data(None)
+        state["production_plant"] = None
+        customer_input.pop("production_plant", None)
+        state["customer_input"] = customer_input
+        return manufacturing_strategy
+
+    manufacturing_strategy = get_master_manufacturing_strategy(
+        product_line,
+        canonical_product or product,
+        delivery_zone,
+    )
+    production_plant = manufacturing_strategy.get("production_plant")
+    unit_data = get_master_unit_data(production_plant)
+    state["manufacturing_strategy"] = manufacturing_strategy
+    state["unit_data"] = unit_data
+    state["production_plant"] = production_plant
+    if production_plant:
+        customer_input["production_plant"] = production_plant
+    else:
+        customer_input.pop("production_plant", None)
+    state["customer_input"] = customer_input
+    if manufacturing_strategy.get("status") == "found":
         return {
             "status": "refreshed",
             "manufacturing_strategy_source": manufacturing_strategy.get("source"),
-            "production_plant": manufacturing_strategy.get("production_plant"),
-            "unit_data_source": (state.get("unit_data") or {}).get("source"),
+            "production_plant": production_plant,
+            "unit_data_source": unit_data.get("source"),
         }
-    missing = []
-    if not product:
-        missing.append("product")
-    if not delivery_zone:
-        missing.append("delivery_zone")
+    missing = list(manufacturing_strategy.get("missing_inputs") or [])
     return {
-        "status": "skipped",
+        "status": "missing_strategy",
         "missing_inputs": missing,
-        "message": "Manufacturing strategy needs product and delivery_zone.",
+        "message": manufacturing_strategy.get("message") or (
+            "Manufacturing strategy needs product and delivery_zone."
+        ),
     }
 
 
@@ -2095,6 +2183,8 @@ def update_commercial_fields(
         "currency",
         "target_price",
         "sop_date",
+        "product",
+        "product_name",
     }
     updates = {
         key: value
@@ -2111,10 +2201,27 @@ def update_commercial_fields(
             raise ValueError("annual_quantity must be greater than zero.")
         updates["annual_quantity"] = int(number) if number.is_integer() else number
 
+    selected_product = updates.get("product") or updates.get("product_name")
+    if selected_product:
+        selected_product = str(selected_product).strip()
+        updates["product"] = selected_product
+        updates["product_name"] = selected_product
+
     customer_input = {**(state.get("customer_input") or {}), **updates}
     customer_input["project_code"] = project_code
     customer_input.setdefault("workflow_product_id", product_id)
     state["customer_input"] = customer_input
+    for field_name in [
+        "product",
+        "product_name",
+        "customer",
+        "final_customer",
+        "customer_delivery_zone",
+        "annual_quantity",
+        "currency",
+    ]:
+        if field_name in updates:
+            state[field_name] = updates[field_name]
 
     input_path = _customer_input_path_from_state(state)
     if input_path:
@@ -2124,14 +2231,27 @@ def update_commercial_fields(
         stored_input.setdefault("workflow_product_id", product_id)
         _write_json(input_path, stored_input)
 
-    state["master_data_refresh"] = _refresh_master_data_for_state(state)
+    master_data_refresh = _refresh_master_data_for_state(state)
+    state["master_data_refresh"] = master_data_refresh
     _save_state(state)
+    response_status = (
+        "product_not_mapped"
+        if master_data_refresh.get("status") == "product_not_mapped"
+        else "updated"
+    )
     return {
-        "status": "updated",
+        "success": True,
+        "status": response_status,
         "project_code": project_code,
         "product_id": product_id,
         "updated_fields": updates,
+        "saved_fields": updates,
+        "customer_input_path": str(input_path.resolve()) if input_path else None,
+        "workflow_state_path": str(_state_path(project_code, product_id).resolve()),
         "customer_input": state["customer_input"],
+        "manufacturing_strategy": state.get("manufacturing_strategy"),
+        "production_plant": state.get("production_plant"),
+        "unit_data": state.get("unit_data"),
         "state": state,
     }
 
@@ -2152,22 +2272,42 @@ def trigger_next_component_costing(project_code: str, product_id: str, dry_run: 
     if not customer_input.get("currency"):
         missing_commercial_inputs.append("currency")
     if missing_commercial_inputs:
+        state["master_data_refresh"] = master_data_refresh
+        _save_state(state)
         return {
             "status": "blocked",
             "missing_inputs": missing_commercial_inputs,
             "message": "Complete commercial fields before external component costing.",
             "state": state,
         }
-    missing_stage_inputs = []
     if not customer_input.get("product"):
-        missing_stage_inputs.append("product")
+        state["master_data_refresh"] = master_data_refresh
+        _save_state(state)
+        return {
+            "status": "blocked",
+            "missing_inputs": ["product"],
+            "dependent_missing_inputs": ["production_plant"] if not unit_data.get("plant") else [],
+            "product_candidates": customer_input.get("product_candidates") or [],
+            "message": (
+                "Select a product first. The production plant will then be resolved "
+                "from the manufacturing strategy."
+            ),
+            "state": state,
+        }
     if not unit_data.get("plant"):
-        missing_stage_inputs.append("production_plant")
-    if missing_stage_inputs:
-        raise ValueError(
-            "Component costing needs annual_quantity, delivery_zone, product and manufacturing strategy "
-            f"before external component agents can be triggered. Missing: {', '.join(missing_stage_inputs)}"
-        )
+        state["master_data_refresh"] = master_data_refresh
+        _save_state(state)
+        return {
+            "status": "blocked",
+            "missing_inputs": [],
+            "strategy_status": (state.get("manufacturing_strategy") or {}).get("status") or "not_found",
+            "dependent_missing_inputs": ["production_plant"],
+            "message": (
+                "No manufacturing strategy matched the selected product and delivery zone. "
+                "Select a supported Product Matrix product."
+            ),
+            "state": state,
+        }
     triggers = []
 
     state["status"] = "components_triggering"
