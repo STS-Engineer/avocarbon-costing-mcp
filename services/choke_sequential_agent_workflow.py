@@ -172,11 +172,27 @@ def _component_output_path(project_code: str, product_id: str, component_id: str
     )
 
 
+def _normalized_component_output_path(project_code: str, product_id: str, component_id: str) -> Path:
+    return (
+        _run_dir(project_code, product_id)
+        / "components_normalized"
+        / f"{_safe_part(component_id, 'component_id')}.json"
+    ).resolve()
+
+
 def _most_output_path(project_code: str, product_id: str, work_package_id: str) -> Path:
     return (
         get_workflow_run_paths(project_code, product_id)["most_dir"]
         / f"{_safe_part(work_package_id, 'work_package_id')}.json"
     )
+
+
+def _normalized_most_output_path(project_code: str, product_id: str, work_package_id: str) -> Path:
+    return (
+        _run_dir(project_code, product_id)
+        / "most_normalized"
+        / f"{_safe_part(work_package_id, 'work_package_id')}.json"
+    ).resolve()
 
 
 def _load_customer_input(input_file: str) -> Dict[str, Any]:
@@ -1223,6 +1239,17 @@ def _component_id(component: Dict[str, Any], index: int) -> str:
 
 
 def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
+    explicit_route = str(component.get("costing_route") or "").strip().lower()
+    if explicit_route in {"not_external_agent", "internal_costing"}:
+        return None
+    explicit_family = str(
+        component.get("external_component_type")
+        or component.get("component_family")
+        or component.get("category")
+        or ""
+    ).strip().lower()
+    if explicit_route == "external_component_costing_agent":
+        return explicit_family or _component_type(component).strip().lower() or "external_component"
     canonical_id = _component_id(component, 1)
     if canonical_id == "glue":
         text = _component_text(component)
@@ -1271,7 +1298,7 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
         seen_component_ids.add(component_id)
         component_type = _component_type(component)
         route_type = _external_costing_route(component)
-        is_external_costing = route_type in {"ferrite", "enameled_wire", "tin"}
+        is_external_costing = bool(route_type)
         normalized = {
             "component_id": component_id,
             "component_type": component_type or route_type or "component",
@@ -1303,6 +1330,7 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
             "component_definition": component,
             "costing_route": "external_component_costing_agent" if is_external_costing else "not_external_agent",
             "external_component_type": route_type,
+            "status": component.get("status") or component.get("validation_status"),
         }
         components.append(normalized)
         if is_external_costing:
@@ -1759,9 +1787,13 @@ def save_bom_output(
         state["technical_fields_from_bom"] = customer_input_update.get("extracted") or {}
         state["customer_input_update"] = customer_input_update
         state["master_data_refresh"] = master_data_refresh
+        required_external_components = _required_external_components(normalized)
+        state["required_external_component_ids"] = [
+            item["component_id"] for item in required_external_components
+        ]
         state["missing_outputs"] = list(dict.fromkeys(
             f"component:{item['component_id']}"
-            for item in normalized.get("external_components") or []
+            for item in required_external_components
             if isinstance(item, dict) and item.get("component_id")
         ))
         _save_state(state)
@@ -2256,267 +2288,718 @@ def update_commercial_fields(
     }
 
 
-def trigger_next_component_costing(project_code: str, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
-    state = _load_state(project_code, product_id)
+def _component_status_is_unconfirmed(component: Dict[str, Any]) -> bool:
+    status = str(component.get("status") or "").strip().lower().replace("-", "_")
+    return status in {"to_confirm", "to confirm", "unconfirmed", "pending_confirmation"}
+
+
+def _required_external_components(
+    normalized_bom: Dict[str, Any],
+    include_unconfirmed: bool = False,
+) -> List[Dict[str, Any]]:
+    required = []
+    seen = set()
+    for component in normalized_bom.get("components") or []:
+        component_id = component.get("component_id")
+        if not component_id or component_id in seen:
+            continue
+        if component.get("costing_route") != "external_component_costing_agent":
+            continue
+        if _component_status_is_unconfirmed(component) and not include_unconfirmed:
+            continue
+        seen.add(component_id)
+        required.append(component)
+    return required
+
+
+def _component_trigger_payload(
+    state: Dict[str, Any],
+    component: Dict[str, Any],
+) -> Dict[str, Any]:
+    customer_input = state.get("customer_input") or {}
+    component_id = component["component_id"]
+    component_definition = component.get("component_definition") or {}
+    return {
+        "project_code": state["project_code"],
+        "product_id": state["product_id"],
+        "component_id": component_id,
+        "component_name": component.get("component"),
+        "component_family": component.get("external_component_type") or component.get("category"),
+        "classification": "External",
+        "product": customer_input.get("product"),
+        "product_line": customer_input.get("product_line") or "Chokes",
+        "annual_quantity": customer_input.get("annual_quantity"),
+        "destination_zone": customer_input.get("customer_delivery_zone"),
+        "production_plant": state.get("production_plant") or (state.get("unit_data") or {}).get("plant"),
+        "reporting_currency": customer_input.get("currency") or (state.get("unit_data") or {}).get("selling_currency"),
+        "bom_quantity_per_product": component.get("quantity_per_product"),
+        "technical_specification": component_definition,
+        "drawing_reference": customer_input.get("drawing_reference") or customer_input.get("drawing_number"),
+        "bom_source_path": (state.get("bom") or {}).get("normalized_path"),
+        "manufacturing_strategy": state.get("manufacturing_strategy") or {},
+        "save_address": _relative(_component_output_path(state["project_code"], state["product_id"], component_id)),
+        "instruction": "Cost only this component. Return one complete JSON and call save_component_output.",
+    }
+
+
+def _component_validation_response(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    customer_input = state.get("customer_input") or {}
+    direct = []
+    for key in ["annual_quantity", "customer_delivery_zone", "currency", "product"]:
+        if customer_input.get(key) in [None, "", 0]:
+            direct.append(key)
+    if direct:
+        dependent = []
+        if "product" in direct:
+            dependent.append("production_plant")
+        return {
+            "status": "blocked",
+            "missing_inputs": direct,
+            "dependent_missing_inputs": list(dict.fromkeys(dependent)),
+            "message": (
+                "Select a product first. The production plant will then be resolved from the manufacturing strategy."
+                if direct == ["product"]
+                else "Complete required commercial fields before external component costing."
+            ),
+            "available_product_candidates": (
+                (state.get("product_resolution") or {}).get("candidates")
+                or (state.get("manufacturing_strategy") or {}).get("available_product_candidates")
+                or []
+            ),
+        }
+    strategy = state.get("manufacturing_strategy") or {}
+    unit_data = state.get("unit_data") or {}
+    dependent = []
+    if strategy.get("status") not in {"found", "selected"}:
+        dependent.append("manufacturing_strategy")
+    if not (state.get("production_plant") or unit_data.get("plant")):
+        dependent.append("production_plant")
+    if unit_data.get("status") not in {"found", "selected"}:
+        dependent.append("unit_data")
+    if dependent:
+        return {
+            "status": "strategy_not_found" if "manufacturing_strategy" in dependent else "blocked",
+            "product": customer_input.get("product"),
+            "delivery_zone": customer_input.get("customer_delivery_zone"),
+            "missing_inputs": [],
+            "dependent_missing_inputs": dependent,
+            "available_product_candidates": (
+                strategy.get("available_product_candidates")
+                or (state.get("product_resolution") or {}).get("candidates")
+                or []
+            ),
+            "message": "No manufacturing strategy matched the selected product and delivery zone.",
+        }
+    return None
+
+
+def trigger_next_component_costing(
+    project_code: str,
+    product_id: str,
+    dry_run: bool = False,
+    force: bool = False,
+    include_unconfirmed: bool = False,
+) -> Dict[str, Any]:
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found. Start the workflow before triggering components.")
     if (state.get("bom") or {}).get("status") != "received":
         raise ValueError("BOM output must be received before triggering component costing.")
     normalized_bom = _load_normalized_bom(project_code, product_id)
-    customer_input = state.get("customer_input") or {}
-    master_data_refresh = _refresh_master_data_for_state(state)
-    unit_data = state.get("unit_data") or {}
-    missing_commercial_inputs = []
-    if customer_input.get("annual_quantity") in [None, "", 0]:
-        missing_commercial_inputs.append("annual_quantity")
-    if not customer_input.get("customer_delivery_zone"):
-        missing_commercial_inputs.append("customer_delivery_zone")
-    if not customer_input.get("currency"):
-        missing_commercial_inputs.append("currency")
-    if missing_commercial_inputs:
-        state["master_data_refresh"] = master_data_refresh
+    state["master_data_refresh"] = _refresh_master_data_for_state(state)
+    validation = _component_validation_response(state)
+    if validation:
         _save_state(state)
-        return {
-            "status": "blocked",
-            "missing_inputs": missing_commercial_inputs,
-            "message": "Complete commercial fields before external component costing.",
-            "state": state,
-        }
-    if not customer_input.get("product"):
-        state["master_data_refresh"] = master_data_refresh
-        _save_state(state)
-        return {
-            "status": "blocked",
-            "missing_inputs": ["product"],
-            "dependent_missing_inputs": ["production_plant"] if not unit_data.get("plant") else [],
-            "product_candidates": customer_input.get("product_candidates") or [],
-            "message": (
-                "Select a product first. The production plant will then be resolved "
-                "from the manufacturing strategy."
-            ),
-            "state": state,
-        }
-    if not unit_data.get("plant"):
-        state["master_data_refresh"] = master_data_refresh
-        _save_state(state)
-        return {
-            "status": "blocked",
-            "missing_inputs": [],
-            "strategy_status": (state.get("manufacturing_strategy") or {}).get("status") or "not_found",
-            "dependent_missing_inputs": ["production_plant"],
-            "message": (
-                "No manufacturing strategy matched the selected product and delivery zone. "
-                "Select a supported Product Matrix product."
-            ),
-            "state": state,
-        }
-    triggers = []
+        return {**validation, "project_code": project_code, "product_id": product_id, "state": state}
 
-    state["status"] = "components_triggering"
-    state["current_step"] = "Step 2 External Component Costing Agent"
-    state["master_data_refresh"] = master_data_refresh
+    required = _required_external_components(normalized_bom, include_unconfirmed=include_unconfirmed)
     state.setdefault("components", {})
-
-    for component in normalized_bom.get("external_components") or []:
+    status_before = state.get("status")
+    append_workflow_event(
+        project_code, product_id, "component_batch_trigger_requested",
+        status_before=status_before,
+        component_ids=[item["component_id"] for item in required],
+    )
+    triggered, skipped, failed = [], [], []
+    for component in required:
         component_id = component["component_id"]
-        if state["components"].get(component_id, {}).get("status") == "received":
+        previous = state["components"].get(component_id) or {}
+        if not force and previous.get("status") in {"triggered", "received", "failed"}:
+            skipped.append({"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"})
             continue
-        save_address = _relative(_component_output_path(project_code, product_id, component_id))
-        payload = {
-            "project_code": project_code,
-            "product_id": product_id,
-            "component_id": component_id,
-            "component_type": component.get("external_component_type") or component.get("component_type"),
-            "component_definition": component.get("component_definition"),
-            "annual_quantity": customer_input.get("annual_quantity"),
-            "destination_zone": customer_input.get("customer_delivery_zone"),
-            "production_plant": unit_data.get("plant"),
-            "reporting_currency": unit_data.get("selling_currency"),
-            "save_address": save_address,
-            "write_back_instruction": (
-                "After producing the component costing JSON, you must call save_component_output."
-            ),
-        }
-        input_text = _json_input_text(
-            [
-                "This is one external component only.",
-                "Do not cost a complete choke or assembly.",
-                "Use the component definition exactly extracted from the BOM Agent JSON.",
-                "Return JSON only.",
-                "After producing the component costing JSON, you must call save_component_output.",
-            ],
-            payload,
-            save_address,
+        correlation_id = str(uuid.uuid4())
+        payload = _component_trigger_payload(state, component)
+        conversation_key = f"{project_code}:{product_id}:component:{component_id}:v1"
+        append_workflow_event(
+            project_code, product_id, "component_trigger_requested",
+            component_id=component_id,
+            correlation_id=correlation_id,
+            status_before=previous.get("status"),
+            save_path=payload["save_address"],
         )
         trigger_result = _trigger(
             "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID",
             "External Component Costing Agent",
-            input_text,
-            f"{project_code}:{product_id}:sequential:component:{component_id}",
-            f"{project_code}:{product_id}:sequential:component:{component_id}:v1",
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+            conversation_key,
+            correlation_id,
             dry_run=dry_run,
         )
-        component_status = _trigger_status(trigger_result)
-        state["components"][component_id] = {
-            "status": component_status,
+        accepted = trigger_result.get("status") in {"accepted", "dry_run"}
+        entry = {
+            **previous,
+            "status": "triggered" if accepted else "failed",
             "component_id": component_id,
-            "component_type": component.get("external_component_type") or component.get("component_type"),
-            "save_path": save_address,
+            "component_name": component.get("component"),
+            "component_family": component.get("external_component_type") or component.get("category"),
+            "trigger_payload": payload,
+            "conversation_key": conversation_key,
+            "correlation_id": correlation_id,
             "trigger_result": trigger_result,
+            "save_path": payload["save_address"],
+            "normalized_path": _relative(_normalized_component_output_path(project_code, product_id, component_id)),
+            "received_at": previous.get("received_at") if not force else None,
         }
-        triggers.append(state["components"][component_id])
+        state["components"][component_id] = entry
+        summary = {
+            "component_id": component_id,
+            "status": "accepted" if accepted else "failed",
+            "http_status": trigger_result.get("http_status"),
+            "conversation_url": (trigger_result.get("response") or {}).get("conversation_url")
+            if isinstance(trigger_result.get("response"), dict) else None,
+            "correlation_id": correlation_id,
+        }
+        if accepted:
+            triggered.append(summary)
+            append_workflow_event(project_code, product_id, "component_trigger_accepted", component_id=component_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="triggered")
+        else:
+            failed.append(summary)
+            append_workflow_event(project_code, product_id, "component_trigger_failed", component_id=component_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="failed", http_status=trigger_result.get("http_status"))
+
+    required_ids = [item["component_id"] for item in required]
+    state["required_external_component_ids"] = required_ids
     state["missing_outputs"] = [
-        f"component:{component_id}"
-        for component_id, info in state["components"].items()
-        if info.get("status") != "received"
+        f"component:{component_id}" for component_id in required_ids
+        if (state["components"].get(component_id) or {}).get("status") != "received"
     ]
+    if triggered:
+        state["status"] = "components_triggered"
+        state["current_step"] = "Step 2 External Component Costing Agent"
     _save_state(state)
-    return {"status": "components_triggered", "component_triggers": triggers, "state": state}
+    return {
+        "status": "component_agents_triggered" if triggered else ("component_agents_failed" if failed else "no_components_triggered"),
+        "project_code": project_code,
+        "product_id": product_id,
+        "triggered_components": triggered,
+        "skipped_components": skipped,
+        "failed_components": failed,
+        "component_triggers": [state["components"][item["component_id"]] for item in triggered],
+        "state": state,
+    }
+
+
+def _output_value(raw_json: Dict[str, Any], *keys: str, default: Any = None) -> Any:
+    for key in keys:
+        if key in raw_json and raw_json[key] not in [None, ""]:
+            return raw_json[key]
+    return default
+
+
+def normalize_component_output(
+    state: Dict[str, Any],
+    bom_component: Dict[str, Any],
+    raw_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    customer_input = state.get("customer_input") or {}
+    offer = raw_json.get("recommended_offer") if isinstance(raw_json.get("recommended_offer"), dict) else {}
+    normalized_offer = {
+        "supplier": _output_value(offer, "supplier", "supplier_name"),
+        "origin": _output_value(offer, "origin"),
+        "incoterm": _output_value(offer, "incoterm"),
+        "supplier_currency": _output_value(offer, "supplier_currency", "currency"),
+        "fca_price_per_piece": _output_value(offer, "fca_price_per_piece", "fca_price"),
+        "price_in_reporting_currency": _output_value(offer, "price_in_reporting_currency", "material_cost", "price_per_piece"),
+        "transportation_cost_per_piece": _output_value(offer, "transportation_cost_per_piece", "transportation_cost"),
+        "customs_cost_per_piece": _output_value(offer, "customs_cost_per_piece", "custom_duty_cost", "customs_cost"),
+        "forwarder_cost_per_piece": _output_value(offer, "forwarder_cost_per_piece", "forwarder_cost"),
+        "capital_cost_per_piece": _output_value(offer, "capital_cost_per_piece", "capital_cost"),
+        "cash_locked_per_piece": _output_value(offer, "cash_locked_per_piece", "cash_locked"),
+        "delivered_cost_per_piece": _output_value(offer, "delivered_cost_per_piece", "delivered_cost"),
+    }
+    for normalized_key, aliases in {
+        "price_in_reporting_currency": ("material_cost", "price_in_reporting_currency"),
+        "transportation_cost_per_piece": ("transportation_cost", "transportation_cost_per_piece"),
+        "customs_cost_per_piece": ("custom_duty_cost", "customs_cost_per_piece"),
+        "forwarder_cost_per_piece": ("forwarder_cost", "forwarder_cost_per_piece"),
+        "delivered_cost_per_piece": ("delivered_cost", "delivered_cost_per_piece"),
+    }.items():
+        if normalized_offer[normalized_key] is None:
+            normalized_offer[normalized_key] = _output_value(raw_json, *aliases)
+    raw_cost_basis = raw_json.get("cost_basis") if isinstance(raw_json.get("cost_basis"), dict) else {}
+    cost_basis = {
+        "basis_status": raw_cost_basis.get("basis_status") or "not_available",
+        "source": raw_cost_basis.get("source"),
+        "source_date": raw_cost_basis.get("source_date"),
+        "confidence": raw_cost_basis.get("confidence") or "low",
+    }
+    analysis_status = str(raw_json.get("analysis_status") or raw_json.get("status") or "assumption_based").lower()
+    if analysis_status not in {"complete", "assumption_based", "blocked"}:
+        analysis_status = "assumption_based"
+    return {
+        "schema_version": "1.0",
+        "project_code": state["project_code"],
+        "product_id": state["product_id"],
+        "component_id": bom_component["component_id"],
+        "component_name": raw_json.get("component_name") or bom_component.get("component"),
+        "component_family": raw_json.get("component_family") or bom_component.get("external_component_type") or bom_component.get("category"),
+        "classification": "External",
+        "analysis_status": analysis_status,
+        "quantity_per_product": bom_component.get("quantity_per_product"),
+        "annual_quantity": customer_input.get("annual_quantity"),
+        "destination_zone": customer_input.get("customer_delivery_zone"),
+        "reporting_currency": customer_input.get("currency") or (state.get("unit_data") or {}).get("selling_currency"),
+        "technical_specification": raw_json.get("technical_specification") or bom_component.get("component_definition") or {},
+        "cost_basis": cost_basis,
+        "recommended_offer": normalized_offer,
+        "fx": raw_json.get("fx") if isinstance(raw_json.get("fx"), list) else [],
+        "material_indexation": raw_json.get("material_indexation") if isinstance(raw_json.get("material_indexation"), list) else [],
+        "productivity": raw_json.get("productivity") if isinstance(raw_json.get("productivity"), list) else [],
+        "assumptions": raw_json.get("assumptions") if isinstance(raw_json.get("assumptions"), list) else [],
+        "unconfirmed_values": raw_json.get("unconfirmed_values") if isinstance(raw_json.get("unconfirmed_values"), list) else [],
+        "required_confirmations": raw_json.get("required_confirmations") if isinstance(raw_json.get("required_confirmations"), list) else [],
+        "commercially_usable": raw_json.get("commercially_usable") is True,
+    }
 
 
 def save_component_output(project_code: str, product_id: str, component_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
-    path = _component_output_path(project_code, product_id, component_id)
-    _write_json(path, raw_json)
-    state = _load_state(project_code, product_id)
-    state.setdefault("components", {})
-    existing = state["components"].get(component_id, {})
-    state["components"][component_id] = {
-        **existing,
-        "status": "received",
+    component_id = _safe_part(component_id, "component_id")
+    correlation_id = str(uuid.uuid4())
+    state, state_path = _existing_state(project_code, product_id)
+    status_before = (state or {}).get("status")
+    append_workflow_event(project_code, product_id, "save_component_output_called", component_id=component_id, correlation_id=correlation_id, status_before=status_before, workflow_state_path=str(state_path) if state_path else None)
+    try:
+        if state is None:
+            raise ValueError("Workflow state not found. Component write-back cannot create a workflow.")
+        if (state.get("bom") or {}).get("status") != "received":
+            raise ValueError("BOM output must be received before component write-back.")
+        if not isinstance(raw_json, dict):
+            raise ValueError("raw_json must be a JSON object.")
+        returned_id = raw_json.get("component_id")
+        if returned_id not in [None, ""] and str(returned_id).strip() != component_id:
+            raise ValueError("raw_json component_id does not match the tool component_id.")
+        classification = raw_json.get("classification") or raw_json.get("output_classification")
+        if classification not in [None, ""] and str(classification).strip().lower() != "external":
+            raise ValueError("Component output classification must be External.")
+        normalized_bom = _load_normalized_bom(project_code, product_id)
+        bom_component = next((item for item in normalized_bom.get("components") or [] if item.get("component_id") == component_id), None)
+        if not bom_component:
+            raise ValueError(f"component_id {component_id} does not exist in the normalized BOM.")
+        if bom_component.get("costing_route") != "external_component_costing_agent":
+            raise ValueError(f"component_id {component_id} is not routed to external component costing.")
+
+        raw_path = _component_output_path(project_code, product_id, component_id)
+        normalized_path = _normalized_component_output_path(project_code, product_id, component_id)
+        normalized = normalize_component_output(state, bom_component, raw_json)
+        _write_json(raw_path, raw_json)
+        _write_json(normalized_path, normalized)
+        state.setdefault("components", {})
+        existing = state["components"].get(component_id, {})
+        state["components"][component_id] = {
+            **existing,
+            "status": "received",
+            "component_id": component_id,
+            "component_name": bom_component.get("component"),
+            "component_family": bom_component.get("external_component_type") or bom_component.get("category"),
+            "save_path": _relative(raw_path),
+            "normalized_path": _relative(normalized_path),
+            "received_at": _now_iso(),
+        }
+        required_ids = list(state.get("required_external_component_ids") or [])
+        if not required_ids:
+            required_ids = [item["component_id"] for item in _required_external_components(normalized_bom)]
+        remaining = [item for item in required_ids if (state["components"].get(item) or {}).get("status") != "received"]
+        state["missing_outputs"] = [f"component:{item}" for item in remaining]
+        if not remaining:
+            state["status"] = "components_received"
+            state["current_step"] = "Step 3 MOST Agent"
+        elif state.get("status") not in {"components_triggered", "components_received"}:
+            state["status"] = "components_triggered"
+            state["current_step"] = "Step 2 External Component Costing Agent"
+        _save_state(state)
+        append_workflow_event(project_code, product_id, "save_component_output_completed", component_id=component_id, correlation_id=correlation_id, status_before=status_before, status_after=state.get("status"), raw_path=_relative(raw_path), normalized_path=_relative(normalized_path))
+        if not remaining:
+            append_workflow_event(project_code, product_id, "all_component_outputs_received", component_id=component_id, correlation_id=correlation_id, status_before=status_before, status_after="components_received")
+        return {
+            "success": True,
+            "status": "saved",
+            "tool": "save_component_output",
+            "project_code": project_code,
+            "product_id": product_id,
+            "component_id": component_id,
+            "raw_component_saved": raw_path.exists(),
+            "normalized_component_saved": normalized_path.exists(),
+            "state_status_after": state.get("status"),
+            "remaining_component_ids": remaining,
+            "state": state,
+        }
+    except Exception as exc:
+        append_workflow_event(project_code, product_id, "save_component_output_failed", component_id=component_id, correlation_id=correlation_id, status_before=status_before, error=str(exc))
+        raise
+
+
+def get_component_output(project_code: str, product_id: str, component_id: str) -> Dict[str, Any]:
+    component_id = _safe_part(component_id, "component_id")
+    raw_path = _component_output_path(project_code, product_id, component_id)
+    normalized_path = _normalized_component_output_path(project_code, product_id, component_id)
+    if not raw_path.exists() and not normalized_path.exists():
+        return {"status": "missing", "project_code": project_code, "product_id": product_id, "component_id": component_id}
+    return {
+        "status": "found",
+        "project_code": project_code,
+        "product_id": product_id,
         "component_id": component_id,
-        "save_path": _relative(path),
-        "received_at": _now_iso(),
+        "raw_component": _read_json(raw_path, None),
+        "normalized_component": _read_json(normalized_path, None),
+        "paths": {"raw": _relative(raw_path), "normalized": _relative(normalized_path)},
     }
-    required_components = list(state.get("components", {}).keys())
-    received = [
-        key for key, info in state["components"].items()
-        if info.get("status") == "received"
-    ]
-    if required_components and set(required_components) <= set(received):
-        state["status"] = "components_received"
-        state["current_step"] = "Step 3 MOST Agent"
-        state["missing_outputs"] = []
-    else:
-        state["missing_outputs"] = [
-            f"component:{key}"
-            for key in required_components
-            if key not in received
-        ]
-    _save_state(state)
-    return {"status": "saved", "component_id": component_id, "state": state}
 
 
-def trigger_most_operations(project_code: str, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
-    state = _load_state(project_code, product_id)
+def get_component_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found.")
+    normalized_bom = _load_normalized_bom(project_code, product_id)
+    outputs = [get_component_output(project_code, product_id, item["component_id"]) for item in _required_external_components(normalized_bom, include_unconfirmed=True)]
+    return {"status": "found", "project_code": project_code, "product_id": product_id, "component_outputs": outputs}
+
+
+def _most_component_technical_data(project_code: str, product_id: str, component: Dict[str, Any]) -> Dict[str, Any]:
+    technical = dict(component.get("component_definition") or {})
+    normalized_path = _normalized_component_output_path(project_code, product_id, component["component_id"])
+    normalized_output = _read_json(normalized_path, {}) or {}
+    if isinstance(normalized_output.get("technical_specification"), dict):
+        technical.update(normalized_output["technical_specification"])
+    return technical
+
+
+def _most_work_package(
+    state: Dict[str, Any],
+    work_package_id: str,
+    operation_name: str,
+    operation_family: str,
+    components: List[Dict[str, Any]],
+    status: str = "pending",
+    blocking_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    technical_inputs: Dict[str, Any] = {}
+    for component in components:
+        technical_inputs.update(
+            _most_component_technical_data(state["project_code"], state["product_id"], component)
+        )
+    return {
+        "work_package_id": work_package_id,
+        "operation_name": operation_name,
+        "operation_family": operation_family,
+        "component_ids": [item["component_id"] for item in components],
+        "quantity_per_product": 1,
+        "technical_inputs": technical_inputs,
+        "production_plant": state.get("production_plant") or (state.get("unit_data") or {}).get("plant"),
+        "annual_quantity": (state.get("customer_input") or {}).get("annual_quantity"),
+        "status": status,
+        "blocking_reason": blocking_reason,
+    }
+
+
+def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict[str, Any]) -> Dict[str, Any]:
+    components = {
+        item["component_id"]: item
+        for item in normalized_bom.get("components") or []
+        if item.get("component_id")
+    }
+    packages: List[Dict[str, Any]] = []
+    ferrite = components.get("ferrite_core")
+    wire = components.get("magnet_wire")
+    tin = components.get("lead_tinning")
+    glue = components.get("glue")
+    if ferrite:
+        packages.append(_most_work_package(state, "wp_10_ferrite_handling", "Ferrite handling", "material_handling", [ferrite]))
+    if wire:
+        winding_components = [wire] + ([ferrite] if ferrite else [])
+        packages.append(_most_work_package(state, "wp_20_wire_winding", "Wire winding", "winding", winding_components))
+    if tin:
+        packages.append(_most_work_package(state, "wp_30_lead_tinning", "Lead tinning", "tinning", [tin]))
+    if glue:
+        glue_unconfirmed = _component_status_is_unconfirmed(glue)
+        packages.append(_most_work_package(
+            state,
+            "wp_40_glue_application_baking",
+            "Glue application and baking",
+            "gluing_baking",
+            [glue] + ([ferrite] if ferrite else []),
+            status="blocked" if glue_unconfirmed else "pending",
+            blocking_reason="Glue requirement must be confirmed before MOST analysis." if glue_unconfirmed else None,
+        ))
+    if ferrite or wire:
+        finished_components = [item for item in [ferrite, wire, tin] if item]
+        packages.append(_most_work_package(state, "wp_50_electrical_test", "Electrical test", "quality_test", finished_components))
+        packages.append(_most_work_package(state, "wp_60_visual_inspection_packaging", "Visual inspection and packaging", "inspection_packaging", finished_components))
+    return {
+        "status": "created" if packages else "blocked",
+        "work_packages": packages,
+        "required_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") != "blocked"],
+        "blocked_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") == "blocked"],
+    }
+
+
+def _most_trigger_payload(state: Dict[str, Any], work_package: Dict[str, Any]) -> Dict[str, Any]:
+    work_package_id = work_package["work_package_id"]
+    return {
+        "project_code": state["project_code"],
+        "product_id": state["product_id"],
+        "work_package_id": work_package_id,
+        "most_scope_id": work_package_id,
+        "operation_name": work_package.get("operation_name"),
+        "component_ids": work_package.get("component_ids") or [],
+        "technical_inputs": work_package.get("technical_inputs") or {},
+        "annual_quantity": work_package.get("annual_quantity"),
+        "production_plant": work_package.get("production_plant"),
+        "unit_data": state.get("unit_data") or {},
+        "save_address": _relative(_most_output_path(state["project_code"], state["product_id"], work_package_id)),
+        "instruction": "Analyze only this work package and call save_most_output.",
+    }
+
+
+def trigger_most_operations(
+    project_code: str,
+    product_id: str,
+    dry_run: bool = False,
+    force: bool = False,
+) -> Dict[str, Any]:
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found. Start the workflow before triggering MOST.")
     if (state.get("bom") or {}).get("status") != "received":
         raise ValueError("BOM output must be received before triggering MOST.")
+    normalized_bom = _load_normalized_bom(project_code, product_id)
+    required_component_ids = list(state.get("required_external_component_ids") or [
+        item["component_id"] for item in _required_external_components(normalized_bom)
+    ])
     missing_components = [
-        key for key, info in (state.get("components") or {}).items()
-        if info.get("status") != "received"
+        item for item in required_component_ids
+        if (state.get("components", {}).get(item) or {}).get("status") != "received"
     ]
     if missing_components:
         raise ValueError(f"Component outputs must be received before MOST: {', '.join(missing_components)}")
-
-    raw_bom = _read_json(_bom_raw_path(project_code, product_id), {}) or {}
     customer_input = state.get("customer_input") or {}
-    unit_data = state.get("unit_data") or {}
     if customer_input.get("annual_quantity") in [None, "", 0]:
         raise ValueError("MOST/component-operation planning needs annual_quantity before operations can be triggered.")
-    process = decompose_choke_process(raw_bom, customer_input)
-
-    state["status"] = "most_triggering"
-    state["current_step"] = "Step 3 MOST Agent"
+    process = build_most_process_decomposition(state, normalized_bom)
+    state["process_decomposition"] = process
+    state["required_most_work_package_ids"] = process.get("required_work_package_ids") or []
     state.setdefault("most", {})
-    triggers = []
+    triggered, skipped, failed = [], [], []
     for work_package in process.get("work_packages") or []:
         work_package_id = work_package["work_package_id"]
-        if state["most"].get(work_package_id, {}).get("status") == "received":
+        previous = state["most"].get(work_package_id) or {}
+        if work_package.get("status") == "blocked":
+            state["most"][work_package_id] = {
+                **previous,
+                **work_package,
+                "status": "blocked",
+            }
+            skipped.append({"work_package_id": work_package_id, "status": "blocked", "reason": work_package.get("blocking_reason")})
             continue
-        save_address = _relative(_most_output_path(project_code, product_id, work_package_id))
-        work_package = {**work_package, "save_address": save_address}
-        payload = {
-            "project_code": project_code,
-            "product_id": product_id,
-            "work_package_id": work_package_id,
-            "component_id": work_package.get("component_id"),
-            "operation_id": work_package.get("operation_id"),
-            "operation_name": work_package.get("operation_name"),
-            "technical_inputs": work_package,
-            "annual_quantity": customer_input.get("annual_quantity"),
-            "plant": unit_data.get("plant"),
-            "save_address": save_address,
-            "write_back_instruction": (
-                "After producing the MOST operation JSON, you must call save_most_output."
-            ),
-        }
-        input_text = _json_input_text(
-            [
-                "This is one component-operation work package only.",
-                "Do not process the full product.",
-                "Do not read SharePoint.",
-                "Use the provided technical payload.",
-                "Return JSON only.",
-                "After producing the MOST operation JSON, you must call save_most_output.",
-            ],
-            payload,
-            save_address,
-        )
+        if not force and previous.get("status") in {"triggered", "received", "failed"}:
+            skipped.append({"work_package_id": work_package_id, "status": previous.get("status"), "reason": "already_processed"})
+            continue
+        correlation_id = str(uuid.uuid4())
+        payload = _most_trigger_payload(state, work_package)
+        conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
+        append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), save_path=payload["save_address"])
         trigger_result = _trigger(
             "CHATGPT_MOST_AGENT_ID",
             "MOST Assemblage",
-            input_text,
-            f"{project_code}:{product_id}:sequential:most:{work_package_id}",
-            f"{project_code}:{product_id}:sequential:most:{work_package_id}:v1",
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+            conversation_key,
+            correlation_id,
             dry_run=dry_run,
         )
-        state["most"][work_package_id] = {
-            "status": _trigger_status(trigger_result),
-            "work_package_id": work_package_id,
-            "component_id": work_package.get("component_id"),
-            "operation_id": work_package.get("operation_id"),
-            "operation_name": work_package.get("operation_name"),
-            "save_path": save_address,
+        accepted = trigger_result.get("status") in {"accepted", "dry_run"}
+        entry = {
+            **previous,
+            **work_package,
+            "status": "triggered" if accepted else "failed",
+            "conversation_key": conversation_key,
+            "correlation_id": correlation_id,
+            "trigger_payload": payload,
             "trigger_result": trigger_result,
+            "save_path": payload["save_address"],
+            "normalized_path": _relative(_normalized_most_output_path(project_code, product_id, work_package_id)),
+            "received_at": previous.get("received_at") if not force else None,
         }
-        triggers.append(state["most"][work_package_id])
-    state["process_decomposition"] = process
-    state["missing_outputs"] = [
-        f"most:{work_package_id}"
-        for work_package_id, info in state["most"].items()
-        if info.get("status") != "received"
-    ]
+        state["most"][work_package_id] = entry
+        summary = {"work_package_id": work_package_id, "status": "accepted" if accepted else "failed", "http_status": trigger_result.get("http_status"), "correlation_id": correlation_id}
+        if accepted:
+            triggered.append(summary)
+            append_workflow_event(project_code, product_id, "most_trigger_accepted", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="triggered")
+        else:
+            failed.append(summary)
+            append_workflow_event(project_code, product_id, "most_trigger_failed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="failed", http_status=trigger_result.get("http_status"))
+    required_ids = state["required_most_work_package_ids"]
+    state["missing_outputs"] = [f"most:{item}" for item in required_ids if (state["most"].get(item) or {}).get("status") != "received"]
+    if triggered:
+        state["status"] = "most_triggered"
+        state["current_step"] = "Step 3 MOST Agent"
     _save_state(state)
-    return {"status": "most_triggered", "most_triggers": triggers, "process_decomposition": process, "state": state}
+    return {
+        "status": "most_triggered" if triggered else ("most_trigger_failed" if failed else "no_most_triggered"),
+        "project_code": project_code,
+        "product_id": product_id,
+        "triggered_work_packages": triggered,
+        "skipped_work_packages": skipped,
+        "failed_work_packages": failed,
+        "most_triggers": [state["most"][item["work_package_id"]] for item in triggered],
+        "process_decomposition": process,
+        "state": state,
+    }
+
+
+def normalize_most_output(state: Dict[str, Any], work_package: Dict[str, Any], raw_json: Dict[str, Any]) -> Dict[str, Any]:
+    def value(*keys: str) -> Any:
+        return _output_value(raw_json, *keys)
+    analysis_status = str(value("analysis_status", "status") or "assumption_based").lower()
+    if analysis_status not in {"complete", "assumption_based", "blocked"}:
+        analysis_status = "assumption_based"
+    method = value("method", "most_method") or "engineering_estimate"
+    if method not in {"BasicMOST", "MiniMOST", "engineering_estimate"}:
+        method = "engineering_estimate"
+    return {
+        "schema_version": "1.0",
+        "project_code": state["project_code"],
+        "product_id": state["product_id"],
+        "work_package_id": work_package["work_package_id"],
+        "operation_name": raw_json.get("operation_name") or work_package.get("operation_name"),
+        "component_ids": raw_json.get("component_ids") if isinstance(raw_json.get("component_ids"), list) else work_package.get("component_ids") or [],
+        "analysis_status": analysis_status,
+        "method": method,
+        "sequence_model": raw_json.get("sequence_model") if isinstance(raw_json.get("sequence_model"), list) else [],
+        "tmus": value("tmus", "total_tmus"),
+        "normal_time_seconds": value("normal_time_seconds", "cycle_time_seconds"),
+        "allowance_percent": value("allowance_percent"),
+        "standard_time_seconds": value("standard_time_seconds"),
+        "pieces_per_hour": value("pieces_per_hour", "p_h"),
+        "oee_percent": value("oee_percent", "oee"),
+        "effective_pieces_per_hour": value("effective_pieces_per_hour"),
+        "operator_count": value("operator_count"),
+        "machine_count": value("machine_count"),
+        "labor_cost_per_hour": value("labor_cost_per_hour"),
+        "variable_overhead_per_hour": value("variable_overhead_per_hour"),
+        "direct_labor_cost_per_piece": value("direct_labor_cost_per_piece", "dl_cost_per_piece"),
+        "variable_overhead_cost_per_piece": value("variable_overhead_cost_per_piece", "voh_cost_per_piece"),
+        "equipment": raw_json.get("equipment") if isinstance(raw_json.get("equipment"), list) else [],
+        "assumptions": raw_json.get("assumptions") if isinstance(raw_json.get("assumptions"), list) else [],
+        "unconfirmed_values": raw_json.get("unconfirmed_values") if isinstance(raw_json.get("unconfirmed_values"), list) else [],
+        "required_confirmations": raw_json.get("required_confirmations") if isinstance(raw_json.get("required_confirmations"), list) else [],
+    }
 
 
 def save_most_output(project_code: str, product_id: str, work_package_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
-    path = _most_output_path(project_code, product_id, work_package_id)
-    _write_json(path, raw_json)
-    state = _load_state(project_code, product_id)
-    state.setdefault("most", {})
-    existing = state["most"].get(work_package_id, {})
-    state["most"][work_package_id] = {
-        **existing,
-        "status": "received",
+    work_package_id = _safe_part(work_package_id, "work_package_id")
+    correlation_id = str(uuid.uuid4())
+    state, state_path = _existing_state(project_code, product_id)
+    status_before = (state or {}).get("status")
+    append_workflow_event(project_code, product_id, "save_most_output_called", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, workflow_state_path=str(state_path) if state_path else None)
+    try:
+        if state is None:
+            raise ValueError("Workflow state not found. MOST write-back cannot create a workflow.")
+        if (state.get("bom") or {}).get("status") != "received":
+            raise ValueError("BOM output must be received before MOST write-back.")
+        if not isinstance(raw_json, dict):
+            raise ValueError("raw_json must be a JSON object.")
+        returned_id = raw_json.get("work_package_id") or raw_json.get("most_scope_id")
+        if returned_id not in [None, ""] and str(returned_id).strip() != work_package_id:
+            raise ValueError("raw_json work_package_id does not match the tool work_package_id.")
+        process = state.get("process_decomposition") or {}
+        work_package = next((item for item in process.get("work_packages") or [] if item.get("work_package_id") == work_package_id), None)
+        if not work_package:
+            raise ValueError(f"work_package_id {work_package_id} does not exist in process decomposition.")
+        if work_package.get("status") == "blocked":
+            raise ValueError(f"work_package_id {work_package_id} is blocked: {work_package.get('blocking_reason')}")
+        normalized_bom = _load_normalized_bom(project_code, product_id)
+        external_ids = {item["component_id"] for item in _required_external_components(normalized_bom, include_unconfirmed=True)}
+        applicable = [item for item in work_package.get("component_ids") or [] if item in external_ids]
+        missing_components = [item for item in applicable if (state.get("components", {}).get(item) or {}).get("status") != "received"]
+        if missing_components:
+            raise ValueError(f"Required component outputs are missing for MOST scope: {', '.join(missing_components)}")
+        raw_path = _most_output_path(project_code, product_id, work_package_id)
+        normalized_path = _normalized_most_output_path(project_code, product_id, work_package_id)
+        normalized = normalize_most_output(state, work_package, raw_json)
+        _write_json(raw_path, raw_json)
+        _write_json(normalized_path, normalized)
+        state.setdefault("most", {})
+        existing = state["most"].get(work_package_id, {})
+        state["most"][work_package_id] = {
+            **existing,
+            **work_package,
+            "status": "received",
+            "save_path": _relative(raw_path),
+            "normalized_path": _relative(normalized_path),
+            "received_at": _now_iso(),
+        }
+        required = list(state.get("required_most_work_package_ids") or process.get("required_work_package_ids") or [])
+        remaining = [item for item in required if (state["most"].get(item) or {}).get("status") != "received"]
+        state["missing_outputs"] = [f"most:{item}" for item in remaining]
+        if not remaining:
+            state["status"] = "most_received"
+            state["current_step"] = "Step 4 Final Calculation"
+        elif state.get("status") != "most_triggered":
+            state["status"] = "most_triggered"
+            state["current_step"] = "Step 3 MOST Agent"
+        _save_state(state)
+        append_workflow_event(project_code, product_id, "save_most_output_completed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, status_after=state.get("status"), raw_path=_relative(raw_path), normalized_path=_relative(normalized_path))
+        if not remaining:
+            append_workflow_event(project_code, product_id, "all_most_outputs_received", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, status_after="most_received")
+        return {
+            "success": True,
+            "status": "saved",
+            "project_code": project_code,
+            "product_id": product_id,
+            "work_package_id": work_package_id,
+            "raw_most_saved": raw_path.exists(),
+            "normalized_most_saved": normalized_path.exists(),
+            "state_status_after": state.get("status"),
+            "remaining_work_packages": remaining,
+            "state": state,
+        }
+    except Exception as exc:
+        append_workflow_event(project_code, product_id, "save_most_output_failed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, error=str(exc))
+        raise
+
+
+def get_most_output(project_code: str, product_id: str, work_package_id: str) -> Dict[str, Any]:
+    work_package_id = _safe_part(work_package_id, "work_package_id")
+    raw_path = _most_output_path(project_code, product_id, work_package_id)
+    normalized_path = _normalized_most_output_path(project_code, product_id, work_package_id)
+    if not raw_path.exists() and not normalized_path.exists():
+        return {"status": "missing", "project_code": project_code, "product_id": product_id, "work_package_id": work_package_id}
+    return {
+        "status": "found",
+        "project_code": project_code,
+        "product_id": product_id,
         "work_package_id": work_package_id,
-        "save_path": _relative(path),
-        "received_at": _now_iso(),
+        "raw_most": _read_json(raw_path, None),
+        "normalized_most": _read_json(normalized_path, None),
+        "paths": {"raw": _relative(raw_path), "normalized": _relative(normalized_path)},
     }
-    required = list(state.get("most", {}).keys())
-    received = [
-        key for key, info in state["most"].items()
-        if info.get("status") == "received"
-    ]
-    if required and set(required) <= set(received):
-        state["status"] = "most_received"
-        state["current_step"] = "Step 4 Cost Calculation"
-        state["missing_outputs"] = []
-    else:
-        state["missing_outputs"] = [
-            f"most:{key}"
-            for key in required
-            if key not in received
-        ]
-    _save_state(state)
-    return {"status": "saved", "work_package_id": work_package_id, "state": state}
+
+
+def get_most_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found.")
+    process = state.get("process_decomposition") or {}
+    outputs = [get_most_output(project_code, product_id, item["work_package_id"]) for item in process.get("work_packages") or [] if item.get("status") != "blocked"]
+    return {"status": "found", "project_code": project_code, "product_id": product_id, "most_outputs": outputs}
 
 
 def _get_path(data: Any, path: List[str]) -> Any:

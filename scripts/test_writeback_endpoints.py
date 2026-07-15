@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict
 
@@ -20,7 +21,7 @@ except ModuleNotFoundError as exc:
 from app.main import app  # noqa: E402
 
 
-PROJECT_CODE = "RFQ-WRITEBACK-TEST"
+PROJECT_CODE = f"RFQ-WRITEBACK-TEST-{uuid.uuid4().hex[:8]}"
 PRODUCT_ID = "316-5001"
 
 
@@ -175,6 +176,7 @@ def main() -> int:
         "project_code": project_code,
         "product_id": product_id,
         "dry_run": True,
+        "force": True,
     })
     component_triggers = component_trigger_result.get("component_triggers") or []
     component_ids = [item["component_id"] for item in component_triggers]
@@ -186,6 +188,7 @@ def main() -> int:
     component_samples = [
         ("ferrite_core", 0.129, 0.005, 0, 0.001),
         ("magnet_wire", 0.333, 0.003, 0, 0.001),
+        ("lead_tinning", 0.004, 0.0001, 0, 0.0001),
     ]
     for component_id, delivered_cost, transportation_cost, custom_duty_cost, forwarder_cost in component_samples:
         component_result = _post(client, "/api/choke-workflow/save-component-output", {

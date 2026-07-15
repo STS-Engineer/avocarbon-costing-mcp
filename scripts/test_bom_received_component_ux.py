@@ -95,10 +95,11 @@ def main():
         "project_code": PROJECT_CODE,
         "product_id": PRODUCT_ID,
         "dry_run": True,
+        "force": True,
     })
     assert trigger_response.status_code == 200, trigger_response.text
     triggered = trigger_response.json()
-    assert triggered["status"] == "components_triggered", triggered
+    assert triggered["status"] == "component_agents_triggered", triggered
     assert {item["component_id"] for item in triggered["component_triggers"]} == {
         "ferrite_core", "magnet_wire", "lead_tinning",
     }, triggered

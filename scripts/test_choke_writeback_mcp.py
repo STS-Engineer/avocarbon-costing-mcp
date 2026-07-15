@@ -11,7 +11,10 @@ sys.path.insert(0, str(ROOT_DIR))
 
 try:
     import server
-    from services.choke_sequential_agent_workflow import start_real_choke_workflow
+    from services.choke_sequential_agent_workflow import (
+        start_real_choke_workflow,
+        trigger_most_operations,
+    )
 except ModuleNotFoundError as exc:
     venv_python = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
     if exc.name in {"anyio", "fastapi", "mcp", "dotenv", "psycopg2", "starlette"} and venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
@@ -99,6 +102,7 @@ def _sample_bom(project_code: str, product_id: str) -> Dict[str, Any]:
                 "description": "Adhesive for glued choke",
                 "quantity_per_product": 1,
                 "weight_kg": 0.00002,
+                "costing_route": "external_component_costing_agent",
             },
             {
                 "component_id": "lead_tin_plating",
@@ -194,6 +198,7 @@ def main() -> int:
         ("ferrite_core", 0.129),
         ("magnet_wire", 0.333),
         ("glue", 0.002),
+        ("lead_tinning", 0.004),
     ]:
         response = server.save_component_output(
             project_code=project_code,
@@ -206,12 +211,18 @@ def main() -> int:
             raise AssertionError(f"{component_id} was not received: {response}")
         print(f"  {component_id}: received")
 
+    print("Generating and triggering separate MOST scopes")
+    most_plan = trigger_most_operations(project_code, product_id, dry_run=True)
+    work_packages = [
+        item for item in most_plan["process_decomposition"]["work_packages"]
+        if item.get("status") != "blocked"
+    ]
     print("Calling save_most_output for separate MOST scopes")
-    for most_scope_id, component_id, operation_id, operation_name in [
-        ("magnet_wire_winding", "magnet_wire", 10, "winding"),
-        ("glue_application_baking", "glue", 20, "glue_application_baking"),
-        ("electrical_test", "finished_choke", 30, "electrical_test"),
-    ]:
+    for operation_id, work_package in enumerate(work_packages, start=10):
+        most_scope_id = work_package["work_package_id"]
+        component_ids = work_package.get("component_ids") or ["finished_choke"]
+        component_id = component_ids[0]
+        operation_name = work_package["operation_name"]
         response = server.save_most_output(
             project_code=project_code,
             product_id=product_id,
@@ -233,9 +244,9 @@ def main() -> int:
     print("Checking saved files remain separate")
     run_dir = ROOT_DIR / "data" / "costing_runs" / project_code / product_id
     _assert_file(run_dir / "agent_outputs" / "bom" / "raw_bom_agent_output.json")
-    for component_id in ["ferrite_core", "magnet_wire", "glue"]:
+    for component_id in ["ferrite_core", "magnet_wire", "glue", "lead_tinning"]:
         _assert_file(run_dir / "agent_outputs" / "components" / f"{component_id}.json")
-    for most_scope_id in ["magnet_wire_winding", "glue_application_baking", "electrical_test"]:
+    for most_scope_id in [item["work_package_id"] for item in work_packages]:
         _assert_file(run_dir / "agent_outputs" / "most" / f"{most_scope_id}.json")
     print("  separate component and MOST JSON files: ok")
 

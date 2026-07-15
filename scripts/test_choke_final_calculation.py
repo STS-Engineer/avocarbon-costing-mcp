@@ -17,6 +17,7 @@ try:
         save_component_output,
         save_most_output,
         start_real_choke_workflow,
+        trigger_most_operations,
     )
 except ModuleNotFoundError as exc:
     venv_python = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
@@ -69,6 +70,7 @@ def bom_json() -> Dict[str, Any]:
                 "component_id": "glue",
                 "component_type": "Glue",
                 "quantity_per_product": 1,
+                "costing_route": "external_component_costing_agent",
             },
         ],
         "technical_data": {
@@ -147,11 +149,8 @@ def main() -> int:
             component_id,
             component_json(component_id, delivered_cost, transportation, duty, forwarder),
         )
-    for scope_id in [
-        "magnet_wire_winding",
-        "glue_application_baking",
-        "electrical_test",
-    ]:
+    most_plan = trigger_most_operations(project_code, product_id, dry_run=True)
+    for scope_id in most_plan["process_decomposition"]["required_work_package_ids"]:
         save_most_output(project_code, product_id, scope_id, most_json(scope_id))
 
     result = calculate_final_choke_costing_from_saved_outputs(

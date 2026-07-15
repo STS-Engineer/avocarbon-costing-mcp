@@ -152,7 +152,7 @@ def main():
         PRODUCT_ID,
         dry_run=True,
     )
-    assert triggered["status"] == "components_triggered", triggered
+    assert triggered["status"] == "component_agents_triggered", triggered
     assert triggered["component_triggers"], triggered
     assert triggered["state"]["product_id"] == PRODUCT_ID, triggered
 

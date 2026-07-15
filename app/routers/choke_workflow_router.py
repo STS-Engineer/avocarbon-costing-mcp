@@ -8,6 +8,10 @@ from services.choke_sequential_agent_workflow import (
     calculate_final_choke_costing_from_saved_outputs,
     calculate_from_real_outputs,
     get_bom_output,
+    get_component_output,
+    get_component_outputs,
+    get_most_output,
+    get_most_outputs,
     get_writeback_debug,
     get_workflow_debug,
     get_workflow_state,
@@ -46,6 +50,8 @@ class TriggerStageRequest(BaseModel):
     project_code: str
     product_id: str
     dry_run: bool = False
+    force: bool = False
+    include_unconfirmed: bool = False
 
 
 class RetryBomRequest(BaseModel):
@@ -185,7 +191,19 @@ def trigger_components(request: TriggerStageRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         dry_run=request.dry_run,
+        force=request.force,
+        include_unconfirmed=request.include_unconfirmed,
     ))
+
+
+@router.get("/component-output/{project_code}/{product_id}/{component_id}")
+def component_output(project_code: str, product_id: str, component_id: str):
+    return _handle(lambda: get_component_output(project_code, product_id, component_id))
+
+
+@router.get("/component-outputs/{project_code}/{product_id}")
+def component_outputs(project_code: str, product_id: str):
+    return _handle(lambda: get_component_outputs(project_code, product_id))
 
 
 @router.post("/save-component-output")
@@ -204,7 +222,18 @@ def trigger_most(request: TriggerStageRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         dry_run=request.dry_run,
+        force=request.force,
     ))
+
+
+@router.get("/most-output/{project_code}/{product_id}/{work_package_id}")
+def most_output(project_code: str, product_id: str, work_package_id: str):
+    return _handle(lambda: get_most_output(project_code, product_id, work_package_id))
+
+
+@router.get("/most-outputs/{project_code}/{product_id}")
+def most_outputs(project_code: str, product_id: str):
+    return _handle(lambda: get_most_outputs(project_code, product_id))
 
 
 @router.post("/save-most-output")
