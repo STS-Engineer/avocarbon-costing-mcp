@@ -10,6 +10,7 @@ from app.routers.choke_agent_integration_router import router as choke_agent_int
 from app.routers.choke_costing_ui_router import router as choke_costing_ui_router
 from app.routers.choke_orchestrator_router import router as choke_orchestrator_router
 from app.routers.choke_workflow_router import router as choke_workflow_router
+from app.routers.choke_simulation_router import router as choke_simulation_router
 from server import (
     health_check as mcp_health_check,
     mcp,
@@ -55,13 +56,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_frontend_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Accept", "Authorization", "Content-Type", "Idempotency-Key"],
 )
 app.include_router(choke_orchestrator_router)
 app.include_router(choke_costing_ui_router)
 app.include_router(choke_agent_integration_router)
 app.include_router(choke_workflow_router)
+app.include_router(choke_simulation_router)
 
 for route in mcp_sse_app.routes:
     if getattr(route, "path", None) in {"/sse", "/messages"}:
