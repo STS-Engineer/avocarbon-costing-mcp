@@ -42,6 +42,20 @@ from services.workspace_agent_client import clean_agent_id, trigger_workspace_ag
 
 BASE_DIR = BACKEND_ROOT
 logger = logging.getLogger(__name__)
+MOST_WRITEBACK_INSTRUCTION = (
+    "Analyze only this work package using your native MOST JSON structure from "
+    "most_cycle_output_template.json. After producing the complete MOST JSON, directly "
+    "invoke the configured MCP action described as 'Save one final MOST operation JSON "
+    "to the backend workflow'. In the current runtime, this action is exposed as "
+    "mcp__hoopa.mcp_kpi_costing_choke_writeback_link_as_020ff6fc1557. Pass the exact "
+    "project_code, product_id, work_package_id, most_scope_id, and raw_json containing "
+    "the complete native MOST JSON object. Do not use tool discovery, do not list "
+    "database tables, and do not return MOST_WRITEBACK_TOOL_NOT_AVAILABLE before "
+    "attempting the configured action. Treat the write-back as successful only when "
+    "success=true, raw_most_saved=true, normalized_most_saved=true, and the returned "
+    "work_package_id matches the requested work_package_id. If the action call fails, "
+    "return the exact MCP error as MOST_WRITEBACK_FAILED."
+)
 
 
 def _now_iso() -> str:
@@ -2765,7 +2779,7 @@ def _most_trigger_payload(state: Dict[str, Any], work_package: Dict[str, Any]) -
         "production_plant": work_package.get("production_plant"),
         "unit_data": state.get("unit_data") or {},
         "save_address": _relative(_most_output_path(state["project_code"], state["product_id"], work_package_id)),
-        "instruction": "Analyze only this work package and call save_most_output.",
+        "instruction": MOST_WRITEBACK_INSTRUCTION,
     }
 
 
