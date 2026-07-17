@@ -46,7 +46,18 @@ def test_most_trigger_payload_uses_strong_writeback_instruction():
 
     assert instruction == workflow.MOST_WRITEBACK_INSTRUCTION
     assert "Save one final MOST operation JSON to the backend workflow" in instruction
-    assert "mcp__hoopa.mcp_kpi_costing_choke_writeback_link_as_020ff6fc1557" in instruction
+    assert "mcp__" not in instruction
+    assert "generated runtime callable name" in instruction
+    for forbidden_fallback in (
+        "create_or_update_component",
+        "create_or_update_bom_line",
+        "save_component_output",
+        "save_component_costing_result",
+        "store_agent_json",
+        "import_agent_costing_package",
+    ):
+        assert forbidden_fallback in instruction
+    assert "MOST_WRITEBACK_ACTION_NOT_BOUND" in instruction
     for required_name in (
         "project_code",
         "product_id",
