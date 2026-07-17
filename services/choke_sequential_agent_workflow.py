@@ -1192,10 +1192,13 @@ def _component_type(component: Dict[str, Any]) -> str:
         or component.get("type")
         or component.get("product")
         or component.get("poste")
+        or component.get("component_name")
+        or component.get("product_designation")
         or component.get("produit_designation")
         or component.get("produit")
         or component.get("designation")
         or component.get("description")
+        or component.get("specification")
         or ""
     )
 
@@ -1206,41 +1209,60 @@ def _normalized_component_identity_text(component: Dict[str, Any]) -> str:
         component.get("component_type"),
         component.get("component_family"),
         component.get("poste"),
+        component.get("component_name"),
+        component.get("product_designation"),
         component.get("produit_designation"),
         component.get("product"),
         component.get("designation"),
         component.get("description"),
+        component.get("specification"),
     ]
     text = " ".join(str(value) for value in values if value not in [None, ""])
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
 
-def _component_id(component: Dict[str, Any], index: int) -> str:
-    explicit = (
-        component.get("component_id")
-        or component.get("component_code")
-        or component.get("component_reference")
-        or component.get("part_number")
-        or component.get("id")
-    )
-    if explicit:
-        explicit_id = _slug(explicit, f"component_{index}")
-        aliases = {
-            "ferrite": "ferrite_core",
-            "core": "ferrite_core",
-            "copper_wire": "magnet_wire",
-            "enameled_wire": "magnet_wire",
-            "enamelled_wire": "magnet_wire",
-            "tin_plating": "lead_tinning",
-            "lead_tin_plating": "lead_tinning",
-            "tinning": "lead_tinning",
-            "etamage": "lead_tinning",
-            "adhesive": "glue",
-            "epoxy": "glue",
-            "colle": "glue",
-        }
-        return aliases.get(explicit_id, explicit_id)
-    text = _normalized_component_identity_text(component)
+_COMPONENT_ID_ALIASES = {
+    "ferrite": "ferrite_core",
+    "core": "ferrite_core",
+    "copper_wire": "magnet_wire",
+    "enameled_wire": "magnet_wire",
+    "enamelled_wire": "magnet_wire",
+    "tin_plating": "lead_tinning",
+    "lead_tin_plating": "lead_tinning",
+    "tinning": "lead_tinning",
+    "etamage": "lead_tinning",
+    "adhesive": "glue",
+    "epoxy": "glue",
+    "colle": "glue",
+}
+
+_COMPONENT_FAMILY_LABELS = {
+    "ferrite_core": "ferrite",
+    "magnet_wire": "wire",
+    "lead_tinning": "tinning",
+    "glue": "glue",
+}
+
+_NUMERIC_TOKEN_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+_NOT_RETAINED_MARKERS = [
+    "non retenue",
+    "non retenu",
+    "not retained",
+    "not used",
+    "non utilise",
+    "not selected",
+    "non selectionne",
+    "not required",
+    "non requis",
+    "excluded",
+    "sans objet",
+    "not applicable",
+]
+
+
+def _classify_component_material(text: str) -> Optional[str]:
+    """Infer the canonical material family from free-text identity fields."""
     if any(term in text for term in ["glue", "adhesive", "epoxy", "colle"]):
         return "glue"
     if any(term in text for term in ["tinning", "tin plating", "etamage", "etain"]):
@@ -1258,7 +1280,127 @@ def _component_id(component: Dict[str, Any], index: int) -> str:
         return "magnet_wire"
     if any(term in text for term in ["ferrite", "core", "magnetic"]):
         return "ferrite_core"
+    return None
+
+
+def _is_blank_or_numeric(value: Any) -> bool:
+    if value in (None, ""):
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    return bool(_NUMERIC_TOKEN_RE.match(text))
+
+
+def _component_id(component: Dict[str, Any], index: int) -> str:
+    text_classification = _classify_component_material(_normalized_component_identity_text(component))
+    explicit = (
+        component.get("component_id")
+        or component.get("component_code")
+        or component.get("component_reference")
+        or component.get("part_number")
+        or component.get("id")
+    )
+    if explicit not in (None, ""):
+        explicit_id = _slug(explicit, f"component_{index}")
+        aliased = _COMPONENT_ID_ALIASES.get(explicit_id)
+        if aliased:
+            return aliased
+        # An explicit id/component_id that is just a bare row number (e.g. "id": 1)
+        # or that isn't a recognized alias carries no reliable material information
+        # by itself. Prefer text-derived classification from descriptive fields,
+        # and only fall back to the raw explicit id when the text is inconclusive.
+        if text_classification:
+            return text_classification
+        return explicit_id
+    if text_classification:
+        return text_classification
     return _slug(_component_type(component), f"component_{index}")
+
+
+def _component_quantity(component: Dict[str, Any]) -> Optional[float]:
+    for key in ["quantity_per_product", "quantity_per_assembly", "quantity", "qty", "quantite"]:
+        value = component.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _component_is_excluded(component: Dict[str, Any]) -> bool:
+    """A BOM line must not be treated as a required external component when the
+    BOM itself marks it as not used (zero quantity, "not retained", excluded, ...)."""
+    quantity = _component_quantity(component)
+    if quantity is not None and quantity == 0:
+        return True
+    classification = str(
+        component.get("classification")
+        or component.get("component_classification")
+        or ""
+    ).strip().lower()
+    if classification in {"internal", "excluded", "not_required", "not_selected"}:
+        return True
+    text_fields = [
+        component.get("specification"),
+        component.get("status"),
+        component.get("validation_status"),
+        component.get("presence"),
+        component.get("note"),
+        component.get("notes"),
+        component.get("remark"),
+        component.get("comment"),
+    ]
+    text = " ".join(str(value) for value in text_fields if value not in (None, ""))
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
+    if any(marker in text for marker in _NOT_RETAINED_MARKERS):
+        return True
+    return False
+
+
+def _component_display_name(
+    component: Dict[str, Any],
+    component_id: str,
+    component_type: str,
+    route_type: Optional[str],
+) -> str:
+    """Priority order: component_name, product_designation, description,
+    designation, name, then component_id as final fallback. Never returns a
+    bare numeric row index when a descriptive field is available."""
+    candidates = [
+        component.get("component_name"),
+        component.get("product_designation"),
+        component.get("produit_designation"),
+        component.get("description"),
+        component.get("designation"),
+        component.get("name"),
+        component.get("component"),
+        component.get("product"),
+        component.get("poste"),
+    ]
+    for candidate in candidates:
+        if not _is_blank_or_numeric(candidate):
+            return str(candidate).strip()
+    return component_type or route_type or component_id or "component"
+
+
+def _component_family(component_id: str, component: Dict[str, Any]) -> Optional[str]:
+    """Derive the material family from the canonical component id first
+    (which is itself description-derived), only falling back to raw BOM
+    family/category fields for components outside the known material set.
+    This prevents a mislabeled raw "component_family" (e.g. a glue line
+    tagged "ferrite" because it fixes a ferrite core) from leaking through."""
+    label = _COMPONENT_FAMILY_LABELS.get(component_id)
+    if label:
+        return label
+    return (
+        component.get("category")
+        or component.get("component_category")
+        or component.get("component_family")
+        or component.get("family")
+    )
 
 
 def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
@@ -1321,28 +1463,20 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
         seen_component_ids.add(component_id)
         component_type = _component_type(component)
         route_type = _external_costing_route(component)
+        excluded_not_required = _component_is_excluded(component)
+        if excluded_not_required and route_type:
+            logger.info(
+                "normalize_bom: excluding component_id=%s from external costing "
+                "(quantity is zero or BOM marks it as not retained/used)",
+                component_id,
+            )
+            route_type = None
         is_external_costing = bool(route_type)
         normalized = {
             "component_id": component_id,
             "component_type": component_type or route_type or "component",
-            "component": (
-                component.get("component")
-                or component.get("product")
-                or component.get("produit_designation")
-                or component.get("poste")
-                or component.get("designation")
-                or component.get("description")
-                or component_type
-                or route_type
-                or "component"
-            ),
-            "category": (
-                component.get("category")
-                or component.get("component_category")
-                or component.get("component_family")
-                or component.get("family")
-                or route_type
-            ),
+            "component": _component_display_name(component, component_id, component_type, route_type),
+            "category": _component_family(component_id, component) or route_type,
             "quantity_per_product": (
                 component.get("quantity_per_product")
                 or component.get("quantity_per_assembly")
@@ -1354,6 +1488,7 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
             "costing_route": "external_component_costing_agent" if is_external_costing else "not_external_agent",
             "external_component_type": route_type,
             "status": component.get("status") or component.get("validation_status"),
+            "excluded_not_required": excluded_not_required,
         }
         components.append(normalized)
         if is_external_costing:
@@ -1382,24 +1517,49 @@ def _scalar_from_value(value: Any) -> Any:
     return value if value not in [None, ""] else None
 
 
-def _find_recursive_value(data: Any, keys: List[str]) -> Any:
+def _find_recursive_value(data: Any, keys: List[str], skip_keys: Optional[set] = None) -> Any:
     key_set = {key.lower() for key in keys}
+    skip = skip_keys or set()
     if isinstance(data, dict):
         for key, value in data.items():
             if str(key).lower() in key_set:
                 scalar = _scalar_from_value(value)
                 if scalar not in [None, "", [], {}]:
                     return scalar
-        for value in data.values():
-            nested = _find_recursive_value(value, keys)
+        for key, value in data.items():
+            if str(key).lower() in skip:
+                continue
+            nested = _find_recursive_value(value, keys, skip_keys)
             if nested not in [None, "", [], {}]:
                 return nested
     elif isinstance(data, list):
         for item in data:
-            nested = _find_recursive_value(item, keys)
+            nested = _find_recursive_value(item, keys, skip_keys)
             if nested not in [None, "", [], {}]:
                 return nested
     return None
+
+
+# Container keys that hold individual BOM line items (mirrors _extract_component_list's
+# candidates). The assembly-level product identity must never be resolved from a
+# descriptive field that actually belongs to one of these per-line entries.
+_BOM_LINE_CONTAINER_KEYS = {
+    "components",
+    "normalized_components",
+    "bom",
+    "line_items",
+    "bill_of_material",
+    "bill_of_materials",
+    "materials",
+    "material_lines",
+    "nomenclature",
+    "tableau_nomenclature",
+    "liste_matieres",
+    "lines",
+    "items",
+    "materiaux",
+    "matieres",
+}
 
 
 def extract_bom_technical_fields(raw_bom: Any) -> Dict[str, Any]:
@@ -1443,15 +1603,19 @@ def extract_bom_technical_fields(raw_bom: Any) -> Dict[str, Any]:
         or _scalar_from_value(source.get("product_name"))
         or _scalar_from_value(source.get("drawing_title"))
         or next(iter(product_evidence), None)
-        or _find_recursive_value(raw_bom, [
-            "product_name",
-            "product",
-            "product_designation",
-            "product_description",
-            "choke_type",
-            "product_type",
-            "drawing_title",
-        ])
+        or _find_recursive_value(
+            raw_bom,
+            [
+                "product_name",
+                "product",
+                "product_designation",
+                "product_description",
+                "choke_type",
+                "product_type",
+                "drawing_title",
+            ],
+            skip_keys=_BOM_LINE_CONTAINER_KEYS,
+        )
     )
     part_number = (
         quote_value(["part_number", "part_no", "customer_part_number", "product_reference"])
@@ -2734,10 +2898,14 @@ def _most_work_package(
 
 
 def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict[str, Any]) -> Dict[str, Any]:
+    all_components = normalized_bom.get("components") or []
+    # Components the BOM itself marked as not required (zero quantity, "not
+    # retained", ...) must not spawn a MOST work package even though they are
+    # still recorded in the normalized BOM for traceability.
     components = {
         item["component_id"]: item
-        for item in normalized_bom.get("components") or []
-        if item.get("component_id")
+        for item in all_components
+        if item.get("component_id") and not item.get("excluded_not_required")
     }
     packages: List[Dict[str, Any]] = []
     ferrite = components.get("ferrite_core")
@@ -2766,11 +2934,42 @@ def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict
         finished_components = [item for item in [ferrite, wire, tin] if item]
         packages.append(_most_work_package(state, "wp_50_electrical_test", "Electrical test", "quality_test", finished_components))
         packages.append(_most_work_package(state, "wp_60_visual_inspection_packaging", "Visual inspection and packaging", "inspection_packaging", finished_components))
+
+    if packages:
+        return {
+            "status": "created",
+            "work_packages": packages,
+            "required_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") != "blocked"],
+            "blocked_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") == "blocked"],
+            "blocked_reason": None,
+            "missing_inputs": [],
+        }
+
+    missing_inputs = []
+    if not any([ferrite, wire, tin, glue]):
+        if all_components:
+            missing_inputs.append(
+                "normalized BOM has components but none match a recognized material "
+                "family (ferrite/wire/tin/glue); check component_id/family classification"
+            )
+        else:
+            missing_inputs.append("normalized BOM has no components")
+    blocked_reason = "missing_required_components" if missing_inputs else "no_valid_work_packages"
+    logger.warning(
+        "build_most_process_decomposition blocked for %s/%s: blocked_reason=%s missing_inputs=%s component_ids=%s",
+        state.get("project_code"),
+        state.get("product_id"),
+        blocked_reason,
+        missing_inputs,
+        list(components.keys()),
+    )
     return {
-        "status": "created" if packages else "blocked",
-        "work_packages": packages,
-        "required_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") != "blocked"],
-        "blocked_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") == "blocked"],
+        "status": "blocked",
+        "work_packages": [],
+        "required_work_package_ids": [],
+        "blocked_work_package_ids": [],
+        "blocked_reason": blocked_reason,
+        "missing_inputs": missing_inputs,
     }
 
 
@@ -2820,6 +3019,35 @@ def trigger_most_operations(
     state["process_decomposition"] = process
     state["required_most_work_package_ids"] = process.get("required_work_package_ids") or []
     state.setdefault("most", {})
+
+    if process.get("status") == "blocked":
+        state["missing_outputs"] = [
+            f"most:{item}" for item in state["required_most_work_package_ids"]
+            if (state["most"].get(item) or {}).get("status") != "received"
+        ]
+        _save_state(state)
+        logger.warning(
+            "trigger_most_operations blocked for %s/%s: blocked_reason=%s missing_inputs=%s",
+            project_code, product_id, process.get("blocked_reason"), process.get("missing_inputs"),
+        )
+        return {
+            "success": False,
+            "status": "no_most_triggered",
+            "triggered": False,
+            "reason": "process_decomposition_blocked",
+            "blocked_reason": process.get("blocked_reason"),
+            "missing_inputs": process.get("missing_inputs") or [],
+            "project_code": project_code,
+            "product_id": product_id,
+            "triggered_work_packages": [],
+            "skipped_work_packages": [],
+            "failed_work_packages": [],
+            "most_triggers": [],
+            "required_most_work_package_ids": state["required_most_work_package_ids"],
+            "process_decomposition": process,
+            "state": state,
+        }
+
     triggered, skipped, failed = [], [], []
     for work_package in process.get("work_packages") or []:
         work_package_id = work_package["work_package_id"]
@@ -2874,14 +3102,26 @@ def trigger_most_operations(
         state["status"] = "most_triggered"
         state["current_step"] = "Step 3 MOST Agent"
     _save_state(state)
+    if triggered:
+        success, reason = True, None
+    elif failed:
+        success, reason = False, "trigger_failed"
+    elif skipped:
+        success, reason = True, "already_triggered"
+    else:
+        success, reason = True, "nothing_to_trigger"
     return {
+        "success": success,
         "status": "most_triggered" if triggered else ("most_trigger_failed" if failed else "no_most_triggered"),
+        "triggered": bool(triggered),
+        "reason": reason,
         "project_code": project_code,
         "product_id": product_id,
         "triggered_work_packages": triggered,
         "skipped_work_packages": skipped,
         "failed_work_packages": failed,
         "most_triggers": [state["most"][item["work_package_id"]] for item in triggered],
+        "required_most_work_package_ids": required_ids,
         "process_decomposition": process,
         "state": state,
     }
