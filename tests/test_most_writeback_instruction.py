@@ -6,9 +6,6 @@ BOM_INSTRUCTION = (
     "Analyze the drawing according to your permanent agent instructions and call "
     "save_bom_output with the complete BOM JSON."
 )
-COMPONENT_INSTRUCTION = (
-    "Cost only this component. Return one complete JSON and call save_component_output."
-)
 
 
 def _state():
@@ -86,7 +83,7 @@ def test_most_payload_fields_and_identity_are_unchanged():
     assert payload["save_address"].endswith("agent_outputs/most/wp_20_wire_winding.json")
 
 
-def test_bom_and_component_instructions_remain_unchanged():
+def test_bom_instruction_unchanged_and_component_instruction_requires_pricing_basis():
     bom = workflow._build_bom_trigger_payload(
         "TEST-PROJECT",
         "TEST-PRODUCT",
@@ -108,4 +105,10 @@ def test_bom_and_component_instructions_remain_unchanged():
     )
 
     assert bom["payload"]["instruction"] == BOM_INSTRUCTION
-    assert component["instruction"] == COMPONENT_INSTRUCTION
+    # The component instruction was hardened (Phase 6) to require an explicit
+    # pricing basis/currency for every priced value, closing the unit-mismatch
+    # gap that let a wire developed-length get costed as if it were a kg price.
+    assert component["instruction"] == workflow.COMPONENT_COSTING_INSTRUCTION
+    assert "unit_price_basis" in component["instruction"]
+    assert "unit_price_currency" in component["instruction"]
+    assert "transportation_cost_basis" in component["instruction"]

@@ -66,6 +66,18 @@ MOST_WRITEBACK_INSTRUCTION = (
     "MOST_WRITEBACK_FAILED."
 )
 
+COMPONENT_COSTING_INSTRUCTION = (
+    "Cost only this component. Return one complete JSON and call save_component_output. "
+    "In recommended_offer, always provide unit_price, unit_price_currency, and "
+    "unit_price_basis (for example CNY/kg, CNY/pc, or CNY/m) describing exactly what "
+    "one unit of unit_price_basis represents. Never state a price without its basis. "
+    "For each of transportation_cost_per_piece, customs_cost_per_piece, and "
+    "forwarder_cost_per_piece that you provide, also provide the matching "
+    "transportation_cost_basis, customs_cost_basis, and forwarder_cost_basis field "
+    "(for example CNY/kg, CNY/pc, CNY/shipment, or percentage_of_component_value). "
+    "Do not report a technical length or mass as a piece quantity."
+)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -2525,7 +2537,7 @@ def _component_trigger_payload(
         "bom_source_path": (state.get("bom") or {}).get("normalized_path"),
         "manufacturing_strategy": state.get("manufacturing_strategy") or {},
         "save_address": _relative(_component_output_path(state["project_code"], state["product_id"], component_id)),
-        "instruction": "Cost only this component. Return one complete JSON and call save_component_output.",
+        "instruction": COMPONENT_COSTING_INSTRUCTION,
     }
 
 
@@ -2712,6 +2724,16 @@ def normalize_component_output(
         "capital_cost_per_piece": _output_value(offer, "capital_cost_per_piece", "capital_cost"),
         "cash_locked_per_piece": _output_value(offer, "cash_locked_per_piece", "cash_locked"),
         "delivered_cost_per_piece": _output_value(offer, "delivered_cost_per_piece", "delivered_cost"),
+        # Explicit pricing-unit fields (services/choke_component_costing.py). A
+        # legacy offer that only sets price_in_reporting_currency with no
+        # stated basis intentionally leaves unit_price_basis unset, so final
+        # costing blocks instead of assuming a unit.
+        "unit_price": _output_value(offer, "unit_price", "price_in_reporting_currency"),
+        "unit_price_currency": _output_value(offer, "unit_price_currency", "supplier_currency", "currency"),
+        "unit_price_basis": _output_value(offer, "unit_price_basis", "pricing_unit"),
+        "transportation_cost_per_piece_basis": _output_value(offer, "transportation_cost_basis", "transportation_cost_per_piece_basis"),
+        "customs_cost_per_piece_basis": _output_value(offer, "customs_cost_basis", "customs_cost_per_piece_basis"),
+        "forwarder_cost_per_piece_basis": _output_value(offer, "forwarder_cost_basis", "forwarder_cost_per_piece_basis"),
     }
     for normalized_key, aliases in {
         "price_in_reporting_currency": ("material_cost", "price_in_reporting_currency"),
@@ -2897,6 +2919,77 @@ def _most_work_package(
     }
 
 
+def _electrical_test_required(state: Dict[str, Any], normalized_bom: Dict[str, Any]) -> bool:
+    """Electrical test is only added to the routing when there is explicit
+    technical evidence for it (a customer/BOM requirement) — the MOST Agent
+    does not get to invent it, and it is not part of the default routing.
+    A customer flag takes priority; otherwise fall back to scanning the raw
+    BOM text for an explicit requirement statement."""
+    customer_input = state.get("customer_input") or {}
+    flag = customer_input.get("electrical_test_required")
+    if flag is not None:
+        return bool(flag)
+    raw_bom_text = json.dumps(normalized_bom.get("raw_bom") or {}, ensure_ascii=False, default=str).lower()
+    return any(term in raw_bom_text for term in [
+        "electrical_test_required",
+        "electrical test required",
+        "requires electrical test",
+        "100% electrical test",
+    ])
+
+
+# Conditional operation catalog for the Fuse choke product family: the
+# backend selects which of these apply from normalized BOM component
+# families and technical evidence; the MOST Agent then estimates only the
+# selected operations rather than proposing the overall routing itself.
+_MOST_OPERATION_CATALOG = [
+    {
+        "operation_id": "wp_10_ferrite_handling",
+        "operation_name": "Ferrite handling",
+        "operation_family": "material_handling",
+        "applies": lambda ctx: bool(ctx["ferrite"]),
+        "components": lambda ctx: [ctx["ferrite"]],
+    },
+    {
+        "operation_id": "wp_20_wire_winding",
+        "operation_name": "Wire winding",
+        "operation_family": "winding",
+        "applies": lambda ctx: bool(ctx["wire"]),
+        "components": lambda ctx: [item for item in [ctx["wire"], ctx["ferrite"]] if item],
+    },
+    {
+        "operation_id": "wp_30_lead_tinning",
+        "operation_name": "Lead tinning",
+        "operation_family": "tinning",
+        "applies": lambda ctx: bool(ctx["tin"]),
+        "components": lambda ctx: [ctx["tin"]],
+    },
+    {
+        "operation_id": "wp_40_glue_application_baking",
+        "operation_name": "Glue application and baking",
+        "operation_family": "gluing_baking",
+        "applies": lambda ctx: bool(ctx["glue"]),
+        "components": lambda ctx: [item for item in [ctx["glue"], ctx["ferrite"]] if item],
+        "is_blocked": lambda ctx: bool(ctx["glue"]) and _component_status_is_unconfirmed(ctx["glue"]),
+        "blocking_reason": "Glue requirement must be confirmed before MOST analysis.",
+    },
+    {
+        "operation_id": "wp_50_electrical_test",
+        "operation_name": "Electrical test",
+        "operation_family": "quality_test",
+        "applies": lambda ctx: bool(ctx["electrical_test_required"] and (ctx["ferrite"] or ctx["wire"])),
+        "components": lambda ctx: [item for item in [ctx["ferrite"], ctx["wire"], ctx["tin"]] if item],
+    },
+    {
+        "operation_id": "wp_60_visual_inspection_packaging",
+        "operation_name": "Visual inspection and packaging",
+        "operation_family": "inspection_packaging",
+        "applies": lambda ctx: any([ctx["ferrite"], ctx["wire"], ctx["tin"], ctx["glue"]]),
+        "components": lambda ctx: [item for item in [ctx["ferrite"], ctx["wire"], ctx["tin"]] if item],
+    },
+]
+
+
 def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict[str, Any]) -> Dict[str, Any]:
     all_components = normalized_bom.get("components") or []
     # Components the BOM itself marked as not required (zero quantity, "not
@@ -2907,33 +3000,30 @@ def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict
         for item in all_components
         if item.get("component_id") and not item.get("excluded_not_required")
     }
+    context = {
+        "ferrite": components.get("ferrite_core"),
+        "wire": components.get("magnet_wire"),
+        "tin": components.get("lead_tinning"),
+        "glue": components.get("glue"),
+        "electrical_test_required": _electrical_test_required(state, normalized_bom),
+    }
+    ferrite, wire, tin, glue = context["ferrite"], context["wire"], context["tin"], context["glue"]
+
     packages: List[Dict[str, Any]] = []
-    ferrite = components.get("ferrite_core")
-    wire = components.get("magnet_wire")
-    tin = components.get("lead_tinning")
-    glue = components.get("glue")
-    if ferrite:
-        packages.append(_most_work_package(state, "wp_10_ferrite_handling", "Ferrite handling", "material_handling", [ferrite]))
-    if wire:
-        winding_components = [wire] + ([ferrite] if ferrite else [])
-        packages.append(_most_work_package(state, "wp_20_wire_winding", "Wire winding", "winding", winding_components))
-    if tin:
-        packages.append(_most_work_package(state, "wp_30_lead_tinning", "Lead tinning", "tinning", [tin]))
-    if glue:
-        glue_unconfirmed = _component_status_is_unconfirmed(glue)
+    for entry in _MOST_OPERATION_CATALOG:
+        if not entry["applies"](context):
+            continue
+        entry_components = entry["components"](context)
+        is_blocked = entry.get("is_blocked", lambda ctx: False)(context)
         packages.append(_most_work_package(
             state,
-            "wp_40_glue_application_baking",
-            "Glue application and baking",
-            "gluing_baking",
-            [glue] + ([ferrite] if ferrite else []),
-            status="blocked" if glue_unconfirmed else "pending",
-            blocking_reason="Glue requirement must be confirmed before MOST analysis." if glue_unconfirmed else None,
+            entry["operation_id"],
+            entry["operation_name"],
+            entry["operation_family"],
+            entry_components,
+            status="blocked" if is_blocked else "pending",
+            blocking_reason=entry.get("blocking_reason") if is_blocked else None,
         ))
-    if ferrite or wire:
-        finished_components = [item for item in [ferrite, wire, tin] if item]
-        packages.append(_most_work_package(state, "wp_50_electrical_test", "Electrical test", "quality_test", finished_components))
-        packages.append(_most_work_package(state, "wp_60_visual_inspection_packaging", "Visual inspection and packaging", "inspection_packaging", finished_components))
 
     if packages:
         return {
@@ -3306,6 +3396,33 @@ def _saved_bom_quantity_map(raw_bom: Dict[str, Any]) -> Dict[str, float]:
     return quantities
 
 
+def _saved_bom_dimensional_map(raw_bom: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Per-component dimensional/technical fields, kept distinct from any
+    single "quantity_per_product" so BOM piece count, physical length,
+    physical mass, and a supplier's priced quantity are never conflated.
+    See services/choke_component_costing.py for how these feed cost calc."""
+    dimensional: Dict[str, Dict[str, Any]] = {}
+    for index, component in enumerate(_extract_component_list(raw_bom), start=1):
+        component_id = _component_id(component, index)
+        raw_qty = component.get("quantity_per_product") or component.get("quantity") or component.get("qty")
+        dimensional[component_id] = {
+            "component_family": _component_family(component_id, component),
+            "weight_kg_per_product": component.get("weight_kg_per_product") or component.get("weight_kg") or component.get("part_weight_kg"),
+            "physical_mass_g_per_product": component.get("mass_g_per_product") or component.get("physical_mass_g_per_product"),
+            "physical_length_mm_per_product": (
+                component.get("developed_length_mm")
+                or component.get("wire_length_mm")
+                or component.get("total_length_mm")
+                or component.get("physical_length_mm_per_product")
+            ),
+            "diameter_mm": component.get("diameter_mm") or component.get("wire_diameter_mm") or component.get("wire_diameter"),
+            "bom_count_per_product": component.get("bom_count_per_product"),
+            "quantity_per_product": _float(raw_qty),
+            "quantity_unit": component.get("quantity_unit") or component.get("unit"),
+        }
+    return dimensional
+
+
 def _saved_component_cost(raw: Dict[str, Any]) -> Optional[float]:
     return _float(_first_value(raw, [
         ["normalized_cost", "material_cost_per_piece"],
@@ -3413,7 +3530,7 @@ def calculate_final_choke_costing_from_saved_outputs(
     if raw_bom is None:
         missing_inputs.append("bom")
         raw_bom = {}
-    quantity_by_component = _saved_bom_quantity_map(raw_bom)
+    dimensional_by_component = _saved_bom_dimensional_map(raw_bom)
 
     component_outputs = _load_saved_component_outputs(project_code, product_id)
     if not component_outputs:
@@ -3428,39 +3545,53 @@ def calculate_final_choke_costing_from_saved_outputs(
         raw = component.get("agent_raw_output") or component
         component_id = component.get("component_id") or raw.get("component_id")
         output_component_ids.add(component_id)
-        quantity = quantity_by_component.get(component_id, 1.0)
-        unit_material_cost = _saved_component_cost(raw)
-        if unit_material_cost is None:
-            missing_inputs.append(f"component_outputs:{component_id}:material_cost")
+        bom_fields = dimensional_by_component.get(component_id, {})
+        pricing_quantity_info = component_costing.resolve_component_pricing_quantity(
+            component_id, bom_fields.get("component_family"), bom_fields, raw,
+        )
+        price_info = component_costing.resolve_unit_price(raw)
+        material_result = component_costing.compute_component_material_cost(
+            component_id, pricing_quantity_info, price_info,
+        )
+        if material_result["status"] == "blocked":
+            missing_inputs.append(f"component_outputs:{component_id}:{material_result['reason']}")
             line_material_cost = None
         else:
-            line_material_cost = quantity * unit_material_cost
+            line_material_cost = material_result["material_cost_per_product"]
             material_cost_per_piece += line_material_cost
-        transportation = _saved_transport_value(raw, ["transportation_cost", "transport_cost"])
-        custom_duty = _saved_transport_value(raw, ["custom_duty_cost", "customs_duty_cost", "duty_cost"])
-        forwarder = _saved_transport_value(raw, ["forwarder_cost", "forwarding_cost"])
-        line_transport = quantity * (transportation + custom_duty + forwarder)
-        transport_cost_per_piece += line_transport
+
+        transport_result = component_costing.compute_component_transport_cost(
+            component_id, raw, pricing_quantity_info, line_material_cost,
+        )
+        if transport_result["status"] == "blocked":
+            missing_inputs.append(f"component_outputs:{component_id}:{transport_result['reason']}")
+            line_transport = None
+        else:
+            line_transport = transport_result["transport_cost_per_product"]
+            transport_cost_per_piece += line_transport
         currency = _saved_component_currency(raw)
         component_breakdown.append({
             "component_id": component_id,
-            "quantity_per_product": quantity,
-            "unit_material_or_delivered_cost": unit_material_cost,
+            "pricing_quantity": pricing_quantity_info.get("pricing_quantity"),
+            "pricing_unit": pricing_quantity_info.get("pricing_unit"),
+            "pricing_quantity_basis": pricing_quantity_info.get("pricing_quantity_basis"),
+            "unit_material_or_delivered_cost": price_info.get("unit_price"),
             "material_cost_per_piece": line_material_cost,
             "currency": currency,
             "source": "saved_component_json",
+            "status": material_result["status"],
         })
         transport_breakdown.append({
             "component_id": component_id,
-            "quantity_per_product": quantity,
-            "transportation_cost": transportation,
-            "custom_duty_cost": custom_duty,
-            "forwarder_cost": forwarder,
+            "pricing_quantity": pricing_quantity_info.get("pricing_quantity"),
+            "pricing_unit": pricing_quantity_info.get("pricing_unit"),
+            "logistics_breakdown": transport_result.get("logistics_breakdown"),
             "transport_cost_per_piece": line_transport,
             "currency": currency,
+            "status": transport_result["status"],
         })
 
-    for component_id in quantity_by_component:
+    for component_id in dimensional_by_component:
         if component_id not in output_component_ids and component_id not in {"lead_tin_plating", "tin_plating"}:
             warnings.append(f"no saved component JSON found for BOM component {component_id}")
 
@@ -3491,21 +3622,28 @@ def calculate_final_choke_costing_from_saved_outputs(
     voh_cost = dl_voh.get("voh_cost_per_piece")
     foh_percent = _float(unit_data.get("foh_percent_dc")) or 0.0
     fee_percent = _float(unit_data.get("fee_percent_dc")) or 0.0
+    unique_missing = list(dict.fromkeys(missing_inputs))
+
+    # Olivier's preliminary plant-percentage formula:
+    #   direct_cost = dl + voh + transport
+    #   foh = direct_cost * foh_percent_dc / 100 ; fee = direct_cost * fee_percent_dc / 100
+    # Only computed once every input is fully resolved (no blocked component,
+    # no blocked MOST scope) so a "blocked" result never carries partial numbers.
     direct_cost = None
     foh_cost = None
     fee_cost = None
     manufacturing_cost = None
-    if dl_cost is not None and voh_cost is not None:
+    if not unique_missing and dl_cost is not None and voh_cost is not None:
         direct_cost = dl_cost + voh_cost + transport_cost_per_piece
         foh_cost = foh_percent / 100 * direct_cost
         fee_cost = fee_percent / 100 * direct_cost
         manufacturing_cost = direct_cost + foh_cost + fee_cost
 
-    unique_missing = list(dict.fromkeys(missing_inputs))
     result = {
         "project_code": project_code,
         "product_id": product_id,
         "status": "blocked" if unique_missing else "calculated",
+        "costing_method": "preliminary_plant_percentage_dc",
         "currency": unit_data.get("selling_currency") or next(
             (item.get("currency") for item in component_breakdown if item.get("currency")),
             "",
@@ -3571,13 +3709,25 @@ def _normalize_component_output(path: Path) -> Dict[str, Any]:
 
 
 def _normalize_most_output(path: Path) -> Dict[str, Any]:
+    """Adapts a saved MOST output into the shape calculate_dl_voh expects.
+    MOST agent outputs commonly nest p_h/operator_percent/CAPEX/tooling
+    fields under `station_library_summary` rather than at the operation's
+    top level; every field here checks both locations. An operation that
+    explicitly reports p_h=0 and operator_percent=0 (a station with no
+    internal AVOCarbon operation) is preserved as explicit zero rather than
+    being treated the same as a genuinely missing field — calculate_dl_voh
+    is responsible for not blocking on that specific combination."""
     raw = _read_json(path, {}) or {}
     work_package_id = raw.get("work_package_id") or path.stem
     normalized_operation = raw.get("normalized_operation") or raw.get("operation_details") or raw
     cycle_time = _float(_first_value(normalized_operation, [["cycle_time_seconds"], ["operation_cycle_time_seconds"]]))
-    p_h = _float(_first_value(normalized_operation, [["p_h"], ["station_library_summary", "p_h"], ["rate_per_hour_instantaneous"]]))
-    parts_per_cycle = _float(_first_value(normalized_operation, [["parts_per_cycle"], ["pieces_per_cycle"]])) or 1.0
-    if p_h in [None, 0] and cycle_time not in [None, 0]:
+    p_h = _float(_first_value(normalized_operation, [
+        ["p_h"], ["station_library_summary", "p_h"], ["rate_per_hour_instantaneous"],
+    ]))
+    parts_per_cycle = _float(_first_value(normalized_operation, [
+        ["parts_per_cycle"], ["station_library_summary", "parts_per_cycle"], ["pieces_per_cycle"],
+    ])) or 1.0
+    if p_h is None and cycle_time not in [None, 0]:
         p_h = 3600 / cycle_time * parts_per_cycle
     output = {
         **raw,
@@ -3586,13 +3736,31 @@ def _normalize_most_output(path: Path) -> Dict[str, Any]:
         "operation_id": raw.get("operation_id") or normalized_operation.get("operation_id"),
         "operation_name": raw.get("operation_name") or normalized_operation.get("operation_name") or raw.get("operation"),
         "p_h": p_h,
-        "oee": _first_value(normalized_operation, [["oee"], ["oee_percent"], ["costing_oee_percent"]]),
-        "operator_percent": _first_value(normalized_operation, [["operator_percent"], ["percent_operator"]]),
+        "oee": _first_value(normalized_operation, [
+            ["oee"], ["oee_percent"], ["costing_oee_percent"], ["station_library_summary", "oee"],
+        ]),
+        "operator_percent": _first_value(normalized_operation, [
+            ["operator_percent"], ["percent_operator"], ["station_library_summary", "operator_percent"],
+        ]),
         "parts_per_cycle": parts_per_cycle,
-        "generic_capex_eur": _first_value(normalized_operation, [["generic_capex_eur"], ["generic_capex"]]),
-        "specific_capex_eur": _first_value(normalized_operation, [["specific_capex_eur"], ["specific_capex"]]),
-        "tooling_cost_eur": _first_value(normalized_operation, [["tooling_cost_eur"], ["tooling_cost"]]),
-        "tooling_adder_per_piece_eur": _first_value(normalized_operation, [["tooling_adder_per_piece_eur"]]),
+        "generic_capex_eur": _first_value(normalized_operation, [
+            ["generic_capex_eur"], ["generic_capex"], ["station_library_summary", "generic_capex_eur"],
+        ]),
+        "specific_capex_eur": _first_value(normalized_operation, [
+            ["specific_capex_eur"], ["specific_capex"], ["station_library_summary", "specific_capex_eur"],
+        ]),
+        "tooling_cost_eur": _first_value(normalized_operation, [
+            ["tooling_cost_eur"], ["tooling_cost"], ["station_library_summary", "tooling_cost_eur"],
+        ]),
+        "tooling_life_pieces": _first_value(normalized_operation, [
+            ["tooling_life_pieces"], ["station_library_summary", "tooling_life_pieces"],
+        ]),
+        "tooling_type": _first_value(normalized_operation, [
+            ["tooling_type"], ["station_library_summary", "tooling_type"],
+        ]),
+        "tooling_adder_per_piece_eur": _first_value(normalized_operation, [
+            ["tooling_adder_per_piece_eur"], ["station_library_summary", "tooling_adder_per_piece_eur"],
+        ]),
         "agent_raw_output": raw,
     }
     return output

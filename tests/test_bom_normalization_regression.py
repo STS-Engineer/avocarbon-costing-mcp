@@ -161,13 +161,15 @@ def test_process_decomposition_generates_work_packages_for_valid_bom():
 
     assert process["status"] == "created"
     work_package_ids = {item["work_package_id"] for item in process["work_packages"]}
+    # wp_50_electrical_test is conditional on explicit technical evidence
+    # (Phase 6 G) and is not part of the default routing.
     assert work_package_ids == {
         "wp_10_ferrite_handling",
         "wp_20_wire_winding",
         "wp_30_lead_tinning",
-        "wp_50_electrical_test",
         "wp_60_visual_inspection_packaging",
     }
+    assert "wp_50_electrical_test" not in work_package_ids
     # Glue is excluded (zero qty / not retained) so no gluing work package is created.
     assert "wp_40_glue_application_baking" not in work_package_ids
     assert process["blocked_reason"] is None
@@ -304,7 +306,6 @@ def test_trigger_most_triggers_pending_packages_and_moves_state(monkeypatch):
         "wp_10_ferrite_handling",
         "wp_20_wire_winding",
         "wp_30_lead_tinning",
-        "wp_50_electrical_test",
         "wp_60_visual_inspection_packaging",
     }
     assert state["status"] == "most_triggered"

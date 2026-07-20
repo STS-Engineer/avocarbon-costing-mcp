@@ -1,6 +1,8 @@
 import math
 import re
 
+from services import choke_component_costing
+
 
 def _coerce_number(value):
     if value in [None, ""]:
@@ -78,30 +80,27 @@ def _as_component_entries(value):
     return []
 
 
-def _component_quantity(entry, raw):
-    return _coerce_number(
-        entry.get("quantity_per_product")
-        or entry.get("quantity")
-        or entry.get("qty")
-        or raw.get("quantity_per_product")
-        or raw.get("quantity")
-        or 1
-    ) or 1.0
-
-
-def _component_supply_chain_value(raw, names):
-    paths = []
-    for name in names:
-        paths.extend([
-            ["recommended_offer", "supply_chain", name],
-            ["supply_chain", name],
-            ["normalized_cost", name],
-            [name],
-        ])
-    return _coerce_number(_first_value(raw, paths)) or 0.0
+def _entry_bom_fields(entry, raw):
+    """Best-effort dimensional fields for callers (e.g. the orchestrator demo
+    path) that don't go through the full BOM dimensional map built in
+    choke_sequential_agent_workflow.calculate_final_choke_costing_from_saved_outputs."""
+    return {
+        "weight_kg_per_product": entry.get("weight_kg_per_product") or raw.get("weight_kg_per_product"),
+        "physical_mass_g_per_product": entry.get("physical_mass_g_per_product") or raw.get("physical_mass_g_per_product"),
+        "physical_length_mm_per_product": entry.get("physical_length_mm_per_product") or raw.get("developed_length_mm"),
+        "diameter_mm": entry.get("diameter_mm") or raw.get("diameter_mm"),
+        "bom_count_per_product": entry.get("bom_count_per_product"),
+        "quantity_per_product": _coerce_number(entry.get("quantity_per_product") or raw.get("quantity_per_product")),
+        "quantity_unit": entry.get("quantity_unit") or raw.get("quantity_unit"),
+    }
 
 
 def calculate_transport_cost_from_components(component_entries):
+    """Olivier's component-level rule: transport + customs + forwarder, each
+    converted to the BOM pricing quantity's own basis before summing. See
+    services/choke_component_costing.py for the unit-safe implementation —
+    this must never multiply a per-kg/per-m rate by a raw piece count (or
+    vice versa) the way the naive `quantity * (t + d + f)` formula used to."""
     transport_breakdown = []
     missing_inputs = []
     total_transport = 0.0
@@ -109,36 +108,35 @@ def calculate_transport_cost_from_components(component_entries):
     for entry in _as_component_entries(component_entries):
         raw = entry.get("agent_raw_output") or entry.get("raw_json") or entry
         component_id = entry.get("component_id") or raw.get("component_id") or raw.get("component_reference")
-        quantity = _component_quantity(entry, raw)
-        transportation = _component_supply_chain_value(raw, [
-            "transportation_cost",
-            "transport_cost",
-        ])
-        duty = _component_supply_chain_value(raw, [
-            "custom_duty_cost",
-            "customs_duty_cost",
-            "duty_cost",
-        ])
-        forwarder = _component_supply_chain_value(raw, [
-            "forwarder_cost",
-            "forwarding_cost",
-        ])
-        component_total = quantity * (transportation + duty + forwarder)
+        bom_fields = _entry_bom_fields(entry, raw)
+        pricing_quantity_info = choke_component_costing.resolve_component_pricing_quantity(
+            component_id, entry.get("component_type") or entry.get("component_family"), bom_fields, raw,
+        )
+        price_info = choke_component_costing.resolve_unit_price(raw)
+        material_result = choke_component_costing.compute_component_material_cost(
+            component_id, pricing_quantity_info, price_info,
+        )
+        material_cost = material_result.get("material_cost_per_product") if material_result["status"] == "calculated" else None
+
+        transport_result = choke_component_costing.compute_component_transport_cost(
+            component_id, raw, pricing_quantity_info, material_cost,
+        )
+        if transport_result["status"] == "blocked":
+            missing_inputs.append(f"{component_id}: {transport_result['reason']}")
+            component_total = 0.0
+            logistics_breakdown = {}
+        else:
+            component_total = transport_result["transport_cost_per_product"]
+            logistics_breakdown = transport_result.get("logistics_breakdown") or {}
         total_transport += component_total
-        has_transport_fields = any([
-            transportation,
-            duty,
-            forwarder,
-            _first_value(raw, [["recommended_offer", "supply_chain"]]) is not None,
-        ])
-        if not has_transport_fields and entry.get("costing_status") == "available":
-            missing_inputs.append(f"{component_id} transport/duty/forwarder cost")
+
         transport_breakdown.append({
             "component_id": component_id,
-            "quantity_per_product": quantity,
-            "transportation_cost_per_component": transportation,
-            "custom_duty_cost_per_component": duty,
-            "forwarder_cost_per_component": forwarder,
+            "pricing_quantity": pricing_quantity_info.get("pricing_quantity"),
+            "pricing_unit": pricing_quantity_info.get("pricing_unit"),
+            "transportation_cost_per_component": (logistics_breakdown.get("transport") or {}).get("converted_value", 0.0),
+            "custom_duty_cost_per_component": (logistics_breakdown.get("customs") or {}).get("converted_value", 0.0),
+            "forwarder_cost_per_component": (logistics_breakdown.get("forwarder") or {}).get("converted_value", 0.0),
             "transport_cost_per_piece": component_total,
             "currency": (
                 _first_value(raw, [
@@ -186,6 +184,12 @@ def apply_olivier_direct_foh_fee(dl_voh_result, unit_data, transport_result=None
         "fee_cost_per_piece": fee_cost,
         "manufacturing_cost_per_piece": manufacturing_cost,
         "missing_inputs": transport_result.get("missing_inputs") or [],
+        # This is the preliminary plant-percentage costing method (direct_cost
+        # x flat unit_data.foh_percent_dc / fee_percent_dc). It intentionally
+        # does not replicate the legacy workbook's ROCE-lock / sales-tier /
+        # min-max FOH-Fee commercial-pricing mechanism, which belongs to a
+        # later commercial-pricing layer.
+        "costing_method": "preliminary_plant_percentage_dc",
     }
 
 
@@ -278,33 +282,63 @@ def calculate_dl_voh(work_packages_or_most_outputs, unit_data, annual_quantity, 
         parts_per_cycle = _coerce_number(_first_value(operation, [
             ["parts_per_cycle"],
             ["pieces_per_cycle"],
+            ["station_library_summary", "parts_per_cycle"],
         ])) or 1.0
         operator_percent_decimal = _normalize_percent(_first_value(operation, [
             ["operator_percent"],
             ["percent_operator"],
             ["operator_percent_decimal"],
+            ["station_library_summary", "operator_percent"],
         ]))
         generic_capex = _coerce_number(_first_value(operation, [
             ["generic_capex_eur"],
             ["generic_capex"],
+            ["station_library_summary", "generic_capex_eur"],
         ])) or 0.0
         specific_capex = _coerce_number(_first_value(operation, [
             ["specific_capex_eur"],
             ["specific_capex"],
+            ["station_library_summary", "specific_capex_eur"],
         ])) or 0.0
         tooling_cost = _coerce_number(_first_value(operation, [
             ["tooling_cost_eur"],
             ["tooling_cost"],
+            ["station_library_summary", "tooling_cost_eur"],
         ]))
         tooling_life = _coerce_number(_first_value(operation, [
             ["tooling_life_pieces"],
             ["tooling_life_parts"],
             ["tooling_lifetime_parts"],
+            ["station_library_summary", "tooling_life_pieces"],
         ]))
-        tooling_type = str(_first_value(operation, [["tooling_type"]]) or "").lower()
+        tooling_type = str(_first_value(operation, [
+            ["tooling_type"], ["station_library_summary", "tooling_type"],
+        ]) or "").lower()
         tooling_adder_per_piece = _coerce_number(_first_value(operation, [
             ["tooling_adder_per_piece_eur"],
+            ["station_library_summary", "tooling_adder_per_piece_eur"],
         ])) or 0.0
+
+        # A station explicitly reporting p_h=0 and operator_percent=0 together
+        # means "no internal AVOCarbon operation here" (e.g. a fully external
+        # or customer-performed step), not "data missing". Preserve that as a
+        # zero-cost, non-blocking operation instead of collapsing it into the
+        # same bucket as a genuinely absent field.
+        if p_h == 0 and operator_percent_decimal == 0:
+            total_tooling_adder += tooling_adder_per_piece
+            work_package_calculation.append({
+                "work_package_id": work_package_id,
+                "operation_name": operation_name,
+                "status": "external_zero_cost",
+                "p_h": 0.0,
+                "oee": oee,
+                "operator_percent_decimal": 0.0,
+                "dl_cost_per_piece": 0.0,
+                "voh_cost_per_piece": 0.0,
+                "tooling_adder_per_piece": tooling_adder_per_piece,
+                "raw_operation": work_package,
+            })
+            continue
 
         operation_missing = []
         if p_h in [None, 0]:
