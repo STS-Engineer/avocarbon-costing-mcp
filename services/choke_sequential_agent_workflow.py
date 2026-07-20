@@ -10,7 +10,7 @@ from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+from services import choke_component_costing as component_costing
 from services.choke_financial_calculation import calculate_dl_voh
 from services.choke_orchestrator import run_choke_orchestration
 from services.choke_process_decomposition import decompose_choke_process
