@@ -1,3 +1,6 @@
+from services.currency_service import normalize_currency_code
+
+
 def _has_value(value):
     return value not in [None, "", [], {}]
 
@@ -46,7 +49,7 @@ def normalize_customer_input(raw):
             "qmax",
             "quantity",
         ])),
-        "currency": _first(raw, ["currency", "target_price_currency"]),
+        "currency": normalize_currency_code(_first(raw, ["currency", "target_price_currency"])),
         "target_price": _number(_first(raw, ["target_price", "target_price_value"])),
         "sop_date": _first(raw, ["sop_date", "sop", "sop_year"]),
     }

@@ -26,6 +26,22 @@ family_routing:
   spring: Spring prompt V1
 output_contract:
   format: JSON only
+  recommended_offer_required_fields:
+    - supplier
+    - unit_price
+    - currency
+    - pricing_unit
+    - pricing_basis
+    - incoterm
+    - origin
+    - transport
+    - customs
+    - forwarder_fee
+  priced_value_rule: A numerical price without currency or pricing_unit is incomplete.
+  conversion_metadata_rule: >
+    When converting a supplier price, include original_unit_price,
+    original_currency, conversion_rate, conversion_rate_date,
+    converted_unit_price, and converted_currency.
   classification_field: External
   sourcing_origin_rule: Actual sourcing origin must only be placed in recommended_offer.origin.
   quotation_rule: Do not present the result as a supplier quotation.

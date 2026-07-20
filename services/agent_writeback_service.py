@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.choke_orchestrator import run_choke_orchestration
+from services import choke_component_costing
 from services.project_data_paths import (
     BACKEND_ROOT,
     CUSTOMER_INPUT_DIR,
@@ -474,12 +475,8 @@ def _normalize_component_output(path: Path) -> Dict[str, Any]:
         ["normalized_cost", "material_cost_per_piece"],
         ["material_cost_per_piece"],
     ]))
-    currency = _first_value(raw_json, [
-        ["normalized_cost", "currency"],
-        ["recommended_offer", "reporting_currency"],
-        ["recommended_offer", "purchasing_currency"],
-        ["currency"],
-    ])
+    normalized_offer = choke_component_costing.resolve_component_offer(raw_json)
+    currency = normalized_offer.get("currency")
     normalized_cost = dict(raw_json.get("normalized_cost") or {})
     normalized_cost.update({
         "currency": currency or normalized_cost.get("currency") or "",
@@ -489,11 +486,17 @@ def _normalize_component_output(path: Path) -> Dict[str, Any]:
         "commercially_usable": bool(normalized_cost.get("commercially_usable")),
         "missing_inputs": normalized_cost.get("missing_inputs") or [],
     })
+    if normalized_offer.get("unit_price") is not None:
+        if not normalized_offer.get("currency"):
+            normalized_cost["missing_inputs"].append("recommended_offer.currency")
+        if not normalized_offer.get("pricing_unit"):
+            normalized_cost["missing_inputs"].append("recommended_offer.pricing_unit")
     return {
         **raw_json,
         "component_id": component_id,
         "component_type": component_type,
         "normalized_cost": normalized_cost,
+        "normalized_offer": normalized_offer,
         "raw_json": raw_json,
     }
 

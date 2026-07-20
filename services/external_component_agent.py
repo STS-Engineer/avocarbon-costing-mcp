@@ -152,6 +152,14 @@ Selected component family: {classified_family}
 Selected prompt file: {selected_prompt_file}
 Classification field in output must always be: External
 Actual sourcing origin must only be placed in recommended_offer.origin.
+For every numerical offer, recommended_offer must contain supplier, unit_price,
+currency, pricing_unit (pc, kg, g, or m), pricing_basis, incoterm, origin, and
+structured transport, customs, and forwarder_fee objects. Each logistics object
+must contain value, currency, and rate_basis. A price without currency or
+pricing_unit is incomplete. If you convert a supplier price, also include
+original_unit_price, original_currency, conversion_rate, conversion_rate_date,
+converted_unit_price, and converted_currency. Never inherit supplier-offer
+currency from the production plant.
 Use AVOCarbon Purchasing data.xlsx as internal purchasing benchmark when available.
 Prefer local-for-local sourcing when credible.
 Do not present the result as a supplier quotation.

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from services.manufacturing_strategy import select_manufacturing_strategy
 from services.unit_table_service import get_unit_data
+from services.currency_service import normalize_currency_code
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -369,7 +370,11 @@ def get_master_manufacturing_strategy(product_line, product, delivery_zone):
 def get_master_unit_data(production_plant):
     db_result = get_unit_data_from_db(production_plant)
     if db_result.get("status") == "found":
-        return db_result
+        return {
+            **db_result,
+            "selling_currency": normalize_currency_code(db_result.get("selling_currency")),
+            "operating_currency": normalize_currency_code(db_result.get("operating_currency")),
+        }
 
     csv_result = get_unit_data(production_plant)
     csv_result = {
@@ -378,4 +383,8 @@ def get_master_unit_data(production_plant):
         "source_detail": csv_result.get("source"),
         "database_unit_status": db_result,
     }
-    return csv_result
+    return {
+        **csv_result,
+        "selling_currency": normalize_currency_code(csv_result.get("selling_currency")),
+        "operating_currency": normalize_currency_code(csv_result.get("operating_currency")),
+    }

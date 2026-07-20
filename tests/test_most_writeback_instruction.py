@@ -108,7 +108,8 @@ def test_bom_instruction_unchanged_and_component_instruction_requires_pricing_ba
     # The component instruction was hardened (Phase 6) to require an explicit
     # pricing basis/currency for every priced value, closing the unit-mismatch
     # gap that let a wire developed-length get costed as if it were a kg price.
-    assert component["instruction"] == workflow.COMPONENT_COSTING_INSTRUCTION
+    assert component["instruction"].startswith(workflow.COMPONENT_COSTING_INSTRUCTION)
+    assert "raw enameled wire material only" in component["instruction"]
     assert "unit_price_basis" in component["instruction"]
     assert "unit_price_currency" in component["instruction"]
     assert "transportation_cost_basis" in component["instruction"]

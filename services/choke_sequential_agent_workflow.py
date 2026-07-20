@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from services import choke_component_costing as component_costing
+from services.currency_service import normalize_currency_code, resolve_project_currency
 from services.choke_financial_calculation import calculate_dl_voh
 from services.choke_orchestrator import run_choke_orchestration
 from services.choke_process_decomposition import decompose_choke_process
@@ -68,14 +69,21 @@ MOST_WRITEBACK_INSTRUCTION = (
 
 COMPONENT_COSTING_INSTRUCTION = (
     "Cost only this component. Return one complete JSON and call save_component_output. "
-    "In recommended_offer, always provide unit_price, unit_price_currency, and "
-    "unit_price_basis (for example CNY/kg, CNY/pc, or CNY/m) describing exactly what "
-    "one unit of unit_price_basis represents. Never state a price without its basis. "
-    "For each of transportation_cost_per_piece, customs_cost_per_piece, and "
-    "forwarder_cost_per_piece that you provide, also provide the matching "
-    "transportation_cost_basis, customs_cost_basis, and forwarder_cost_basis field "
-    "(for example CNY/kg, CNY/pc, CNY/shipment, or percentage_of_component_value). "
-    "Do not report a technical length or mass as a piece quantity."
+    "A numerical offer is incomplete unless recommended_offer contains supplier, "
+    "unit_price, currency, pricing_unit (pc, kg, g, or m), pricing_basis, incoterm, "
+    "origin, and structured transport, customs, and forwarder_fee objects. Each "
+    "logistics object must contain value, currency, and rate_basis. If a supplier "
+    "contract also emits legacy compatibility fields, unit_price_currency must equal "
+    "currency, unit_price_basis must equal pricing_basis, and transportation_cost_basis, "
+    "customs_cost_basis, and forwarder_cost_basis must match the structured rate_basis values. "
+    "If a supplier "
+    "price was converted, also provide original_unit_price, original_currency, "
+    "conversion_rate, conversion_rate_date, converted_unit_price, and "
+    "converted_currency. Never omit currency or pricing_unit for a numerical price. "
+    "Never infer offer currency from the production plant. Do not report a technical "
+    "length or mass as a piece quantity. Use annual_product_quantity and the separate "
+    "annual_purchasing_quantity with annual_purchasing_unit for supplier-volume pricing; "
+    "never send metres to a supplier price basis expressed per kg."
 )
 
 
@@ -2518,26 +2526,64 @@ def _component_trigger_payload(
     customer_input = state.get("customer_input") or {}
     component_id = component["component_id"]
     component_definition = component.get("component_definition") or {}
+    component_family = component.get("external_component_type") or component.get("category")
+    dimensional_source = {**component_definition}
+    dimensional_source.setdefault("quantity_per_product", component.get("quantity_per_product"))
+    purchasing_quantity = component_costing.resolve_annual_purchasing_quantity(
+        component_id,
+        component_family,
+        component_costing.extract_bom_dimensional_fields(component_id, dimensional_source),
+        customer_input.get("annual_quantity"),
+    )
+    costing_scope = "external_bought_component"
+    excluded_costs: List[str] = []
+    component_instruction = COMPONENT_COSTING_INSTRUCTION
+    if component_id == "magnet_wire":
+        costing_scope = "raw_enameled_wire_material_only"
+        excluded_costs = ["winding", "forming", "tooling", "fixture", "internal_added_value"]
+        component_instruction += (
+            " For magnet_wire, quote raw enameled wire material only in a mass-compatible "
+            "basis; exclude winding, forming, tooling, fixtures, and internal added value."
+        )
+    elif component_id == "lead_tinning":
+        costing_scope = "tin_consumable_material_only"
+        excluded_costs = ["tinning_operation", "soldering_operation", "labor", "handling", "internal_added_value"]
+        component_instruction += (
+            " For lead_tinning, cost only the identified tin/Sn consumable material in a "
+            "mass-compatible supplier basis. Never quote subcontract tinning, soldering, "
+            "labor, handling, or process conversion; those belong to the internal MOST operation. "
+            "Do not invent solder paste, flux, tin wire, or an alloy when the BOM does not confirm it."
+        )
     return {
         "project_code": state["project_code"],
         "product_id": state["product_id"],
         "component_id": component_id,
         "component_name": component.get("component"),
-        "component_family": component.get("external_component_type") or component.get("category"),
+        "component_family": component_family,
         "classification": "External",
         "product": customer_input.get("product"),
         "product_line": customer_input.get("product_line") or "Chokes",
         "annual_quantity": customer_input.get("annual_quantity"),
+        "annual_product_quantity": purchasing_quantity.get("annual_product_quantity"),
+        "purchasing_quantity_per_product": purchasing_quantity.get("purchasing_quantity_per_product"),
+        "annual_purchasing_quantity": purchasing_quantity.get("annual_purchasing_quantity"),
+        "annual_purchasing_unit": purchasing_quantity.get("annual_purchasing_unit"),
+        "purchasing_quantity_basis": purchasing_quantity.get("purchasing_quantity_basis"),
+        "purchasing_quantity_status": purchasing_quantity.get("status"),
+        "costing_scope": costing_scope,
+        "excluded_costs": excluded_costs,
         "destination_zone": customer_input.get("customer_delivery_zone"),
         "production_plant": state.get("production_plant") or (state.get("unit_data") or {}).get("plant"),
-        "reporting_currency": customer_input.get("currency") or (state.get("unit_data") or {}).get("selling_currency"),
+        "reporting_currency": resolve_project_currency(
+            customer_input.get("currency"), (state.get("unit_data") or {}).get("selling_currency"),
+        ),
         "bom_quantity_per_product": component.get("quantity_per_product"),
         "technical_specification": component_definition,
         "drawing_reference": customer_input.get("drawing_reference") or customer_input.get("drawing_number"),
         "bom_source_path": (state.get("bom") or {}).get("normalized_path"),
         "manufacturing_strategy": state.get("manufacturing_strategy") or {},
         "save_address": _relative(_component_output_path(state["project_code"], state["product_id"], component_id)),
-        "instruction": COMPONENT_COSTING_INSTRUCTION,
+        "instruction": component_instruction,
     }
 
 
@@ -2623,7 +2669,20 @@ def trigger_next_component_costing(
     for component in required:
         component_id = component["component_id"]
         previous = state["components"].get(component_id) or {}
-        if not force and previous.get("status") in {"triggered", "received", "failed"}:
+        saved_raw = _read_json(_component_output_path(project_code, product_id, component_id), {}) or {}
+        saved_price_incomplete = component_costing.component_offer_requires_regeneration(saved_raw) if saved_raw else False
+        requires_regeneration = previous.get("requires_regeneration") is True or saved_price_incomplete
+        if saved_price_incomplete:
+            previous = {
+                **previous,
+                "costing_readiness": "incomplete",
+                "requires_regeneration": True,
+            }
+        if (
+            not force
+            and previous.get("status") in {"triggered", "received", "failed"}
+            and not requires_regeneration
+        ):
             skipped.append({"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"})
             continue
         correlation_id = str(uuid.uuid4())
@@ -2658,6 +2717,8 @@ def trigger_next_component_costing(
             "save_path": payload["save_address"],
             "normalized_path": _relative(_normalized_component_output_path(project_code, product_id, component_id)),
             "received_at": previous.get("received_at") if not force else None,
+            "costing_readiness": "pending" if accepted else previous.get("costing_readiness"),
+            "requires_regeneration": False if accepted else requires_regeneration,
         }
         state["components"][component_id] = entry
         summary = {
@@ -2680,6 +2741,7 @@ def trigger_next_component_costing(
     state["missing_outputs"] = [
         f"component:{component_id}" for component_id in required_ids
         if (state["components"].get(component_id) or {}).get("status") != "received"
+        or (state["components"].get(component_id) or {}).get("requires_regeneration") is True
     ]
     if triggered:
         state["status"] = "components_triggered"
@@ -2735,6 +2797,18 @@ def normalize_component_output(
         "customs_cost_per_piece_basis": _output_value(offer, "customs_cost_basis", "customs_cost_per_piece_basis"),
         "forwarder_cost_per_piece_basis": _output_value(offer, "forwarder_cost_basis", "forwarder_cost_per_piece_basis"),
     }
+    resolved_offer = component_costing.resolve_component_offer(raw_json)
+    normalized_offer.update(resolved_offer)
+    normalized_offer.update({
+        "unit_price": resolved_offer.get("unit_price"),
+        "unit_price_currency": resolved_offer.get("currency"),
+        "currency": resolved_offer.get("currency"),
+        "pricing_unit": resolved_offer.get("pricing_unit"),
+        "pricing_basis": resolved_offer.get("pricing_basis"),
+        "unit_price_basis": resolved_offer.get("pricing_basis"),
+        "source_path": resolved_offer.get("source_path"),
+        "converted_to_project_currency": resolved_offer.get("converted_to_project_currency", False),
+    })
     for normalized_key, aliases in {
         "price_in_reporting_currency": ("material_cost", "price_in_reporting_currency"),
         "transportation_cost_per_piece": ("transportation_cost", "transportation_cost_per_piece"),
@@ -2754,6 +2828,14 @@ def normalize_component_output(
     analysis_status = str(raw_json.get("analysis_status") or raw_json.get("status") or "assumption_based").lower()
     if analysis_status not in {"complete", "assumption_based", "blocked"}:
         analysis_status = "assumption_based"
+    pricing_missing = []
+    if resolved_offer.get("unit_price") is not None:
+        if not resolved_offer.get("currency"):
+            pricing_missing.append("recommended_offer.currency")
+        if not resolved_offer.get("pricing_unit"):
+            pricing_missing.append("recommended_offer.pricing_unit")
+    if pricing_missing:
+        analysis_status = "blocked"
     return {
         "schema_version": "1.0",
         "project_code": state["project_code"],
@@ -2766,10 +2848,17 @@ def normalize_component_output(
         "quantity_per_product": bom_component.get("quantity_per_product"),
         "annual_quantity": customer_input.get("annual_quantity"),
         "destination_zone": customer_input.get("customer_delivery_zone"),
-        "reporting_currency": customer_input.get("currency") or (state.get("unit_data") or {}).get("selling_currency"),
+        "reporting_currency": resolve_project_currency(
+            customer_input.get("currency"), (state.get("unit_data") or {}).get("selling_currency"),
+        ),
         "technical_specification": raw_json.get("technical_specification") or bom_component.get("component_definition") or {},
         "cost_basis": cost_basis,
         "recommended_offer": normalized_offer,
+        "pricing_completeness": {
+            "status": "incomplete" if pricing_missing else "complete",
+            "missing_inputs": pricing_missing,
+            "requires_regeneration": bool(pricing_missing),
+        },
         "fx": raw_json.get("fx") if isinstance(raw_json.get("fx"), list) else [],
         "material_indexation": raw_json.get("material_indexation") if isinstance(raw_json.get("material_indexation"), list) else [],
         "productivity": raw_json.get("productivity") if isinstance(raw_json.get("productivity"), list) else [],
@@ -2813,6 +2902,8 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
         _write_json(normalized_path, normalized)
         state.setdefault("components", {})
         existing = state["components"].get(component_id, {})
+        pricing_completeness = normalized.get("pricing_completeness") or {}
+        requires_regeneration = pricing_completeness.get("requires_regeneration") is True
         state["components"][component_id] = {
             **existing,
             "status": "received",
@@ -2822,11 +2913,17 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
             "save_path": _relative(raw_path),
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
+            "costing_readiness": pricing_completeness.get("status") or "complete",
+            "requires_regeneration": requires_regeneration,
         }
         required_ids = list(state.get("required_external_component_ids") or [])
         if not required_ids:
             required_ids = [item["component_id"] for item in _required_external_components(normalized_bom)]
-        remaining = [item for item in required_ids if (state["components"].get(item) or {}).get("status") != "received"]
+        remaining = [
+            item for item in required_ids
+            if (state["components"].get(item) or {}).get("status") != "received"
+            or (state["components"].get(item) or {}).get("requires_regeneration") is True
+        ]
         state["missing_outputs"] = [f"component:{item}" for item in remaining]
         if not remaining:
             state["status"] = "components_received"
@@ -3404,21 +3501,9 @@ def _saved_bom_dimensional_map(raw_bom: Dict[str, Any]) -> Dict[str, Dict[str, A
     dimensional: Dict[str, Dict[str, Any]] = {}
     for index, component in enumerate(_extract_component_list(raw_bom), start=1):
         component_id = _component_id(component, index)
-        raw_qty = component.get("quantity_per_product") or component.get("quantity") or component.get("qty")
         dimensional[component_id] = {
             "component_family": _component_family(component_id, component),
-            "weight_kg_per_product": component.get("weight_kg_per_product") or component.get("weight_kg") or component.get("part_weight_kg"),
-            "physical_mass_g_per_product": component.get("mass_g_per_product") or component.get("physical_mass_g_per_product"),
-            "physical_length_mm_per_product": (
-                component.get("developed_length_mm")
-                or component.get("wire_length_mm")
-                or component.get("total_length_mm")
-                or component.get("physical_length_mm_per_product")
-            ),
-            "diameter_mm": component.get("diameter_mm") or component.get("wire_diameter_mm") or component.get("wire_diameter"),
-            "bom_count_per_product": component.get("bom_count_per_product"),
-            "quantity_per_product": _float(raw_qty),
-            "quantity_unit": component.get("quantity_unit") or component.get("unit"),
+            **component_costing.extract_bom_dimensional_fields(component_id, component),
         }
     return dimensional
 
@@ -3440,12 +3525,15 @@ def _saved_component_cost(raw: Dict[str, Any]) -> Optional[float]:
 
 
 def _saved_component_currency(raw: Dict[str, Any]) -> str:
-    return _first_value(raw, [
+    return normalize_currency_code(_first_value(raw, [
         ["normalized_cost", "currency"],
+        ["recommended_offer", "unit_price_currency"],
+        ["recommended_offer", "price_currency"],
+        ["recommended_offer", "offer_currency"],
         ["recommended_offer", "supply_chain", "currency"],
         ["recommended_offer", "currency"],
         ["currency"],
-    ]) or ""
+    ])) or ""
 
 
 def _saved_transport_value(raw: Dict[str, Any], names: List[str]) -> float:
@@ -3513,6 +3601,7 @@ def calculate_final_choke_costing_from_saved_outputs(
     project_code: str,
     product_id: str,
     unit_data_override: Optional[Dict[str, Any]] = None,
+    fx_rates_override: Any = None,
 ) -> Dict[str, Any]:
     warnings: List[str] = []
     missing_inputs: List[str] = []
@@ -3541,6 +3630,13 @@ def calculate_final_choke_costing_from_saved_outputs(
     material_cost_per_piece = 0.0
     transport_cost_per_piece = 0.0
     output_component_ids = set()
+    unit_data = _unit_data_for_final_calculation(state, customer_input, unit_data_override)
+    unit_data = {
+        **unit_data,
+        "operating_currency": normalize_currency_code(unit_data.get("operating_currency")),
+        "selling_currency": normalize_currency_code(unit_data.get("selling_currency")),
+    }
+    project_currency = resolve_project_currency(customer_input.get("currency"), unit_data.get("selling_currency"))
     for component in component_outputs:
         raw = component.get("agent_raw_output") or component
         component_id = component.get("component_id") or raw.get("component_id")
@@ -3550,8 +3646,11 @@ def calculate_final_choke_costing_from_saved_outputs(
             component_id, bom_fields.get("component_family"), bom_fields, raw,
         )
         price_info = component_costing.resolve_unit_price(raw)
-        material_result = component_costing.compute_component_material_cost(
+        source_material_result = component_costing.compute_component_material_cost(
             component_id, pricing_quantity_info, price_info,
+        )
+        material_result = component_costing.convert_component_cost_to_project_currency(
+            component_id, source_material_result, project_currency, fx_rates=fx_rates_override,
         )
         if material_result["status"] == "blocked":
             missing_inputs.append(f"component_outputs:{component_id}:{material_result['reason']}")
@@ -3561,7 +3660,8 @@ def calculate_final_choke_costing_from_saved_outputs(
             material_cost_per_piece += line_material_cost
 
         transport_result = component_costing.compute_component_transport_cost(
-            component_id, raw, pricing_quantity_info, line_material_cost,
+            component_id, raw, pricing_quantity_info, source_material_result.get("material_cost_per_product"),
+            target_currency=project_currency, fx_rates=fx_rates_override,
         )
         if transport_result["status"] == "blocked":
             missing_inputs.append(f"component_outputs:{component_id}:{transport_result['reason']}")
@@ -3577,7 +3677,10 @@ def calculate_final_choke_costing_from_saved_outputs(
             "pricing_quantity_basis": pricing_quantity_info.get("pricing_quantity_basis"),
             "unit_material_or_delivered_cost": price_info.get("unit_price"),
             "material_cost_per_piece": line_material_cost,
-            "currency": currency,
+            "source_currency": currency,
+            "currency": project_currency,
+            "normalized_offer": price_info.get("normalized_offer"),
+            "fx": material_result.get("fx"),
             "source": "saved_component_json",
             "status": material_result["status"],
         })
@@ -3599,7 +3702,6 @@ def calculate_final_choke_costing_from_saved_outputs(
     if not most_outputs:
         missing_inputs.append("most_outputs")
 
-    unit_data = _unit_data_for_final_calculation(state, customer_input, unit_data_override)
     if _plant_unit_missing(unit_data):
         missing_inputs.append("plant_unit_data")
 
@@ -3644,10 +3746,7 @@ def calculate_final_choke_costing_from_saved_outputs(
         "product_id": product_id,
         "status": "blocked" if unique_missing else "calculated",
         "costing_method": "preliminary_plant_percentage_dc",
-        "currency": unit_data.get("selling_currency") or next(
-            (item.get("currency") for item in component_breakdown if item.get("currency")),
-            "",
-        ),
+        "currency": project_currency or "",
         "material_cost_per_piece": None if "component_outputs" in unique_missing else material_cost_per_piece,
         "transport_cost_per_piece": None if "component_outputs" in unique_missing else transport_cost_per_piece,
         "dl_cost_per_piece": dl_cost,
@@ -3683,17 +3782,11 @@ def _normalize_component_output(path: Path) -> Dict[str, Any]:
         ["normalized_cost", "material_cost_per_piece"],
         ["material_cost_per_piece"],
     ]))
-    currency = _first_value(raw, [
-        ["normalized_cost", "currency"],
-        ["recommended_offer", "supply_chain", "currency"],
-        ["recommended_offer", "reporting_currency"],
-        ["recommended_offer", "purchasing_currency"],
-        ["recommended_offer", "currency"],
-        ["currency"],
-    ])
+    normalized_offer = component_costing.resolve_component_offer(raw)
+    currency = normalized_offer.get("currency")
     normalized_cost = dict(raw.get("normalized_cost") or {})
     normalized_cost.update({
-        "currency": currency or normalized_cost.get("currency") or "",
+        "currency": currency or normalize_currency_code(normalized_cost.get("currency")) or "",
         "material_cost_per_piece": material_cost if material_cost is not None else delivered_cost,
         "delivered_cost_per_piece": delivered_cost,
         "commercially_usable": bool(normalized_cost.get("commercially_usable")),
@@ -3704,6 +3797,7 @@ def _normalize_component_output(path: Path) -> Dict[str, Any]:
         "component_id": component_id,
         "component_type": raw.get("component_type") or raw.get("component_family") or "",
         "normalized_cost": normalized_cost,
+        "normalized_offer": normalized_offer,
         "agent_raw_output": raw,
     }
 
@@ -3761,6 +3855,12 @@ def _normalize_most_output(path: Path) -> Dict[str, Any]:
         "tooling_adder_per_piece_eur": _first_value(normalized_operation, [
             ["tooling_adder_per_piece_eur"], ["station_library_summary", "tooling_adder_per_piece_eur"],
         ]),
+        "capex_currency": normalize_currency_code(_first_value(normalized_operation, [
+            ["capex_currency"], ["station_library_summary", "capex_currency"],
+        ])),
+        "tooling_currency": normalize_currency_code(_first_value(normalized_operation, [
+            ["tooling_currency"], ["station_library_summary", "tooling_currency"],
+        ])),
         "agent_raw_output": raw,
     }
     return output
