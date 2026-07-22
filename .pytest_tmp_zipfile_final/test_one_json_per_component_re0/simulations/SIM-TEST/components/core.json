@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "output_type": "component_costing",
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "scope_id": "core",
+  "component_id": "core",
+  "component_name": "Ferrite core",
+  "status": "assumption_based",
+  "source": {
+    "agent": "Manual Choke Simulation",
+    "entry_mode": "pasted_json",
+    "analysis_date": "2026-07-22"
+  },
+  "commercial_context": {
+    "product": "Fuse choke",
+    "annual_quantity": 600000.0,
+    "destination_zone": "China South Pacific",
+    "production_plant": "Kunshan",
+    "reporting_currency": "RMB"
+  },
+  "data": {
+    "component_family": "ferrite",
+    "classification": "External",
+    "quantity_per_product": null,
+    "technical_specification": {},
+    "cost_basis": {
+      "basis_status": "estimated",
+      "source": null,
+      "source_date": null,
+      "confidence": "low"
+    },
+    "recommended_offer": {
+      "supplier": null,
+      "origin": null,
+      "incoterm": null,
+      "supplier_currency": null,
+      "fca_price_per_component": null,
+      "price_in_reporting_currency": null,
+      "transportation_cost_per_component": 0.01,
+      "customs_cost_per_component": 0.002,
+      "forwarder_fee_per_component": 0.003,
+      "capital_cost_per_component": null,
+      "cash_locked_per_component": null,
+      "delivered_cost_per_component": 0.1
+    },
+    "indexed_material_cost_per_component": 0.06,
+    "non_indexed_material_cost_per_component": 0.04,
+    "fx": [],
+    "material_indexation": [],
+    "productivity": [],
+    "commercially_usable": false
+  },
+  "assumptions": [],
+  "unconfirmed_values": [],
+  "required_confirmations": []
+}

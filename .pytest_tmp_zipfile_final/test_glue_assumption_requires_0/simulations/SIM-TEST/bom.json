@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "output_type": "bom",
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "scope_id": null,
+  "component_id": null,
+  "component_name": null,
+  "status": "assumption_based",
+  "source": {
+    "agent": "Manual Choke Simulation",
+    "entry_mode": "pasted_json",
+    "analysis_date": "2026-07-22"
+  },
+  "commercial_context": {
+    "product": "Fuse choke",
+    "annual_quantity": 600000.0,
+    "destination_zone": "China South Pacific",
+    "production_plant": "Kunshan",
+    "reporting_currency": "RMB"
+  },
+  "data": {
+    "bom": [
+      {
+        "component_id": "ferrite_core",
+        "component_name": "Ferrite core",
+        "quantity_per_product": 2
+      },
+      {
+        "component_id": "glue",
+        "component_name": "Glue",
+        "quantity_per_product": 1,
+        "glue_status": "included_assumption"
+      }
+    ],
+    "components": [
+      {
+        "component_id": "ferrite_core",
+        "component_name": "Ferrite core",
+        "quantity_per_product": 2.0,
+        "component_family": null,
+        "classification": "External",
+        "glue_status": null
+      },
+      {
+        "component_id": "glue",
+        "component_name": "Glue",
+        "quantity_per_product": 1.0,
+        "glue_status": "included_assumption",
+        "component_family": null,
+        "classification": "External"
+      }
+    ]
+  },
+  "assumptions": [],
+  "unconfirmed_values": [],
+  "required_confirmations": []
+}

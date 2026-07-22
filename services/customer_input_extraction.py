@@ -14,6 +14,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import unquote, urlsplit
 
 from services.currency_service import normalize_currency_code
 from services.manufacturing_strategy import load_product_matrix, normalize_delivery_zone
@@ -26,6 +27,10 @@ REQUIRED_COMPONENT_COSTING_FIELDS = {
     "annual_quantity": "Annual quantity",
     "delivery_zone": "Delivery destination/zone",
     "quotation_currency": "Quotation currency",
+}
+BLOCKING_CONFLICT_FIELDS = set(REQUIRED_COMPONENT_COSTING_FIELDS) | {
+    "product_family",
+    "drawing_reference",
 }
 
 FIELD_ALIASES = {
@@ -69,7 +74,7 @@ STRUCTURED_ALIASES = {
     "target_price_currency": ["target_price_currency"],
     "quotation_currency": ["quotation_currency", "selling_currency", "currency"],
     "purchasing_currency": ["purchasing_currency", "purchasing_currency_code"],
-    "drawing_reference": ["drawing_reference", "drawing_file", "drawing"],
+    "drawing_reference": ["drawing_original_filename", "drawing_reference", "drawing_file", "drawing"],
 }
 
 COUNTRY_ZONE_MAP = {
@@ -86,6 +91,23 @@ def _text(value: Any) -> str:
     value = str(value or "").strip().lower()
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def normalize_product_family(value: Any) -> Optional[str]:
+    key = _text(value)
+    if key in {"choke", "chokes"}:
+        return "Chokes"
+    return str(value).strip() if _has_value(value) else None
+
+
+def normalize_drawing_reference(value: Any) -> str:
+    text = unquote(str(value or "").strip())
+    path = urlsplit(text).path.replace("\\", "/")
+    basename = Path(path).name.strip().lower()
+    stem = Path(basename).stem
+    stem = re.sub(r"__\d+$", "", stem)
+    suffix = Path(basename).suffix.lower()
+    return re.sub(r"[^a-z0-9]+", "", stem) + re.sub(r"[^a-z0-9]+", "", suffix)
 
 
 def _has_value(value: Any) -> bool:
@@ -317,13 +339,43 @@ def _yearly_volume_candidates(formula_sheet: Any, value_sheet: Any, source_file:
     return results
 
 
+def _close_openpyxl_workbook(workbook: Any) -> None:
+    if workbook is None:
+        return
+    archive = getattr(workbook, "_archive", None)
+    vba_archive = getattr(workbook, "vba_archive", None)
+    try:
+        workbook.close()
+    finally:
+        if vba_archive is not None and vba_archive is not archive:
+            vba_archive.close()
+
+
 def extract_excel_fields(path: str | Path) -> Dict[str, Any]:
     import openpyxl
 
     workbook_path = Path(path).resolve()
     keep_vba = workbook_path.suffix.lower() == ".xlsm"
-    formulas = openpyxl.load_workbook(workbook_path, data_only=False, keep_vba=keep_vba, keep_links=True)
-    values = openpyxl.load_workbook(workbook_path, data_only=True, keep_vba=keep_vba, keep_links=True)
+    formulas = None
+    values = None
+    try:
+        formulas = openpyxl.load_workbook(
+            workbook_path, data_only=False, keep_vba=keep_vba, keep_links=True
+        )
+        values = openpyxl.load_workbook(
+            workbook_path, data_only=True, keep_vba=keep_vba, keep_links=True
+        )
+        return _extract_excel_fields_from_workbooks(workbook_path, formulas, values)
+    finally:
+        _close_openpyxl_workbook(values)
+        _close_openpyxl_workbook(formulas)
+
+
+def _extract_excel_fields_from_workbooks(
+    workbook_path: Path,
+    formulas: Any,
+    values: Any,
+) -> Dict[str, Any]:
     candidates: List[Dict[str, Any]] = []
     warnings: List[str] = []
     sheet_inventory = []
@@ -357,7 +409,9 @@ def extract_excel_fields(path: str | Path) -> Dict[str, Any]:
             value, is_formula, formula = _cell_value(
                 formulas[sheet_name], values[sheet_name], formula_cell
             )
-            if field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
+            if field == "product_family":
+                value = normalize_product_family(value)
+            elif field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
                 value = normalize_currency_code(value)
             elif field in {"annual_quantity", "target_price"}:
                 value = _number(value)
@@ -403,7 +457,9 @@ def extract_excel_fields(path: str | Path) -> Dict[str, Any]:
                 if not nearby:
                     continue
                 value = nearby["value"]
-                if field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
+                if field == "product_family":
+                    value = normalize_product_family(value)
+                elif field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
                     value = normalize_currency_code(value)
                 elif field in {"target_price", "annual_quantity"}:
                     value = _number(value)
@@ -451,8 +507,6 @@ def extract_excel_fields(path: str | Path) -> Dict[str, Any]:
         "sheets": sheet_inventory,
         "macros_executed": False,
     }
-    formulas.close()
-    values.close()
     return result
 
 
@@ -472,7 +526,9 @@ def extract_csv_fields(path: str | Path) -> Dict[str, Any]:
                 value = below[column_index - 1] if column_index - 1 < len(below) else None
             if not _has_value(value):
                 continue
-            if field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
+            if field == "product_family":
+                value = normalize_product_family(value)
+            elif field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
                 value = normalize_currency_code(value)
             elif field in {"annual_quantity", "target_price"}:
                 value = _number(value)
@@ -522,7 +578,9 @@ def extract_structured_request_fields(payload: Optional[Dict[str, Any]]) -> Dict
         if not source_key:
             continue
         value = payload[source_key]
-        if field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
+        if field == "product_family":
+            value = normalize_product_family(value)
+        elif field in {"quotation_currency", "target_price_currency", "purchasing_currency"}:
             value = normalize_currency_code(value)
         elif field in {"annual_quantity", "target_price"}:
             value = _number(value)
@@ -597,6 +655,10 @@ def _comparable_value(field: str, value: Any) -> Any:
         return _number(value)
     if field.endswith("currency"):
         return normalize_currency_code(value)
+    if field == "product_family":
+        return _text(normalize_product_family(value))
+    if field == "drawing_reference":
+        return normalize_drawing_reference(value)
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return _text(value)
@@ -607,6 +669,9 @@ def merge_customer_input_candidates(
     warnings: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     all_candidates = [dict(item) for item in candidates if _has_value(item.get("value"))]
+    for item in all_candidates:
+        if item.get("field") == "product_family":
+            item["value"] = normalize_product_family(item.get("value"))
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for item in all_candidates:
         grouped.setdefault(item["field"], []).append(item)
@@ -651,7 +716,7 @@ def merge_customer_input_candidates(
                 "field": field,
                 "status": "conflict",
                 "candidates": conflict_candidates,
-                "blocking": field in REQUIRED_COMPONENT_COSTING_FIELDS,
+                "blocking": field in BLOCKING_CONFLICT_FIELDS,
             })
         field_result = {
             "value": selected["value"],
@@ -773,6 +838,8 @@ def apply_resolution_to_customer_input(payload: Dict[str, Any], resolution: Dict
     for source, destination in mapping.items():
         if _has_value(values.get(source)):
             result[destination] = values[source]
+    if _has_value(result.get("part_number")):
+        result["part_number"] = str(result["part_number"]).strip()
     result["product_name"] = result.get("product")
     result["currency"] = result.get("quotation_currency")
     annual = resolution.get("fields", {}).get("annual_quantity") or {}

@@ -302,20 +302,31 @@ async def create_customer_input(request: Request):
     uploaded_at = datetime.now(timezone.utc).isoformat()
     for upload in uploads:
         safe_filename = _safe_upload_filename(upload.filename)
-        upload_path = _unique_upload_path(upload_dir, safe_filename)
         content = await upload.read()
-        upload_path.write_bytes(content)
+        checksum = hashlib.sha256(content).hexdigest()
+        upload_path = None
+        for existing_path in upload_dir.iterdir():
+            if not existing_path.is_file() or existing_path.suffix.lower() not in SUPPORTED_CUSTOMER_INPUT_EXTENSIONS:
+                continue
+            if hashlib.sha256(existing_path.read_bytes()).hexdigest() == checksum:
+                upload_path = existing_path
+                break
+        reused_existing = upload_path is not None
+        if upload_path is None:
+            upload_path = _unique_upload_path(upload_dir, safe_filename)
+            upload_path.write_bytes(content)
         stored_path = _relative_to_base(upload_path)
         manifest_item = {
-            "attachment_id": hashlib.sha256(content).hexdigest()[:16],
+            "attachment_id": checksum[:16],
             "original_filename": Path(upload.filename).name,
             "stored_filename": upload_path.name,
             "stored_path": stored_path,
             "mime_type": getattr(upload, "content_type", None) or mimetypes.guess_type(upload.filename)[0] or "application/octet-stream",
             "file_size": len(content),
-            "checksum_sha256": hashlib.sha256(content).hexdigest(),
+            "checksum_sha256": checksum,
             "uploaded_at": uploaded_at,
             "source_role": _attachment_role(upload.filename),
+            "reused_existing_file": reused_existing,
         }
         attachment_manifest.append(manifest_item)
         uploaded_paths[stored_path] = upload_path
@@ -345,7 +356,7 @@ async def create_customer_input(request: Request):
     customer_input = apply_resolution_to_customer_input(structured_input, extraction)
     project_code = customer_input.get("project_code") or provisional_project_code
     resolved_part_number = customer_input.get("part_number")
-    product_id = product_id_input or resolved_part_number or provisional_product_id
+    product_id = str(product_id_input or resolved_part_number or provisional_product_id).strip()
     customer_input.update({
         "project_code": project_code,
         "product_id": product_id,

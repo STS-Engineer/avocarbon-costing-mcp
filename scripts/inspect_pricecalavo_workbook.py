@@ -66,29 +66,7 @@ def _cell_display(value):
     return text
 
 
-def main():
-    workbook_path = find_workbook()
-    print("PRICECALAVO WORKBOOK INSPECTION")
-    print("=" * 78)
-    print(f"Target workbook: {TARGET_FILE}")
-    if not workbook_path:
-        print("Workbook not found.")
-        print("Set PRICECALAVO_WORKBOOK_PATH or place the file under mcp_server/data or Downloads.")
-        return 0
-
-    print(f"Workbook path: {workbook_path}")
-    try:
-        from openpyxl import load_workbook
-    except Exception as exc:
-        print(f"openpyxl is unavailable, cannot inspect workbook: {exc}")
-        return 0
-
-    try:
-        workbook = load_workbook(workbook_path, read_only=False, keep_vba=True, data_only=False)
-    except Exception as exc:
-        print(f"Could not open workbook: {exc}")
-        return 0
-
+def _inspect_loaded_workbook(workbook):
     print()
     print("Sheet names:")
     for sheet_name in workbook.sheetnames:
@@ -136,6 +114,45 @@ def main():
     if len(matches) > 300:
         print(f"- Truncated {len(matches) - 300} additional matches.")
     return 0
+
+
+def _close_workbook(workbook):
+    archive = getattr(workbook, "_archive", None)
+    vba_archive = getattr(workbook, "vba_archive", None)
+    try:
+        workbook.close()
+    finally:
+        if vba_archive is not None and vba_archive is not archive:
+            vba_archive.close()
+
+
+def main():
+    workbook_path = find_workbook()
+    print("PRICECALAVO WORKBOOK INSPECTION")
+    print("=" * 78)
+    print(f"Target workbook: {TARGET_FILE}")
+    if not workbook_path:
+        print("Workbook not found.")
+        print("Set PRICECALAVO_WORKBOOK_PATH or place the file under mcp_server/data or Downloads.")
+        return 0
+
+    print(f"Workbook path: {workbook_path}")
+    try:
+        from openpyxl import load_workbook
+    except Exception as exc:
+        print(f"openpyxl is unavailable, cannot inspect workbook: {exc}")
+        return 0
+
+    try:
+        workbook = load_workbook(workbook_path, read_only=False, keep_vba=True, data_only=False)
+    except Exception as exc:
+        print(f"Could not open workbook: {exc}")
+        return 0
+
+    try:
+        return _inspect_loaded_workbook(workbook)
+    finally:
+        _close_workbook(workbook)
 
 
 if __name__ == "__main__":

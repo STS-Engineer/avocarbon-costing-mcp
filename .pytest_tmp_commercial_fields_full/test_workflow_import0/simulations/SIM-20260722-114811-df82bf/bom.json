@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "output_type": "bom",
+  "project_code": "P",
+  "product_id": "X",
+  "scope_id": null,
+  "component_id": null,
+  "component_name": null,
+  "status": "assumption_based",
+  "source": {
+    "agent": "Manual Choke Simulation",
+    "entry_mode": "pasted_json",
+    "analysis_date": "2026-07-22"
+  },
+  "commercial_context": {
+    "product": "Fuse choke",
+    "annual_quantity": 600000.0,
+    "destination_zone": "China South Pacific",
+    "production_plant": "Kunshan",
+    "reporting_currency": "RMB"
+  },
+  "data": {
+    "bom": [
+      {
+        "component_id": "ferrite_core",
+        "component_name": "Ferrite core",
+        "quantity_per_product": 2
+      }
+    ],
+    "components": [
+      {
+        "component_id": "ferrite_core",
+        "component_name": "Ferrite core",
+        "quantity_per_product": 2.0,
+        "component_family": null,
+        "classification": "External",
+        "glue_status": null
+      }
+    ]
+  },
+  "assumptions": [],
+  "unconfirmed_values": [],
+  "required_confirmations": []
+}

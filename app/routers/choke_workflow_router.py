@@ -2,7 +2,7 @@ import json
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from services.choke_sequential_agent_workflow import (
     calculate_final_choke_costing_from_saved_outputs,
@@ -92,6 +92,8 @@ class UpdateCommercialFieldsRequest(BaseModel):
     product_id: str
     product: str | None = None
     product_name: str | None = None
+    product_family: str | None = None
+    part_number: str | None = None
     customer: str | None = None
     final_customer: str | None = None
     customer_delivery_zone: str | None = None
@@ -104,6 +106,14 @@ class UpdateCommercialFieldsRequest(BaseModel):
     delivery_city: str | None = None
     target_price: float | None = None
     sop_date: str | None = None
+    drawing_reference: str | None = None
+
+    @field_validator("project_code", "product_id", "part_number", mode="before")
+    @classmethod
+    def normalize_identifiers(cls, value):
+        if value is None:
+            return None
+        return str(value).strip()
 
 
 def _handle(callback):

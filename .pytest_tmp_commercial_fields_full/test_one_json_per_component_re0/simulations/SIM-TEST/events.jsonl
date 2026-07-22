@@ -1,0 +1,2 @@
+{"timestamp": "2026-07-22T10:48:10.309393+00:00", "event": "simulation_created", "simulation_id": "SIM-TEST"}
+{"timestamp": "2026-07-22T10:48:10.345521+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "component_costing", "identifier": "core", "replaced": false}

@@ -1803,8 +1803,6 @@ def _update_customer_input_from_bom(
     for field_name in ["drawing_number", "drawing_revision", "drawing_status"]:
         if extracted.get(field_name):
             updates[field_name] = extracted[field_name]
-    if extracted.get("drawing_number"):
-        updates["drawing_reference"] = extracted["drawing_number"]
 
     extracted_values = {
         key: value
@@ -2544,6 +2542,9 @@ def update_commercial_fields(
         "sop_date",
         "product",
         "product_name",
+        "product_family",
+        "part_number",
+        "drawing_reference",
     }
     updates = {
         key: value
@@ -2630,7 +2631,23 @@ def update_commercial_fields(
 def get_customer_input_resolution(project_code: str, product_id: str) -> Dict[str, Any]:
     state, _ = _existing_state(project_code, product_id)
     if state is None:
-        raise ValueError("Workflow state not found.")
+        customer_input = None
+        for path in CUSTOMER_INPUT_DIR.glob("*.json"):
+            candidate = _read_json(path, {}) or {}
+            candidate_product_id = candidate.get("workflow_product_id") or candidate.get("product_id")
+            if candidate.get("project_code") == project_code and candidate_product_id == product_id:
+                customer_input = candidate
+                break
+        if customer_input is None:
+            raise ValueError("Customer input and workflow state not found.")
+        resolved = _resolve_customer_input_context(customer_input)
+        resolution = resolved.get("resolved_customer_context") or {}
+        return {
+            "project_code": project_code,
+            "product_id": product_id,
+            **validate_resolved_customer_input(resolution),
+            "customer_input": resolved,
+        }
     validation = _refresh_resolved_customer_context(state)
     _refresh_master_data_for_state(state)
     _save_state(state)
