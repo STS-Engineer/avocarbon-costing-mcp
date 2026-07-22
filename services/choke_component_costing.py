@@ -94,8 +94,12 @@ def extract_bom_dimensional_fields(component_id: str, component: Dict[str, Any])
 
     weight_kg = _coerce_number(value("weight_kg_per_product", "weight_kg", "part_weight_kg", "mass_kg_per_product"))
     mass_g = _coerce_number(value("mass_g_per_product", "physical_mass_g_per_product", "weight_g_per_product"))
-    raw_weight = _coerce_number(value("weight_per_piece", "poids_par_piece", "mass_per_product"))
+    raw_weight_value = value("weight_per_piece", "poids_par_piece", "mass_per_product")
     raw_weight_unit = _normalized_quantity_unit(value("weight_unit", "unite_poids", "mass_unit"))
+    if isinstance(raw_weight_value, dict):
+        raw_weight_unit = raw_weight_unit or _normalized_quantity_unit(raw_weight_value.get("unit"))
+        raw_weight_value = raw_weight_value.get("value") or raw_weight_value.get("quantity")
+    raw_weight = _coerce_number(raw_weight_value)
     raw_quantity = _coerce_number(quantity_value)
     per_item_multiplier = 1.0
     if raw_quantity and raw_quantity > 0 and component_id in {"lead_tinning", "glue"}:
@@ -128,11 +132,20 @@ def extract_bom_dimensional_fields(component_id: str, component: Dict[str, Any])
     if bom_count is None and component_id == "ferrite_core" and quantity is not None and not normalized_quantity_unit:
         bom_count = quantity
 
+    diameter = _coerce_number(value("diameter_mm", "wire_diameter_mm", "wire_diameter", "diametre_mm"))
+    if diameter is None:
+        diameter_text = " ".join(str(value(name) or "") for name in (
+            "product_designation", "produit_designation", "designation", "specification",
+        ))
+        match = re.search(r"(?:[Øø]|(?:dia(?:meter|metre)?\.?))\s*(\d+(?:[.,]\d+)?)\s*mm", diameter_text, re.IGNORECASE)
+        if match:
+            diameter = _coerce_number(match.group(1).replace(",", "."))
+
     normalized = {
         "weight_kg_per_product": weight_kg,
         "physical_mass_g_per_product": mass_g,
         "physical_length_mm_per_product": length_mm,
-        "diameter_mm": _coerce_number(value("diameter_mm", "wire_diameter_mm", "wire_diameter", "diametre_mm")),
+        "diameter_mm": diameter,
         "bom_count_per_product": bom_count,
         "quantity_per_product": quantity,
         "quantity_unit": normalized_quantity_unit,
@@ -607,8 +620,23 @@ def convert_component_cost_to_project_currency(
 
 _LOGISTICS_FIELD_NAMES = {
     "transport": ["transportation_cost", "transport_cost", "transportation_cost_per_piece"],
-    "customs": ["custom_duty_cost", "customs_duty_cost", "duty_cost", "customs_cost_per_piece"],
-    "forwarder": ["forwarder_cost", "forwarding_cost", "forwarder_cost_per_piece"],
+    "customs": ["custom_duty_cost", "customs_duty_cost", "customs_cost", "duty_cost", "customs_cost_per_piece"],
+    "forwarder": ["forwarder_fee", "forwarder_cost", "forwarding_cost", "forwarder_cost_per_piece"],
+}
+
+_LOGISTICS_BASIS_ALIASES = {
+    "transportation_cost": ("transportation_cost_basis", "transport_basis"),
+    "transport_cost": ("transport_basis", "transport_cost_basis"),
+    "transportation_cost_per_piece": ("transportation_cost_per_piece_basis", "transport_basis"),
+    "custom_duty_cost": ("custom_duty_cost_basis", "customs_basis"),
+    "customs_duty_cost": ("customs_duty_cost_basis", "customs_basis"),
+    "customs_cost": ("customs_basis", "customs_cost_basis"),
+    "duty_cost": ("duty_cost_basis", "customs_basis"),
+    "customs_cost_per_piece": ("customs_cost_per_piece_basis", "customs_basis"),
+    "forwarder_fee": ("forwarder_basis", "forwarder_fee_basis"),
+    "forwarder_cost": ("forwarder_basis", "forwarder_cost_basis"),
+    "forwarding_cost": ("forwarder_basis", "forwarding_cost_basis"),
+    "forwarder_cost_per_piece": ("forwarder_cost_per_piece_basis", "forwarder_basis"),
 }
 
 
@@ -700,10 +728,14 @@ def resolve_logistics_value(agent_raw: Optional[Dict[str, Any]], field_names: Li
             value = _coerce_number(candidate)
             if value is None:
                 continue
-            rate_basis = (
-                _get_path(agent_raw, container + [f"{field_name}_basis"])
-                or _get_path(agent_raw, container + [f"{field_name}_unit"])
+            basis_names = _LOGISTICS_BASIS_ALIASES.get(
+                field_name, (f"{field_name}_basis", f"{field_name}_unit"),
             )
+            rate_basis = next((
+                _get_path(agent_raw, container + [basis_name])
+                for basis_name in basis_names
+                if _get_path(agent_raw, container + [basis_name]) not in (None, "")
+            ), None)
             explicit_currency = normalize_currency_code(
                 _get_path(agent_raw, container + [f"{field_name}_currency"]),
             )
@@ -717,6 +749,63 @@ def resolve_logistics_value(agent_raw: Optional[Dict[str, Any]], field_names: Li
                 "currency_inherited_from_offer": bool(inherited_currency and not explicit_currency),
             }
     return {"value": None, "currency": None, "rate_basis": None, "currency_inherited_from_offer": False}
+
+
+def build_canonical_component_costing(
+    component_id: str,
+    material_family: Optional[str],
+    bom_fields: Dict[str, Any],
+    agent_raw: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the auditable per-product pricing contract used after write-back."""
+    bom_fields = bom_fields or {}
+    agent_raw = agent_raw or {}
+    offer = resolve_component_offer(agent_raw)
+    quantity = resolve_component_pricing_quantity(
+        component_id, material_family, bom_fields, agent_raw,
+    )
+    material = compute_component_material_cost(
+        component_id,
+        quantity,
+        {
+            "unit_price": offer.get("unit_price"),
+            "unit_price_currency": offer.get("currency"),
+            "unit_price_basis": offer.get("pricing_basis") or offer.get("pricing_unit"),
+        },
+    )
+
+    source_value = bom_fields.get("quantity_per_product")
+    source_unit = bom_fields.get("quantity_unit")
+    conversion = None
+    basis = quantity.get("pricing_quantity_basis")
+    family_text = f"{material_family or ''} {component_id or ''}".lower()
+    if any(marker in family_text for marker in _WIRE_FAMILY_MARKERS) and source_unit in {"m", "mm"} and quantity.get("pricing_unit") == "kg":
+        conversion = {
+            "method": "wire_length_diameter_density_to_mass",
+            "diameter_mm": bom_fields.get("diameter_mm"),
+            "density_g_cm3": 8.96,
+        }
+    elif source_unit == "g" and quantity.get("pricing_unit") == "kg":
+        conversion = {"method": "grams_to_kilograms", "factor": 0.001}
+    elif source_unit == quantity.get("pricing_unit"):
+        conversion = {"method": "none_required"}
+
+    return {
+        "component_id": component_id,
+        "technical_quantity": quantity.get("pricing_quantity"),
+        "technical_quantity_unit": (
+            f"{quantity['pricing_unit']}/product" if quantity.get("pricing_unit") else None
+        ),
+        "unit_price": offer.get("unit_price"),
+        "pricing_unit": offer.get("pricing_unit"),
+        "currency": offer.get("currency"),
+        "material_cost_per_piece": material.get("material_cost_per_product"),
+        "source_quantity": {"value": source_value, "unit": f"{source_unit}/product" if source_unit else None},
+        "conversion": conversion,
+        "pricing_quantity_basis": basis,
+        "status": material.get("status"),
+        "blocking_reason": material.get("reason"),
+    }
 
 
 def _normalize_percent_or_fraction(value: float) -> float:

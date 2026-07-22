@@ -13,7 +13,8 @@ from services.choke_financial_calculation import (
     calculate_dl_voh,
     calculate_transport_cost_from_components,
 )
-from services.choke_process_decomposition import decompose_choke_process
+from services.choke_classification import classify_choke, classification_trace
+from services.choke_process_routing import build_choke_process_route
 from services.choke_standard_schema import build_standard_choke_envelope
 from services.costing_master_data_service import (
     get_master_manufacturing_strategy,
@@ -155,7 +156,7 @@ def _demo_bom(customer_input):
                 "quantity_per_product": None,
                 "costing_route": "rule_based_or_pending",
                 "bom_definition": {
-                    "description": "Glue requirement uncertain; process decomposition uses glued by default.",
+                    "description": "Glue requirement is not confirmed and must not create an operation without evidence.",
                 },
             },
         ],
@@ -335,7 +336,7 @@ def _build_material_cost_breakdown(component_entries):
     return breakdown
 
 
-def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents):
+def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents, choke_classification=None):
     agent_id = _agent_id("CHATGPT_CHOKE_BOM_AGENT_ID", "Choke BOM Analyzer")
     instructions = [
         "This starts from customer input.",
@@ -345,7 +346,8 @@ def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents)
         "Save or prepare JSON at save_address.",
         "Return JSON only.",
     ]
-    input_text = _json_input_text(instructions, customer_input, save_address)
+    payload = {**customer_input, **classification_trace(choke_classification)}
+    input_text = _json_input_text(instructions, payload, save_address)
     trigger = _trigger_or_plan(
         agent_id,
         input_text,
@@ -365,7 +367,9 @@ def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents)
     }
 
 
-def _build_component_agent_call(customer_input, unit_data, component, save_address, dry_run, trigger_agents):
+def _build_component_agent_call(
+    customer_input, unit_data, component, save_address, dry_run, trigger_agents, choke_classification=None,
+):
     agent_id = _agent_id("CHATGPT_EXTERNAL_COMPONENT_AGENT_ID", "External Component Costing Agent")
     payload = {
         "project_code": customer_input["project_code"],
@@ -378,6 +382,7 @@ def _build_component_agent_call(customer_input, unit_data, component, save_addre
         "production_plant": unit_data.get("plant"),
         "reporting_currency": unit_data.get("selling_currency"),
         "save_address": save_address,
+        **classification_trace(choke_classification),
     }
     instructions = [
         "This is one external component only.",
@@ -408,7 +413,9 @@ def _build_component_agent_call(customer_input, unit_data, component, save_addre
     }
 
 
-def _build_most_agent_call(customer_input, unit_data, work_package, save_address, dry_run, trigger_agents):
+def _build_most_agent_call(
+    customer_input, unit_data, work_package, save_address, dry_run, trigger_agents, choke_classification=None,
+):
     agent_id = _agent_id("CHATGPT_MOST_AGENT_ID", "MOST Assemblage")
     payload = {
         "project_code": customer_input["project_code"],
@@ -420,6 +427,7 @@ def _build_most_agent_call(customer_input, unit_data, work_package, save_address
         "annual_quantity": customer_input["annual_quantity"],
         "plant": unit_data.get("plant"),
         "save_address": save_address,
+        **classification_trace(choke_classification),
     }
     instructions = [
         "This is one component-operation work package only.",
@@ -512,6 +520,7 @@ def run_choke_orchestration(
     validation = normalize_customer_input(customer_input)
     normalized_input = validation["customer_input"]
     missing_inputs = list(validation.get("missing_inputs") or [])
+    initial_choke_classification = classify_choke(normalized_input, {})
 
     manufacturing_strategy = get_master_manufacturing_strategy(
         normalized_input.get("product_line"),
@@ -530,6 +539,7 @@ def run_choke_orchestration(
         bom_save_address,
         dry_run or not trigger_bom,
         trigger_agents and trigger_bom,
+        initial_choke_classification,
     )
     if not trigger_bom:
         bom_agent["status"] = "skipped_by_request"
@@ -553,6 +563,7 @@ def run_choke_orchestration(
         raw_bom = _demo_bom(normalized_input)
         bom_status = "available"
     normalized_components = _extract_components_from_bom(raw_bom) if raw_bom else []
+    choke_classification = classify_choke(normalized_input, raw_bom or {})
 
     component_agent_calls = []
     component_entries = []
@@ -571,6 +582,7 @@ def run_choke_orchestration(
                 save_address,
                 dry_run or not trigger_components,
                 trigger_agents and trigger_components,
+                choke_classification,
             ))
             if not trigger_components:
                 component_agent_calls[-1]["status"] = "skipped_by_request"
@@ -596,8 +608,24 @@ def run_choke_orchestration(
     process_bom = raw_bom
     if process_bom is None and demo_override:
         process_bom = _demo_bom(normalized_input)
-    process_result = decompose_choke_process(process_bom or {}, normalized_input)
-    missing_inputs.extend(process_result.get("missing_rules") or [])
+    process_raw_bom = process_bom or {}
+    process_components = _extract_components_from_bom(process_raw_bom)
+    process_normalized_bom = {
+        "status": "normalized",
+        "components": process_components,
+        "raw_bom": process_raw_bom,
+    }
+    choke_classification = classify_choke(normalized_input, process_raw_bom)
+    process_result = build_choke_process_route(
+        normalized_input,
+        process_normalized_bom,
+        choke_classification,
+    )
+    manufacturing_strategy = {
+        **manufacturing_strategy,
+        **classification_trace(choke_classification),
+    }
+    missing_inputs.extend(process_result.get("missing_inputs") or [])
 
     most_work_packages = []
     most_agent_calls = []
@@ -615,6 +643,7 @@ def run_choke_orchestration(
             save_address,
             dry_run or not trigger_most,
             trigger_agents and trigger_most,
+            choke_classification,
         ))
         if not trigger_most:
             most_agent_calls[-1]["status"] = "skipped_by_request"
@@ -688,6 +717,7 @@ def run_choke_orchestration(
             "annual_quantity": normalized_input.get("annual_quantity"),
             "target_price": normalized_input.get("target_price"),
             "target_price_currency": normalized_input.get("currency"),
+            **classification_trace(choke_classification),
         },
         manufacturing_strategy=manufacturing_strategy,
         unit_data=unit_data,

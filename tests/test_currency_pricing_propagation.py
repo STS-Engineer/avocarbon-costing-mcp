@@ -59,6 +59,131 @@ def test_writeback_preserves_recommended_offer_currency_and_unit(monkeypatch):
     assert normalized["normalized_cost"]["currency"] == "CNY"
 
 
+def test_canonical_ferrite_output_uses_piece_quantity_and_piece_price():
+    result = costing.build_canonical_component_costing(
+        "ferrite_core",
+        "ferrite",
+        {"quantity_per_product": 1, "quantity_unit": "pc", "bom_count_per_product": 1},
+        {"recommended_offer": {"unit_price": 0.16, "currency": "CNY", "pricing_unit": "pc"}},
+    )
+    assert result["technical_quantity"] == 1
+    assert result["technical_quantity_unit"] == "pc/product"
+    assert result["pricing_unit"] == "pc"
+    assert result["currency"] == "CNY"
+    assert result["material_cost_per_piece"] == 0.16
+
+
+def test_canonical_wire_output_converts_length_to_mass_before_pricing():
+    result = costing.build_canonical_component_costing(
+        "magnet_wire",
+        "enameled_wire",
+        {
+            "quantity_per_product": 0.3369255483441646,
+            "quantity_unit": "m",
+            "physical_length_mm_per_product": 336.9255483441646,
+            "diameter_mm": 1.25,
+        },
+        {"recommended_offer": {"unit_price": 102, "currency": "CNY", "pricing_unit": "kg"}},
+    )
+    expected_kg = math.pi * 1.25**2 / 4 * 336.9255483441646 * 0.00896 / 1000
+    assert math.isclose(result["technical_quantity"], expected_kg, rel_tol=1e-12)
+    assert result["technical_quantity_unit"] == "kg/product"
+    assert result["source_quantity"] == {"value": 0.3369255483441646, "unit": "m/product"}
+    assert result["conversion"]["method"] == "wire_length_diameter_density_to_mass"
+    assert math.isclose(result["material_cost_per_piece"], expected_kg * 102, rel_tol=1e-12)
+
+
+def test_writeback_canonicalizes_structured_bom_wire_mass_and_legacy_offer_basis():
+    state = {
+        "project_code": "P",
+        "product_id": "X",
+        "customer_input": {"annual_quantity": 60000, "currency": "RMB"},
+        "unit_data": {"selling_currency": "CNY"},
+    }
+    component = {
+        "component_id": "magnet_wire",
+        "component": "Enameled copper wire diameter 1.25 mm",
+        "category": "wire",
+        "external_component_type": "enameled_wire",
+        "quantity_per_product": {"value": 0.3369255483441646, "unit": "m"},
+        "component_definition": {
+            "poids_par_piece": {"value": 3.704689896196591, "unit": "g"},
+            "produit_designation": "Fil cuivre emaille diameter 1.25 mm",
+            "quantite": {"value": 0.3369255483441646, "unit": "m"},
+        },
+    }
+    raw = {
+        "component_id": "magnet_wire",
+        "component_family": "enameled_wire",
+        "recommended_offer": {
+            "unit_price": 102,
+            "unit_price_currency": "CNY",
+            "unit_price_basis": "CNY/kg of finished enameled wire",
+        },
+    }
+    normalized = workflow.normalize_component_output(state, component, raw)
+    assert math.isclose(normalized["technical_quantity"], 0.003704689896196591, rel_tol=1e-12)
+    assert normalized["technical_quantity_unit"] == "kg/product"
+    assert normalized["pricing_unit"] == "kg"
+    assert normalized["currency"] == "CNY"
+    assert normalized["conversion"]["method"] == "wire_length_diameter_density_to_mass"
+    assert math.isclose(normalized["material_cost_per_piece"], 0.003704689896196591 * 102, rel_tol=1e-12)
+
+
+def test_canonical_tin_output_converts_grams_to_kilograms():
+    result = costing.build_canonical_component_costing(
+        "lead_tinning",
+        "tin",
+        {
+            "quantity_per_product": 0.0034998724461757923,
+            "quantity_unit": "g",
+            "physical_mass_g_per_product": 0.0034998724461757923,
+        },
+        {"recommended_offer": {"unit_price": 450, "currency": "CNY", "pricing_unit": "kg"}},
+    )
+    expected_kg = 0.0034998724461757923 / 1000
+    assert math.isclose(result["technical_quantity"], expected_kg, rel_tol=1e-12)
+    assert result["technical_quantity_unit"] == "kg/product"
+    assert result["conversion"] == {"method": "grams_to_kilograms", "factor": 0.001}
+    assert math.isclose(result["material_cost_per_piece"], expected_kg * 450, rel_tol=1e-12)
+
+
+def test_canonical_output_never_assumes_blank_offer_currency_or_unit():
+    missing_currency = costing.build_canonical_component_costing(
+        "ferrite_core", "ferrite",
+        {"quantity_per_product": 1, "quantity_unit": "pc", "bom_count_per_product": 1},
+        {"recommended_offer": {"unit_price": 0.16, "pricing_unit": "pc"}},
+    )
+    assert missing_currency["status"] == "blocked"
+    assert missing_currency["blocking_reason"] == "currency_missing"
+    missing_unit = costing.build_canonical_component_costing(
+        "ferrite_core", "ferrite",
+        {"quantity_per_product": 1, "quantity_unit": "pc", "bom_count_per_product": 1},
+        {"recommended_offer": {"unit_price": 0.16, "currency": "CNY"}},
+    )
+    assert missing_unit["status"] == "blocked"
+    assert missing_unit["blocking_reason"] == "pricing_unit_unknown"
+
+
+def test_flat_logistics_contract_uses_explicit_basis_fields():
+    raw = {
+        "recommended_offer": {
+            "currency": "CNY",
+            "transport_cost": 2,
+            "transport_basis": "kg",
+            "customs_cost": 3,
+            "customs_basis": "kg",
+            "forwarder_fee": 4,
+            "forwarder_basis": "kg",
+        }
+    }
+    result = costing.compute_component_transport_cost(
+        "magnet_wire", raw, {"pricing_quantity": 0.004, "pricing_unit": "kg"},
+    )
+    assert result["status"] == "calculated"
+    assert math.isclose(result["transport_cost_per_product"], 0.004 * 9, rel_tol=1e-12)
+
+
 def test_ferrite_piece_quantity_and_cost():
     fields = costing.extract_bom_dimensional_fields("ferrite_core", {"quantity_per_product": 1, "quantity_unit": "pc"})
     quantity = costing.resolve_component_pricing_quantity("ferrite_core", "ferrite", fields, complete_offer(0.16, "CNY", "pc"))
@@ -161,7 +286,10 @@ def test_sequential_normalization_preserves_structured_offer():
 
 def test_external_component_prompt_requires_offer_contract():
     instruction = workflow.COMPONENT_COSTING_INSTRUCTION
-    for field in ("currency", "pricing_unit", "pricing_basis", "transport", "customs", "forwarder_fee"):
+    for field in (
+        "currency", "pricing_unit", "payment_days", "transport_cost", "transport_basis",
+        "customs_cost", "customs_basis", "forwarder_fee", "forwarder_basis",
+    ):
         assert field in instruction
     assert "Never infer offer currency from the production plant" in instruction
     assert "annual_purchasing_quantity" in instruction

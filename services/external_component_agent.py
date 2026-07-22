@@ -14,6 +14,8 @@ PROMPT_ROUTING = {
     "ferrite_component": "Ferrite prompt V1",
     "enameled_wire": "Enameled wire prompt V1",
     "spring": "Spring prompt V1",
+    "packaging_component": "Packaging component prompt V1",
+    "external_consumable": "External consumable prompt V1",
 }
 
 FORBIDDEN_FAMILIES = {
@@ -47,15 +49,46 @@ def get_scope_note(component_payload):
 def classify_component_family(component_payload):
     payload = component_payload or {}
     component_type = normalize_text(payload.get("component_type"))
-    definition_text = payload_text(payload.get("component_definition"))
+    definition = payload.get("component_definition") or {}
+    definition_text = payload_text(definition)
     scope_note = normalize_text(get_scope_note(payload))
     combined = " ".join([component_type, definition_text, scope_note])
 
+    requested_object_values = [
+        payload.get("component_type"),
+        payload.get("component_name"),
+        payload.get("component_id"),
+        payload.get("object_type"),
+    ]
+    if isinstance(definition, dict):
+        requested_object_values.extend([
+            definition.get("component_type"),
+            definition.get("component_name"),
+            definition.get("designation"),
+            definition.get("description"),
+        ])
+    requested_object = " ".join(normalize_text(value) for value in requested_object_values if value)
+    supported_explicit_component = component_type in {
+        "ferrite", "ferrite_core", "ferrite_component", "core",
+        "wire", "magnet_wire", "enameled_wire", "enamelled_wire",
+        "tin", "solder", "lead_tinning", "glue", "adhesive", "epoxy",
+        "packaging", "packaging_component", "spring", "stamped_part",
+        "plastic_part", "electronic_component",
+    }
+
     if payload.get("is_internal") is True or "internal" in combined:
         return "internal_component"
-    if any(keyword in combined for keyword in ["complete_choke", "full_choke", "rod_choke"]):
-        return "complete_choke"
-    if component_type in ["choke", "rod_choke"]:
+    complete_choke_types = {
+        "choke", "complete_choke", "full_choke", "fuse_choke", "rod_choke",
+        "toroid_choke", "torroid_choke", "complete_fuse_choke",
+        "complete_rod_choke", "complete_toroid_choke",
+    }
+    explicitly_complete = payload.get("is_complete_product") is True or component_type in complete_choke_types
+    named_complete_choke = any(term in requested_object for term in [
+        "complete_choke", "complete_fuse_choke", "complete_rod_choke",
+        "complete_toroid_choke", "full_choke",
+    ])
+    if not supported_explicit_component and (explicitly_complete or named_complete_choke):
         return "complete_choke"
     if any(keyword in combined for keyword in ["full_product", "complete_product"]):
         return "full_product"
@@ -76,6 +109,10 @@ def classify_component_family(component_payload):
         return "enameled_wire"
     if "spring" in combined:
         return "spring"
+    if any(keyword in requested_object for keyword in ["packaging", "package", "tray", "carton"]):
+        return "packaging_component"
+    if any(keyword in requested_object for keyword in ["lead_tinning", "tin", "solder", "glue", "adhesive", "epoxy"]):
+        return "external_consumable"
 
     return "unknown"
 
@@ -152,11 +189,12 @@ Selected component family: {classified_family}
 Selected prompt file: {selected_prompt_file}
 Classification field in output must always be: External
 Actual sourcing origin must only be placed in recommended_offer.origin.
-For every numerical offer, recommended_offer must contain supplier, unit_price,
-currency, pricing_unit (pc, kg, g, or m), pricing_basis, incoterm, origin, and
-structured transport, customs, and forwarder_fee objects. Each logistics object
-must contain value, currency, and rate_basis. A price without currency or
-pricing_unit is incomplete. If you convert a supplier price, also include
+For every numerical offer, recommended_offer must contain unit_price as a JSON
+number, currency, pricing_unit (pc, kg, g, or m), payment_days as a JSON number,
+incoterm, transport_cost, transport_basis, customs_cost, customs_basis,
+forwarder_fee, and forwarder_basis. A price without currency or pricing_unit is
+incomplete. If either cannot be determined, return status blocked with exactly
+one explicit missing field and no usable recommended_offer. If you convert a supplier price, also include
 original_unit_price, original_currency, conversion_rate, conversion_rate_date,
 converted_unit_price, and converted_currency. Never inherit supplier-offer
 currency from the production plant.

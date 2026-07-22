@@ -104,8 +104,10 @@ def test_tin_material_component_and_internal_soldering_operation_are_not_duplica
     assert len(tin_components) == 1  # a single canonical tin/solder material line
     assert tin_components[0]["costing_route"] == "external_component_costing_agent"
 
-    process = workflow.build_most_process_decomposition({"project_code": "T", "product_id": "T", "customer_input": {}}, normalized)
-    tinning_ops = [item for item in process["work_packages"] if item["work_package_id"] == "wp_30_lead_tinning"]
+    process = workflow.build_most_process_decomposition(
+        {"project_code": "T", "product_id": "T", "customer_input": {"product": "Fuse Choke"}}, normalized,
+    )
+    tinning_ops = [item for item in process["work_packages"] if item["operation_key"] == "soldering_tinning"]
     assert len(tinning_ops) == 1  # exactly one internal soldering operation, not one per material line
 
 
@@ -269,17 +271,12 @@ def test_conditional_routing_matches_workbook_reference():
     }
     normalized = workflow.normalize_bom(raw_bom)
     process = workflow.build_most_process_decomposition(
-        {"project_code": "T", "product_id": "T", "customer_input": {}}, normalized,
+        {"project_code": "T", "product_id": "T", "customer_input": {"product": "Fuse Choke"}}, normalized,
     )
-    ids = {item["work_package_id"] for item in process["work_packages"]}
-    assert ids == {
-        "wp_10_ferrite_handling",
-        "wp_20_wire_winding",
-        "wp_30_lead_tinning",
-        "wp_60_visual_inspection_packaging",
-    }
-    assert "wp_40_glue_application_baking" not in ids
-    assert "wp_50_electrical_test" not in ids
+    keys = {item["operation_key"] for item in process["work_packages"]}
+    assert keys == {"wire_winding", "soldering_tinning"}
+    assert "glue_application" not in keys
+    assert "electrical_test" not in keys
 
 
 def test_electrical_test_included_only_with_explicit_evidence():
@@ -290,11 +287,11 @@ def test_electrical_test_included_only_with_explicit_evidence():
     }
     normalized = workflow.normalize_bom(raw_bom)
     process = workflow.build_most_process_decomposition(
-        {"project_code": "T", "product_id": "T", "customer_input": {"electrical_test_required": True}},
+        {"project_code": "T", "product_id": "T", "customer_input": {"product": "Fuse Choke", "electrical_test_required": True}},
         normalized,
     )
-    ids = {item["work_package_id"] for item in process["work_packages"]}
-    assert "wp_50_electrical_test" in ids
+    keys = {item["operation_key"] for item in process["work_packages"]}
+    assert "electrical_test" in keys
 
 
 # ---------------------------------------------------------------------------

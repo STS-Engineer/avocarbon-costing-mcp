@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from services import choke_component_costing as component_costing
+from services.choke_classification import classify_choke, classification_trace
 from services.currency_service import normalize_currency_code, resolve_project_currency
 from services.choke_financial_calculation import calculate_dl_voh
 from services.choke_orchestrator import run_choke_orchestration
-from services.choke_process_decomposition import decompose_choke_process
+from services.choke_process_routing import build_choke_process_route
 from services.costing_master_data_service import (
     get_master_manufacturing_strategy,
     get_master_unit_data,
@@ -69,13 +70,16 @@ MOST_WRITEBACK_INSTRUCTION = (
 
 COMPONENT_COSTING_INSTRUCTION = (
     "Cost only this component. Return one complete JSON and call save_component_output. "
-    "A numerical offer is incomplete unless recommended_offer contains supplier, "
-    "unit_price, currency, pricing_unit (pc, kg, g, or m), pricing_basis, incoterm, "
-    "origin, and structured transport, customs, and forwarder_fee objects. Each "
-    "logistics object must contain value, currency, and rate_basis. If a supplier "
-    "contract also emits legacy compatibility fields, unit_price_currency must equal "
-    "currency, unit_price_basis must equal pricing_basis, and transportation_cost_basis, "
-    "customs_cost_basis, and forwarder_cost_basis must match the structured rate_basis values. "
+    "A usable recommended_offer must contain unit_price as a JSON number, currency, "
+    "pricing_unit (pc, kg, g, or m), payment_days as a JSON number, incoterm, "
+    "transport_cost with transport_basis, customs_cost with customs_basis, and "
+    "forwarder_fee with forwarder_basis. Currency and every basis must be explicit. "
+    "For legacy compatibility, unit_price_currency must equal currency and "
+    "unit_price_basis must identify the same pricing_unit; transportation_cost_basis, "
+    "customs_cost_basis, and forwarder_cost_basis must match transport_basis, "
+    "customs_basis, and forwarder_basis respectively. "
+    "If currency or pricing_unit cannot be determined, return status=blocked with exactly "
+    "one explicit missing field and do not return a usable recommended_offer. "
     "If a supplier "
     "price was converted, also provide original_unit_price, original_currency, "
     "conversion_rate, conversion_rate_date, converted_unit_price, and "
@@ -799,9 +803,11 @@ def _build_bom_trigger_payload(
         "Analyze the drawing according to your permanent agent instructions and call "
         "save_bom_output with the complete BOM JSON."
     )
+    choke_classification = classify_choke(normalized_input, {})
     payload = {
         "project_code": project_code,
         "product_id": product_id,
+        **classification_trace(choke_classification),
         "drawing_file_url": drawing_file_url,
         "drawing_agent_proxy_url": normalized_input.get("drawing_agent_proxy_url") or generated_local_url,
         "drawing_reference": normalized_input.get("drawing_reference"),
@@ -899,11 +905,16 @@ def start_real_choke_workflow(
         _write_json(input_path, stored_input)
         customer_input.update(stored_input)
 
+    choke_classification = classify_choke(normalized_input, {})
     manufacturing_strategy = get_master_manufacturing_strategy(
         normalized_input.get("product_line"),
         normalized_input.get("product"),
         normalized_input.get("customer_delivery_zone"),
     )
+    manufacturing_strategy = {
+        **manufacturing_strategy,
+        **classification_trace(choke_classification),
+    }
     unit_data = get_master_unit_data(manufacturing_strategy.get("production_plant"))
     path_diagnostics = workflow_path_diagnostics(project_code, product_id)
     logger.info("workflow start path: %s", json.dumps(path_diagnostics, default=str))
@@ -933,6 +944,8 @@ def start_real_choke_workflow(
         "status": "starting",
         "current_step": "Step 1 BOM Agent",
         "manufacturing_strategy": manufacturing_strategy,
+        "choke_classification": choke_classification,
+        **classification_trace(choke_classification),
         "unit_data": unit_data,
         "customer_input": normalized_input,
         "components": state.get("components") or {},
@@ -1343,6 +1356,8 @@ def _component_quantity(component: Dict[str, Any]) -> Optional[float]:
         value = component.get(key)
         if value in (None, ""):
             continue
+        if isinstance(value, dict):
+            value = value.get("value", value.get("quantity"))
         try:
             return float(str(value).replace(",", "."))
         except (TypeError, ValueError):
@@ -1472,7 +1487,11 @@ def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_bom(
+    raw_bom: Dict[str, Any],
+    customer_input: Optional[Dict[str, Any]] = None,
+    choke_classification: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     components = []
     external_components = []
     seen_component_ids = set()
@@ -1508,15 +1527,19 @@ def normalize_bom(raw_bom: Dict[str, Any]) -> Dict[str, Any]:
             "costing_route": "external_component_costing_agent" if is_external_costing else "not_external_agent",
             "external_component_type": route_type,
             "status": component.get("status") or component.get("validation_status"),
+            "certainty": component.get("certainty") or component.get("confidence"),
             "excluded_not_required": excluded_not_required,
         }
         components.append(normalized)
         if is_external_costing:
             external_components.append(normalized)
+    classification = choke_classification or classify_choke(customer_input or {}, raw_bom)
     return {
         "status": "normalized",
         "components": components,
         "external_components": external_components,
+        "choke_classification": classification,
+        **classification_trace(classification),
         "raw_bom": raw_bom,
     }
 
@@ -1754,6 +1777,13 @@ def _update_customer_input_from_bom(
 
 def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
     customer_input = state.get("customer_input") or {}
+    choke_classification = state.get("choke_classification") or classify_choke(
+        customer_input,
+        (_load_normalized_bom(state.get("project_code"), state.get("product_id")) or {}).get("raw_bom")
+        if state.get("project_code") and state.get("product_id") else {},
+    )
+    state["choke_classification"] = choke_classification
+    state.update(classification_trace(choke_classification))
     product_line = customer_input.get("product_line") or "Chokes"
     product = customer_input.get("product")
     delivery_zone = customer_input.get("customer_delivery_zone")
@@ -1776,6 +1806,7 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
             "product_received": product,
             "available_product_candidates": product_resolution.get("candidates") or [],
             "message": "Product is saved but no manufacturing strategy mapping was found.",
+            **classification_trace(choke_classification),
         }
         state["manufacturing_strategy"] = manufacturing_strategy
         state["unit_data"] = get_master_unit_data(None)
@@ -1789,6 +1820,10 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
         canonical_product or product,
         delivery_zone,
     )
+    manufacturing_strategy = {
+        **manufacturing_strategy,
+        **classification_trace(choke_classification),
+    }
     production_plant = manufacturing_strategy.get("production_plant")
     unit_data = get_master_unit_data(production_plant)
     state["manufacturing_strategy"] = manufacturing_strategy
@@ -1950,7 +1985,15 @@ def save_bom_output(
             request_correlation_id=correlation_id,
         )
 
-        normalized = normalize_bom(raw_json)
+        choke_classification = classify_choke(
+            (existing_state or {}).get("customer_input") or {},
+            raw_json,
+        )
+        normalized = normalize_bom(
+            raw_json,
+            (existing_state or {}).get("customer_input") or {},
+            choke_classification,
+        )
         _write_json(normalized_path, normalized)
         component_ids = [
             item.get("component_id")
@@ -1979,7 +2022,18 @@ def save_bom_output(
             input_path = _customer_input_path_from_state(state)
             if input_path:
                 state["customer_input"] = _read_json(input_path, state.get("customer_input") or {}) or {}
+        choke_classification = classify_choke(state.get("customer_input") or {}, raw_json)
+        state["choke_classification"] = choke_classification
+        state.update(classification_trace(choke_classification))
+        normalized["choke_classification"] = choke_classification
+        normalized.update(classification_trace(choke_classification))
+        _write_json(normalized_path, normalized)
         master_data_refresh = _refresh_master_data_for_state(state)
+        state["process_decomposition"] = build_choke_process_route(
+            state.get("customer_input") or {},
+            normalized,
+            choke_classification,
+        )
         existing_bom = dict(state.get("bom") or {})
         state["bom"] = {
             **existing_bom,
@@ -2196,7 +2250,11 @@ def get_bom_output(project_code: str, product_id: str) -> Dict[str, Any]:
     )
     if not process_scopes:
         try:
-            process = decompose_choke_process(raw_bom or {}, state.get("customer_input") or {})
+            process = build_choke_process_route(
+                state.get("customer_input") or {},
+                normalized_bom,
+                state.get("choke_classification") or normalized_bom.get("choke_classification"),
+            )
             process_scopes = process.get("work_packages") or []
         except (TypeError, ValueError, KeyError):
             process_scopes = []
@@ -2557,6 +2615,7 @@ def _component_trigger_payload(
     return {
         "project_code": state["project_code"],
         "product_id": state["product_id"],
+        **classification_trace(state.get("choke_classification")),
         "component_id": component_id,
         "component_name": component.get("component"),
         "component_family": component_family,
@@ -2798,6 +2857,17 @@ def normalize_component_output(
         "forwarder_cost_per_piece_basis": _output_value(offer, "forwarder_cost_basis", "forwarder_cost_per_piece_basis"),
     }
     resolved_offer = component_costing.resolve_component_offer(raw_json)
+    dimensional_source = dict(bom_component.get("component_definition") or {})
+    dimensional_source.setdefault("quantity_per_product", bom_component.get("quantity_per_product"))
+    bom_fields = component_costing.extract_bom_dimensional_fields(
+        bom_component["component_id"], dimensional_source,
+    )
+    canonical = component_costing.build_canonical_component_costing(
+        bom_component["component_id"],
+        raw_json.get("component_family") or bom_component.get("external_component_type") or bom_component.get("category"),
+        bom_fields,
+        raw_json,
+    )
     normalized_offer.update(resolved_offer)
     normalized_offer.update({
         "unit_price": resolved_offer.get("unit_price"),
@@ -2840,12 +2910,21 @@ def normalize_component_output(
         "schema_version": "1.0",
         "project_code": state["project_code"],
         "product_id": state["product_id"],
+        **classification_trace(state.get("choke_classification")),
         "component_id": bom_component["component_id"],
         "component_name": raw_json.get("component_name") or bom_component.get("component"),
         "component_family": raw_json.get("component_family") or bom_component.get("external_component_type") or bom_component.get("category"),
         "classification": "External",
         "analysis_status": analysis_status,
         "quantity_per_product": bom_component.get("quantity_per_product"),
+        "technical_quantity": canonical.get("technical_quantity"),
+        "technical_quantity_unit": canonical.get("technical_quantity_unit"),
+        "unit_price": canonical.get("unit_price"),
+        "pricing_unit": canonical.get("pricing_unit"),
+        "currency": canonical.get("currency"),
+        "material_cost_per_piece": canonical.get("material_cost_per_piece"),
+        "source_quantity": canonical.get("source_quantity"),
+        "conversion": canonical.get("conversion"),
         "annual_quantity": customer_input.get("annual_quantity"),
         "destination_zone": customer_input.get("customer_delivery_zone"),
         "reporting_currency": resolve_project_currency(
@@ -2988,176 +3067,41 @@ def _most_component_technical_data(project_code: str, product_id: str, component
     return technical
 
 
-def _most_work_package(
-    state: Dict[str, Any],
-    work_package_id: str,
-    operation_name: str,
-    operation_family: str,
-    components: List[Dict[str, Any]],
-    status: str = "pending",
-    blocking_reason: Optional[str] = None,
-) -> Dict[str, Any]:
-    technical_inputs: Dict[str, Any] = {}
-    for component in components:
-        technical_inputs.update(
-            _most_component_technical_data(state["project_code"], state["product_id"], component)
-        )
-    return {
-        "work_package_id": work_package_id,
-        "operation_name": operation_name,
-        "operation_family": operation_family,
-        "component_ids": [item["component_id"] for item in components],
-        "quantity_per_product": 1,
-        "technical_inputs": technical_inputs,
-        "production_plant": state.get("production_plant") or (state.get("unit_data") or {}).get("plant"),
-        "annual_quantity": (state.get("customer_input") or {}).get("annual_quantity"),
-        "status": status,
-        "blocking_reason": blocking_reason,
-    }
-
-
-def _electrical_test_required(state: Dict[str, Any], normalized_bom: Dict[str, Any]) -> bool:
-    """Electrical test is only added to the routing when there is explicit
-    technical evidence for it (a customer/BOM requirement) — the MOST Agent
-    does not get to invent it, and it is not part of the default routing.
-    A customer flag takes priority; otherwise fall back to scanning the raw
-    BOM text for an explicit requirement statement."""
-    customer_input = state.get("customer_input") or {}
-    flag = customer_input.get("electrical_test_required")
-    if flag is not None:
-        return bool(flag)
-    raw_bom_text = json.dumps(normalized_bom.get("raw_bom") or {}, ensure_ascii=False, default=str).lower()
-    return any(term in raw_bom_text for term in [
-        "electrical_test_required",
-        "electrical test required",
-        "requires electrical test",
-        "100% electrical test",
-    ])
-
-
-# Conditional operation catalog for the Fuse choke product family: the
-# backend selects which of these apply from normalized BOM component
-# families and technical evidence; the MOST Agent then estimates only the
-# selected operations rather than proposing the overall routing itself.
-_MOST_OPERATION_CATALOG = [
-    {
-        "operation_id": "wp_10_ferrite_handling",
-        "operation_name": "Ferrite handling",
-        "operation_family": "material_handling",
-        "applies": lambda ctx: bool(ctx["ferrite"]),
-        "components": lambda ctx: [ctx["ferrite"]],
-    },
-    {
-        "operation_id": "wp_20_wire_winding",
-        "operation_name": "Wire winding",
-        "operation_family": "winding",
-        "applies": lambda ctx: bool(ctx["wire"]),
-        "components": lambda ctx: [item for item in [ctx["wire"], ctx["ferrite"]] if item],
-    },
-    {
-        "operation_id": "wp_30_lead_tinning",
-        "operation_name": "Lead tinning",
-        "operation_family": "tinning",
-        "applies": lambda ctx: bool(ctx["tin"]),
-        "components": lambda ctx: [ctx["tin"]],
-    },
-    {
-        "operation_id": "wp_40_glue_application_baking",
-        "operation_name": "Glue application and baking",
-        "operation_family": "gluing_baking",
-        "applies": lambda ctx: bool(ctx["glue"]),
-        "components": lambda ctx: [item for item in [ctx["glue"], ctx["ferrite"]] if item],
-        "is_blocked": lambda ctx: bool(ctx["glue"]) and _component_status_is_unconfirmed(ctx["glue"]),
-        "blocking_reason": "Glue requirement must be confirmed before MOST analysis.",
-    },
-    {
-        "operation_id": "wp_50_electrical_test",
-        "operation_name": "Electrical test",
-        "operation_family": "quality_test",
-        "applies": lambda ctx: bool(ctx["electrical_test_required"] and (ctx["ferrite"] or ctx["wire"])),
-        "components": lambda ctx: [item for item in [ctx["ferrite"], ctx["wire"], ctx["tin"]] if item],
-    },
-    {
-        "operation_id": "wp_60_visual_inspection_packaging",
-        "operation_name": "Visual inspection and packaging",
-        "operation_family": "inspection_packaging",
-        "applies": lambda ctx: any([ctx["ferrite"], ctx["wire"], ctx["tin"], ctx["glue"]]),
-        "components": lambda ctx: [item for item in [ctx["ferrite"], ctx["wire"], ctx["tin"]] if item],
-    },
-]
-
-
 def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict[str, Any]) -> Dict[str, Any]:
-    all_components = normalized_bom.get("components") or []
-    # Components the BOM itself marked as not required (zero quantity, "not
-    # retained", ...) must not spawn a MOST work package even though they are
-    # still recorded in the normalized BOM for traceability.
-    components = {
-        item["component_id"]: item
-        for item in all_components
-        if item.get("component_id") and not item.get("excluded_not_required")
-    }
-    context = {
-        "ferrite": components.get("ferrite_core"),
-        "wire": components.get("magnet_wire"),
-        "tin": components.get("lead_tinning"),
-        "glue": components.get("glue"),
-        "electrical_test_required": _electrical_test_required(state, normalized_bom),
-    }
-    ferrite, wire, tin, glue = context["ferrite"], context["wire"], context["tin"], context["glue"]
-
-    packages: List[Dict[str, Any]] = []
-    for entry in _MOST_OPERATION_CATALOG:
-        if not entry["applies"](context):
-            continue
-        entry_components = entry["components"](context)
-        is_blocked = entry.get("is_blocked", lambda ctx: False)(context)
-        packages.append(_most_work_package(
-            state,
-            entry["operation_id"],
-            entry["operation_name"],
-            entry["operation_family"],
-            entry_components,
-            status="blocked" if is_blocked else "pending",
-            blocking_reason=entry.get("blocking_reason") if is_blocked else None,
-        ))
-
-    if packages:
-        return {
-            "status": "created",
-            "work_packages": packages,
-            "required_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") != "blocked"],
-            "blocked_work_package_ids": [item["work_package_id"] for item in packages if item.get("status") == "blocked"],
-            "blocked_reason": None,
-            "missing_inputs": [],
-        }
-
-    missing_inputs = []
-    if not any([ferrite, wire, tin, glue]):
-        if all_components:
-            missing_inputs.append(
-                "normalized BOM has components but none match a recognized material "
-                "family (ferrite/wire/tin/glue); check component_id/family classification"
-            )
-        else:
-            missing_inputs.append("normalized BOM has no components")
-    blocked_reason = "missing_required_components" if missing_inputs else "no_valid_work_packages"
-    logger.warning(
-        "build_most_process_decomposition blocked for %s/%s: blocked_reason=%s missing_inputs=%s component_ids=%s",
-        state.get("project_code"),
-        state.get("product_id"),
-        blocked_reason,
-        missing_inputs,
-        list(components.keys()),
+    """Build MOST work packages exclusively through the central evidence router."""
+    classification = state.get("choke_classification") or normalized_bom.get("choke_classification")
+    if not classification or classification.get("choke_subtype") == "unknown_choke":
+        classification = classify_choke(
+            state.get("customer_input") or {},
+            normalized_bom.get("raw_bom") or {},
+        )
+    result = build_choke_process_route(
+        state.get("customer_input") or {},
+        normalized_bom,
+        classification,
+        state.get("preliminary_routing_policy") or {},
     )
-    return {
-        "status": "blocked",
-        "work_packages": [],
-        "required_work_package_ids": [],
-        "blocked_work_package_ids": [],
-        "blocked_reason": blocked_reason,
-        "missing_inputs": missing_inputs,
+    component_map = {
+        item.get("component_id"): item
+        for item in normalized_bom.get("components") or []
+        if item.get("component_id")
     }
+    for package in result.get("work_packages") or []:
+        package_components = [
+            component_map[item]
+            for item in package.get("component_ids") or []
+            if item in component_map
+        ]
+        technical_inputs: Dict[str, Any] = {}
+        for component in package_components:
+            technical_inputs.update(
+                _most_component_technical_data(state["project_code"], state["product_id"], component)
+            )
+        package["technical_inputs"] = technical_inputs
+        package["production_plant"] = state.get("production_plant") or (state.get("unit_data") or {}).get("plant")
+        package["annual_quantity"] = (state.get("customer_input") or {}).get("annual_quantity")
+        package.update(classification_trace(classification))
+    return result
 
 
 def _most_trigger_payload(state: Dict[str, Any], work_package: Dict[str, Any]) -> Dict[str, Any]:
@@ -3165,6 +3109,7 @@ def _most_trigger_payload(state: Dict[str, Any], work_package: Dict[str, Any]) -
     return {
         "project_code": state["project_code"],
         "product_id": state["product_id"],
+        **classification_trace(state.get("choke_classification")),
         "work_package_id": work_package_id,
         "most_scope_id": work_package_id,
         "operation_name": work_package.get("operation_name"),
@@ -3327,6 +3272,7 @@ def normalize_most_output(state: Dict[str, Any], work_package: Dict[str, Any], r
         "schema_version": "1.0",
         "project_code": state["project_code"],
         "product_id": state["product_id"],
+        **classification_trace(state.get("choke_classification")),
         "work_package_id": work_package["work_package_id"],
         "operation_name": raw_json.get("operation_name") or work_package.get("operation_name"),
         "component_ids": raw_json.get("component_ids") if isinstance(raw_json.get("component_ids"), list) else work_package.get("component_ids") or [],
@@ -3672,9 +3618,15 @@ def calculate_final_choke_costing_from_saved_outputs(
         currency = _saved_component_currency(raw)
         component_breakdown.append({
             "component_id": component_id,
+            "technical_quantity": pricing_quantity_info.get("pricing_quantity"),
+            "technical_quantity_unit": (
+                f"{pricing_quantity_info['pricing_unit']}/product"
+                if pricing_quantity_info.get("pricing_unit") else None
+            ),
             "pricing_quantity": pricing_quantity_info.get("pricing_quantity"),
             "pricing_unit": pricing_quantity_info.get("pricing_unit"),
             "pricing_quantity_basis": pricing_quantity_info.get("pricing_quantity_basis"),
+            "unit_price": price_info.get("unit_price"),
             "unit_material_or_delivered_cost": price_info.get("unit_price"),
             "material_cost_per_piece": line_material_cost,
             "source_currency": currency,
@@ -3744,6 +3696,8 @@ def calculate_final_choke_costing_from_saved_outputs(
     result = {
         "project_code": project_code,
         "product_id": product_id,
+        **classification_trace(state.get("choke_classification")),
+        "process_decomposition": state.get("process_decomposition") or {},
         "status": "blocked" if unique_missing else "calculated",
         "costing_method": "preliminary_plant_percentage_dc",
         "currency": project_currency or "",

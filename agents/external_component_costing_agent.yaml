@@ -24,20 +24,26 @@ family_routing:
   ferrite_component: Ferrite prompt V1
   enameled_wire: Enameled wire prompt V1
   spring: Spring prompt V1
+  packaging_component: Packaging component prompt V1 (backend extension)
+  external_consumable: External consumable prompt V1 (backend extension)
 output_contract:
   format: JSON only
   recommended_offer_required_fields:
-    - supplier
     - unit_price
     - currency
     - pricing_unit
-    - pricing_basis
+    - payment_days
     - incoterm
-    - origin
-    - transport
-    - customs
+    - transport_cost
+    - transport_basis
+    - customs_cost
+    - customs_basis
     - forwarder_fee
+    - forwarder_basis
   priced_value_rule: A numerical price without currency or pricing_unit is incomplete.
+  incomplete_offer_rule: >
+    If currency or pricing_unit cannot be determined, return status blocked with
+    exactly one explicit missing field and do not return a usable recommended offer.
   conversion_metadata_rule: >
     When converting a supplier price, include original_unit_price,
     original_currency, conversion_rate, conversion_rate_date,

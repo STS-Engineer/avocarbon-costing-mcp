@@ -18,7 +18,7 @@ def _state(**overrides):
     state = {
         "project_code": "TEST-PROJECT",
         "product_id": "TEST-PRODUCT",
-        "customer_input": {"annual_quantity": 600000},
+        "customer_input": {"annual_quantity": 600000, "product": "Fuse Choke"},
         "production_plant": "Kunshan",
         "unit_data": {"status": "found", "plant": "Kunshan"},
     }
@@ -161,17 +161,11 @@ def test_process_decomposition_generates_work_packages_for_valid_bom():
 
     assert process["status"] == "created"
     work_package_ids = {item["work_package_id"] for item in process["work_packages"]}
-    # wp_50_electrical_test is conditional on explicit technical evidence
-    # (Phase 6 G) and is not part of the default routing.
-    assert work_package_ids == {
-        "wp_10_ferrite_handling",
-        "wp_20_wire_winding",
-        "wp_30_lead_tinning",
-        "wp_60_visual_inspection_packaging",
-    }
-    assert "wp_50_electrical_test" not in work_package_ids
-    # Glue is excluded (zero qty / not retained) so no gluing work package is created.
-    assert "wp_40_glue_application_baking" not in work_package_ids
+    # Winding and the explicitly described lead-tinning operation are
+    # confirmed. Core assembly still needs confirmation; packaging is not invented.
+    assert work_package_ids == {"wp_10_wire_winding", "wp_30_soldering_tinning"}
+    assert "electrical_test" not in {item["operation_key"] for item in process["operations"]}
+    assert "glue_application" not in {item["operation_key"] for item in process["operations"]}
     assert process["blocked_reason"] is None
     assert process["missing_inputs"] == []
 
@@ -192,7 +186,7 @@ def test_process_decomposition_blocked_when_bom_totally_empty():
     process = workflow.build_most_process_decomposition(_state(), normalized)
 
     assert process["status"] == "blocked"
-    assert process["missing_inputs"] == ["normalized BOM has no components"]
+    assert process["missing_inputs"] == ["confirmed_process_operations"]
 
 
 # ---------------------------------------------------------------------------
@@ -302,12 +296,7 @@ def test_trigger_most_triggers_pending_packages_and_moves_state(monkeypatch):
     assert result["reason"] is None
     assert result["status"] == "most_triggered"
     triggered_ids = {item["work_package_id"] for item in result["triggered_work_packages"]}
-    assert triggered_ids == {
-        "wp_10_ferrite_handling",
-        "wp_20_wire_winding",
-        "wp_30_lead_tinning",
-        "wp_60_visual_inspection_packaging",
-    }
+    assert triggered_ids == {"wp_10_wire_winding", "wp_30_soldering_tinning"}
     assert state["status"] == "most_triggered"
 
 
@@ -318,7 +307,7 @@ def test_trigger_most_skips_already_received_work_packages_idempotently(monkeypa
         bom={"status": "received"},
         required_external_component_ids=required_ids,
         components={cid: {"status": "received"} for cid in required_ids},
-        most={"wp_10_ferrite_handling": {"status": "received"}},
+        most={"wp_10_wire_winding": {"status": "received"}},
     )
     _patch_common(monkeypatch, state, normalized_bom)
 
@@ -333,6 +322,6 @@ def test_trigger_most_skips_already_received_work_packages_idempotently(monkeypa
     result = workflow.trigger_most_operations("TEST-PROJECT", "TEST-PRODUCT", dry_run=True)
 
     skipped_ids = {item["work_package_id"] for item in result["skipped_work_packages"]}
-    assert "wp_10_ferrite_handling" in skipped_ids
+    assert "wp_10_wire_winding" in skipped_ids
     triggered_ids = {item["work_package_id"] for item in result["triggered_work_packages"]}
-    assert "wp_10_ferrite_handling" not in triggered_ids
+    assert "wp_10_wire_winding" not in triggered_ids
