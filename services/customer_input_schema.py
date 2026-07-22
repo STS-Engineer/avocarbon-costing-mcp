@@ -34,6 +34,9 @@ def normalize_customer_input(raw):
         "final_customer": _first(raw, ["final_customer", "end_customer"]),
         "product_line": _first(raw, ["product_line", "product_line_name"]),
         "product": _first(raw, ["product", "product_name"]),
+        "product_name": _first(raw, ["product_name", "product"]),
+        "product_family": _first(raw, ["product_family", "product_line", "product_line_name"]),
+        "product_subtype": _first(raw, ["product_subtype", "choke_subtype"]),
         "product_id": _first(raw, ["product_id", "product_reference"]),
         "part_number": _first(raw, ["part_number", "customer_part_number"]),
         "drawing_reference": _first(raw, ["drawing_reference", "drawing_file", "drawing"]),
@@ -43,16 +46,24 @@ def normalize_customer_input(raw):
             "destination_zone",
             "delivery_area",
         ]),
+        "delivery_country": _first(raw, ["delivery_country", "country"]),
+        "delivery_city": _first(raw, ["delivery_city", "city"]),
         "annual_quantity": _number(_first(raw, [
             "annual_quantity",
             "annual_volume",
             "qmax",
             "quantity",
         ])),
-        "currency": normalize_currency_code(_first(raw, ["currency", "target_price_currency"])),
+        "quotation_currency": normalize_currency_code(_first(raw, ["quotation_currency", "currency"])),
+        "target_price_currency": normalize_currency_code(_first(raw, ["target_price_currency"])),
+        "purchasing_currency": normalize_currency_code(_first(raw, ["purchasing_currency"])),
+        "plant_operating_currency": normalize_currency_code(_first(raw, ["plant_operating_currency"])),
+        "reporting_currency": normalize_currency_code(_first(raw, ["reporting_currency"])),
         "target_price": _number(_first(raw, ["target_price", "target_price_value"])),
         "sop_date": _first(raw, ["sop_date", "sop", "sop_year"]),
     }
+    # Legacy API compatibility. This is never sourced from target, supplier, or plant currency.
+    normalized["currency"] = normalized["quotation_currency"]
 
     if not _has_value(normalized["product_id"]) and _has_value(normalized["part_number"]):
         normalized["product_id"] = normalized["part_number"]

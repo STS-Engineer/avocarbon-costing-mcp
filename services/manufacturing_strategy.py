@@ -118,6 +118,10 @@ def normalize_delivery_zone(value):
         "north america": "North America",
         "south america": "South America",
         "china south pacific": "China south Pacific",
+        "china": "China south Pacific",
+        "pr china": "China south Pacific",
+        "tunisia": "Africa",
+        "france": "Europe",
         "japan korea": "Japan Korea",
     }
     return aliases.get(zone_key, str(value or "").strip())

@@ -15,6 +15,7 @@ from services.choke_sequential_agent_workflow import (
     get_writeback_debug,
     get_workflow_debug,
     get_workflow_state,
+    get_customer_input_resolution,
     save_bom_output,
     save_component_output,
     save_most_output,
@@ -96,6 +97,11 @@ class UpdateCommercialFieldsRequest(BaseModel):
     customer_delivery_zone: str | None = None
     annual_quantity: float | None = None
     currency: str | None = None
+    quotation_currency: str | None = None
+    target_price_currency: str | None = None
+    purchasing_currency: str | None = None
+    delivery_country: str | None = None
+    delivery_city: str | None = None
     target_price: float | None = None
     sop_date: str | None = None
 
@@ -145,6 +151,11 @@ def workflow_writeback_debug(project_code: str, product_id: str):
 @router.get("/bom-output/{project_code}/{product_id}")
 def bom_output(project_code: str, product_id: str):
     return _handle(lambda: get_bom_output(project_code, product_id))
+
+
+@router.get("/customer-input-resolution/{project_code}/{product_id}")
+def customer_input_resolution(project_code: str, product_id: str):
+    return _handle(lambda: get_customer_input_resolution(project_code, product_id))
 
 
 @router.post("/update-commercial-fields")

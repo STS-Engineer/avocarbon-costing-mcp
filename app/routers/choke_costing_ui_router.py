@@ -1,8 +1,10 @@
 import json
 import os
 import re
+import hashlib
+import mimetypes
 from html import escape
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -31,6 +33,11 @@ from services.project_data_paths import (
 )
 from services.public_url_service import get_public_rest_base_url
 from services.choke_sequential_agent_workflow import append_workflow_event
+from services.customer_input_extraction import (
+    SUPPORTED_CUSTOMER_INPUT_EXTENSIONS,
+    apply_resolution_to_customer_input,
+    extract_customer_input_package,
+)
 
 
 BASE_DIR = BACKEND_ROOT
@@ -69,12 +76,33 @@ def _timestamp() -> str:
 
 
 def _safe_upload_filename(filename: str) -> str:
-    original = Path(filename or "drawing.pdf").name
-    stem = _safe_slug(Path(original).stem, "drawing")
+    original = Path(filename or "attachment").name
+    stem = _safe_slug(Path(original).stem, "attachment")
     suffix = Path(original).suffix.lower()
-    if suffix != ".pdf":
-        raise HTTPException(status_code=400, detail="drawing_pdf must be a PDF file")
+    if suffix not in SUPPORTED_CUSTOMER_INPUT_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_CUSTOMER_INPUT_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Unsupported attachment type. Allowed: {allowed}")
     return f"{stem}{suffix}"
+
+
+def _unique_upload_path(upload_dir: Path, filename: str) -> Path:
+    candidate = upload_dir / filename
+    counter = 2
+    while candidate.exists():
+        candidate = upload_dir / f"{Path(filename).stem}__{counter}{Path(filename).suffix}"
+        counter += 1
+    return candidate
+
+
+def _attachment_role(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".pdf":
+        return "drawing_specification"
+    if suffix in {".xlsx", ".xlsm"}:
+        return "commercial_rfq_workbook"
+    if suffix == ".csv":
+        return "commercial_data"
+    return "supporting_attachment"
 
 
 def _load_env() -> None:
@@ -216,6 +244,11 @@ def list_customer_inputs(request: Request):
             "warnings": payload.get("warnings") or [],
             "drawing_original_filename": payload.get("drawing_original_filename"),
             "technical_fields_extracted_from_bom": payload.get("technical_fields_extracted_from_bom") is True,
+            "attachment_manifest": payload.get("attachment_manifest") or [],
+            "customer_input_resolution": payload.get("customer_input_resolution") or {},
+            "component_costing_ready": (
+                (payload.get("customer_input_resolution") or {}).get("component_costing_ready") is True
+            ),
         })
     return items
 
@@ -245,80 +278,114 @@ async def create_customer_input(request: Request):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"{name} must be numeric") from exc
 
-    customer = field("customer")
-    customer_delivery_zone = field("customer_delivery_zone")
-    annual_quantity = number_field("annual_quantity")
-    currency = field("currency")
-    drawing_pdf = form.get("drawing_pdf")
-    missing = []
-    if drawing_pdf is None or not getattr(drawing_pdf, "filename", ""):
-        missing.append("drawing_pdf")
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Missing required fields: {', '.join(missing)}")
-
     created_timestamp = _timestamp()
-    project_code = field("project_code") or f"RFQ-{created_timestamp}"
+    provisional_project_code = field("project_code") or f"RFQ-{created_timestamp}"
     product_id_input = field("product_id")
     part_number_input = field("part_number")
-    product_id = product_id_input or part_number_input or f"UNKNOWN-PART-{created_timestamp}"
+    provisional_product_id = product_id_input or part_number_input or f"UNKNOWN-PART-{created_timestamp}"
 
-    safe_project_code = _safe_slug(project_code, "project")
-    safe_product_id = _safe_slug(product_id, "product")
-    drawing_reference = None
-    drawing_file_path = None
+    uploads = []
+    seen_upload_objects = set()
+    for form_key in ["drawing_pdf", "attachments", "files"]:
+        for upload in form.getlist(form_key):
+            if not getattr(upload, "filename", "") or id(upload) in seen_upload_objects:
+                continue
+            seen_upload_objects.add(id(upload))
+            uploads.append(upload)
+    if not uploads:
+        raise HTTPException(status_code=400, detail="At least one customer-input attachment is required.")
 
-    filename = _safe_upload_filename(drawing_pdf.filename)
-    upload_dir = CUSTOMER_INPUT_DIR / "uploads" / safe_project_code
-    upload_path = upload_dir / filename
+    upload_dir = CUSTOMER_INPUT_DIR / "uploads" / _safe_slug(provisional_project_code, "project")
     upload_dir.mkdir(parents=True, exist_ok=True)
-    content = await drawing_pdf.read()
-    upload_path.write_bytes(content)
-    drawing_reference = Path(drawing_pdf.filename).name
-    drawing_file_path = _relative_to_base(upload_path)
-    drawing_file_url_local = get_public_file_url(request, drawing_file_path)
-    drawing_agent_proxy_url = get_agent_file_url(request, drawing_file_path)
+    attachment_manifest = []
+    uploaded_paths: Dict[str, Path] = {}
+    uploaded_at = datetime.now(timezone.utc).isoformat()
+    for upload in uploads:
+        safe_filename = _safe_upload_filename(upload.filename)
+        upload_path = _unique_upload_path(upload_dir, safe_filename)
+        content = await upload.read()
+        upload_path.write_bytes(content)
+        stored_path = _relative_to_base(upload_path)
+        manifest_item = {
+            "attachment_id": hashlib.sha256(content).hexdigest()[:16],
+            "original_filename": Path(upload.filename).name,
+            "stored_filename": upload_path.name,
+            "stored_path": stored_path,
+            "mime_type": getattr(upload, "content_type", None) or mimetypes.guess_type(upload.filename)[0] or "application/octet-stream",
+            "file_size": len(content),
+            "checksum_sha256": hashlib.sha256(content).hexdigest(),
+            "uploaded_at": uploaded_at,
+            "source_role": _attachment_role(upload.filename),
+        }
+        attachment_manifest.append(manifest_item)
+        uploaded_paths[stored_path] = upload_path
+
+    explicit_values = {
+        "project_code": field("project_code"),
+        "customer": field("customer"),
+        "final_customer": field("final_customer"),
+        "product_line": field("product_line"),
+        "product": field("product"),
+        "product_id": product_id_input,
+        "part_number": part_number_input,
+        "customer_delivery_zone": field("customer_delivery_zone"),
+        "annual_quantity": number_field("annual_quantity"),
+        "quotation_currency": field("quotation_currency") or field("currency"),
+        "target_price": number_field("target_price"),
+        "target_price_currency": field("target_price_currency"),
+        "sop_date": field("sop_date"),
+    }
+    explicit_fields = [key for key, value in explicit_values.items() if value not in [None, ""]]
+    structured_input = {
+        **explicit_values,
+        "product_line": explicit_values.get("product_line") or "Chokes",
+        "_explicit_user_fields": explicit_fields,
+    }
+    extraction = extract_customer_input_package(structured_input, attachment_manifest)
+    customer_input = apply_resolution_to_customer_input(structured_input, extraction)
+    project_code = customer_input.get("project_code") or provisional_project_code
+    resolved_part_number = customer_input.get("part_number")
+    product_id = product_id_input or resolved_part_number or provisional_product_id
+    customer_input.update({
+        "project_code": project_code,
+        "product_id": product_id,
+        "workflow_product_id": product_id,
+        "attachment_manifest": attachment_manifest,
+        "customer_input_resolution": extraction,
+        "resolved_customer_context": extraction,
+        "_explicit_user_fields": explicit_fields,
+    })
+
+    drawing_candidates = [item for item in attachment_manifest if Path(item["stored_filename"]).suffix.lower() == ".pdf"]
+    preferred_drawing = str(customer_input.get("drawing_reference") or "").lower()
+    primary_drawing = next(
+        (item for item in drawing_candidates if item["original_filename"].lower() == preferred_drawing),
+        drawing_candidates[0] if drawing_candidates else None,
+    )
+    drawing_file_path = primary_drawing.get("stored_path") if primary_drawing else None
+    drawing_reference = primary_drawing.get("original_filename") if primary_drawing else customer_input.get("drawing_reference")
+    drawing_file_url_local = get_public_file_url(request, drawing_file_path) if drawing_file_path else None
+    drawing_agent_proxy_url = get_agent_file_url(request, drawing_file_path) if drawing_file_path else None
     drawing_file_url = drawing_agent_proxy_url or drawing_file_url_local
     drawing_blob_url = None
     drawing_sas_url = None
-    drawing_access_mode = "backend_signed_proxy" if drawing_agent_proxy_url else "local"
-    warnings = []
-    azure_upload_result = {
-        "status": "not_configured",
-        "message": "AZURE_STORAGE_CONNECTION_STRING is not configured",
-    }
-    if is_azure_blob_configured():
-        azure_upload_result = upload_file_to_blob(
-            upload_path,
-            project_code,
-            original_filename=Path(drawing_pdf.filename).name,
-        )
+    drawing_access_mode = "backend_signed_proxy" if drawing_agent_proxy_url else "local" if drawing_file_path else "missing"
+    warnings = list(extraction.get("warnings") or [])
+    azure_upload_result = {"status": "not_configured", "message": "AZURE_STORAGE_CONNECTION_STRING is not configured"}
+    if primary_drawing and is_azure_blob_configured():
+        primary_path = uploaded_paths[primary_drawing["stored_path"]]
+        azure_upload_result = upload_file_to_blob(primary_path, project_code, original_filename=primary_drawing["original_filename"])
         if azure_upload_result.get("status") == "uploaded":
             drawing_blob_url = azure_upload_result.get("blob_url")
             drawing_sas_url = azure_upload_result.get("sas_url")
             drawing_file_url = drawing_agent_proxy_url or drawing_sas_url or drawing_blob_url
-            drawing_access_mode = "backend_signed_proxy" if drawing_agent_proxy_url else (
-                "azure_blob_sas" if drawing_sas_url else "azure_blob"
-            )
+            drawing_access_mode = "backend_signed_proxy" if drawing_agent_proxy_url else "azure_blob_sas" if drawing_sas_url else "azure_blob"
         else:
-            warnings.append(
-                "Azure Blob upload failed; using local PDF URL fallback. "
-                "Cloud Workspace Agents cannot access localhost URLs."
-            )
-    else:
-        warnings.append(
-            "Azure Blob is not configured; using local PDF URL fallback. "
-            "Cloud Workspace Agents cannot access localhost URLs."
-        )
+            warnings.append("Azure Blob upload failed; using the backend file URL fallback.")
+    elif primary_drawing and not is_azure_blob_configured():
+        warnings.append("Azure Blob is not configured; using the backend PDF URL fallback.")
 
-    customer_input = {
-        "project_code": project_code,
-        "customer": customer,
-        "final_customer": field("final_customer"),
-        "product_line": field("product_line", "Chokes"),
-        "product": field("product"),
-        "product_id": product_id,
-        "workflow_product_id": product_id,
-        "part_number": part_number_input,
+    customer_input.update({
         "drawing_reference": drawing_reference,
         "drawing_file_path": drawing_file_path,
         "drawing_file_url_local": drawing_file_url_local,
@@ -328,21 +395,15 @@ async def create_customer_input(request: Request):
         "drawing_sas_url": drawing_sas_url,
         "drawing_access_mode": drawing_access_mode,
         "drawing_azure_upload": azure_upload_result,
-        "drawing_original_filename": Path(drawing_pdf.filename).name,
-        "customer_delivery_zone": customer_delivery_zone,
-        "annual_quantity": annual_quantity,
-        "currency": currency,
-        "target_price": number_field("target_price"),
-        "sop_date": field("sop_date"),
-        "technical_fields_pending_bom": not all([
-            field("product"),
-            product_id_input,
-            part_number_input,
-        ]),
+        "drawing_original_filename": drawing_reference,
+        "technical_fields_pending_bom": not all([customer_input.get("product"), customer_input.get("part_number")]),
         "technical_fields_extracted_from_bom": False,
-        "warnings": warnings,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-    }
+        "warnings": list(dict.fromkeys(warnings)),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    safe_project_code = _safe_slug(project_code, "project")
+    safe_product_id = _safe_slug(product_id, "product")
 
     output_path = CUSTOMER_INPUT_DIR / f"{safe_project_code}_{safe_product_id}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -361,6 +422,12 @@ async def create_customer_input(request: Request):
         "status": "saved",
         "input_file": _relative_to_base(output_path),
         "customer_input": customer_input,
+        "attachment_manifest": attachment_manifest,
+        "resolved_fields": extraction.get("resolved_fields") or [],
+        "missing_fields": extraction.get("missing_fields") or [],
+        "conflicts": extraction.get("conflicts") or [],
+        "warnings": customer_input.get("warnings") or [],
+        "component_costing_ready": extraction.get("component_costing_ready") is True,
     }
 
 

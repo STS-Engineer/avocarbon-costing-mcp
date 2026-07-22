@@ -21,6 +21,11 @@ from services.costing_master_data_service import (
     get_master_unit_data,
 )
 from services.customer_input_schema import normalize_customer_input
+from services.customer_input_extraction import (
+    apply_resolution_to_customer_input,
+    extract_customer_input_package,
+    validate_resolved_customer_input,
+)
 from services.manufacturing_strategy import resolve_canonical_product
 from services.agent_file_proxy_service import build_agent_file_url, verify_agent_pdf_url
 from services.project_data_paths import (
@@ -249,6 +254,18 @@ def _load_customer_input(input_file: str) -> Dict[str, Any]:
     return payload
 
 
+def _resolve_customer_input_context(customer_input: Dict[str, Any]) -> Dict[str, Any]:
+    resolution = extract_customer_input_package(
+        customer_input,
+        customer_input.get("attachment_manifest") or [],
+    )
+    resolved = apply_resolution_to_customer_input(customer_input, resolution)
+    resolved["attachment_manifest"] = customer_input.get("attachment_manifest") or []
+    resolved["customer_input_resolution"] = resolution
+    resolved["resolved_customer_context"] = resolution
+    return resolved
+
+
 def _project_from_input(customer_input: Dict[str, Any]) -> Dict[str, Any]:
     validation = normalize_customer_input(customer_input)
     normalized = validation.get("customer_input") or {}
@@ -285,6 +302,17 @@ def _project_from_input(customer_input: Dict[str, Any]) -> Dict[str, Any]:
         "drawing_number",
         "drawing_revision",
         "drawing_status",
+        "attachment_manifest",
+        "customer_input_resolution",
+        "resolved_customer_context",
+        "quotation_currency",
+        "target_price_currency",
+        "purchasing_currency",
+        "delivery_country",
+        "delivery_city",
+        "quantity_by_year",
+        "qmax",
+        "annual_quantity_derivation",
     ]:
         if customer_input.get(passthrough_key) not in [None, "", [], {}]:
             normalized[passthrough_key] = customer_input.get(passthrough_key)
@@ -893,6 +921,12 @@ def start_real_choke_workflow(
 ) -> Dict[str, Any]:
     ensure_workflow_storage_ready()
     customer_input = _load_customer_input(input_file)
+    input_reference = customer_input.get("_input_file")
+    customer_input = _resolve_customer_input_context(customer_input)
+    customer_input["_input_file"] = input_reference
+    _write_json(resolve_customer_input_path(input_reference), {
+        key: value for key, value in customer_input.items() if key != "_input_file"
+    })
     project = _project_from_input(customer_input)
     normalized_input = project["normalized_input"]
     project_code = project["project_code"]
@@ -948,6 +982,8 @@ def start_real_choke_workflow(
         **classification_trace(choke_classification),
         "unit_data": unit_data,
         "customer_input": normalized_input,
+        "customer_input_resolution": customer_input.get("customer_input_resolution") or {},
+        "resolved_customer_context": customer_input.get("resolved_customer_context") or {},
         "components": state.get("components") or {},
         "most": state.get("most") or {},
         "process_decomposition": state.get("process_decomposition"),
@@ -1718,6 +1754,27 @@ def _customer_input_path_from_state(state: Dict[str, Any]) -> Optional[Path]:
         return None
 
 
+def _refresh_resolved_customer_context(state: Dict[str, Any]) -> Dict[str, Any]:
+    path = _customer_input_path_from_state(state)
+    stored = _read_json(path, {}) if path else {}
+    source = {**(stored or {}), **(state.get("customer_input") or {})}
+    resolution = extract_customer_input_package(
+        source,
+        source.get("attachment_manifest") or [],
+    )
+    resolved = apply_resolution_to_customer_input(source, resolution)
+    resolved.setdefault("workflow_product_id", state.get("product_id"))
+    resolved["attachment_manifest"] = source.get("attachment_manifest") or []
+    resolved["customer_input_resolution"] = resolution
+    resolved["resolved_customer_context"] = resolution
+    state["customer_input"] = resolved
+    state["customer_input_resolution"] = resolution
+    state["resolved_customer_context"] = resolution
+    if path:
+        _write_json(path, resolved)
+    return validate_resolved_customer_input(resolution)
+
+
 def _update_customer_input_from_bom(
     state: Dict[str, Any],
     extracted: Dict[str, Any],
@@ -2478,6 +2535,11 @@ def update_commercial_fields(
         "customer_delivery_zone",
         "annual_quantity",
         "currency",
+        "quotation_currency",
+        "target_price_currency",
+        "purchasing_currency",
+        "delivery_country",
+        "delivery_city",
         "target_price",
         "sop_date",
         "product",
@@ -2503,8 +2565,13 @@ def update_commercial_fields(
         selected_product = str(selected_product).strip()
         updates["product"] = selected_product
         updates["product_name"] = selected_product
+    if updates.get("currency") and not updates.get("quotation_currency"):
+        updates["quotation_currency"] = updates["currency"]
 
     customer_input = {**(state.get("customer_input") or {}), **updates}
+    explicit_fields = set(customer_input.get("_explicit_user_fields") or [])
+    explicit_fields.update(key for key, value in updates.items() if value not in [None, ""])
+    customer_input["_explicit_user_fields"] = sorted(explicit_fields)
     customer_input["project_code"] = project_code
     customer_input.setdefault("workflow_product_id", product_id)
     state["customer_input"] = customer_input
@@ -2528,6 +2595,7 @@ def update_commercial_fields(
         stored_input.setdefault("workflow_product_id", product_id)
         _write_json(input_path, stored_input)
 
+    customer_input_validation = _refresh_resolved_customer_context(state)
     master_data_refresh = _refresh_master_data_for_state(state)
     state["master_data_refresh"] = master_data_refresh
     _save_state(state)
@@ -2549,7 +2617,28 @@ def update_commercial_fields(
         "manufacturing_strategy": state.get("manufacturing_strategy"),
         "production_plant": state.get("production_plant"),
         "unit_data": state.get("unit_data"),
+        "customer_input_validation": customer_input_validation,
+        "resolved_fields": customer_input_validation.get("resolved_fields") or [],
+        "missing_fields": customer_input_validation.get("missing_fields") or [],
+        "conflicts": customer_input_validation.get("conflicts") or [],
+        "warnings": customer_input_validation.get("warnings") or [],
+        "component_costing_ready": customer_input_validation.get("component_costing_ready") is True,
         "state": state,
+    }
+
+
+def get_customer_input_resolution(project_code: str, product_id: str) -> Dict[str, Any]:
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found.")
+    validation = _refresh_resolved_customer_context(state)
+    _refresh_master_data_for_state(state)
+    _save_state(state)
+    return {
+        "project_code": project_code,
+        "product_id": product_id,
+        **validation,
+        "customer_input": state.get("customer_input") or {},
     }
 
 
@@ -2633,9 +2722,7 @@ def _component_trigger_payload(
         "excluded_costs": excluded_costs,
         "destination_zone": customer_input.get("customer_delivery_zone"),
         "production_plant": state.get("production_plant") or (state.get("unit_data") or {}).get("plant"),
-        "reporting_currency": resolve_project_currency(
-            customer_input.get("currency"), (state.get("unit_data") or {}).get("selling_currency"),
-        ),
+        "reporting_currency": normalize_currency_code(customer_input.get("quotation_currency") or customer_input.get("currency")),
         "bom_quantity_per_product": component.get("quantity_per_product"),
         "technical_specification": component_definition,
         "drawing_reference": customer_input.get("drawing_reference") or customer_input.get("drawing_number"),
@@ -2648,10 +2735,16 @@ def _component_trigger_payload(
 
 def _component_validation_response(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     customer_input = state.get("customer_input") or {}
-    direct = []
-    for key in ["annual_quantity", "customer_delivery_zone", "currency", "product"]:
-        if customer_input.get(key) in [None, "", 0]:
-            direct.append(key)
+    resolution = state.get("resolved_customer_context") or state.get("customer_input_resolution") or {}
+    validation = validate_resolved_customer_input(resolution) if resolution else {}
+    direct = list(validation.get("missing_fields") or [])
+    conflicts = list(validation.get("conflicts") or [])
+    legacy_names = {
+        "product_name": "product",
+        "delivery_zone": "customer_delivery_zone",
+        "quotation_currency": "quotation_currency",
+    }
+    direct = [legacy_names.get(item, item) for item in direct]
     if direct:
         dependent = []
         if "product" in direct:
@@ -2665,11 +2758,26 @@ def _component_validation_response(state: Dict[str, Any]) -> Optional[Dict[str, 
                 if direct == ["product"]
                 else "Complete required commercial fields before external component costing."
             ),
+            "resolved_fields": validation.get("resolved_fields") or [],
+            "conflicts": conflicts,
+            "warnings": validation.get("warnings") or [],
+            "component_costing_ready": False,
             "available_product_candidates": (
                 (state.get("product_resolution") or {}).get("candidates")
                 or (state.get("manufacturing_strategy") or {}).get("available_product_candidates")
                 or []
             ),
+        }
+    if conflicts:
+        return {
+            "status": "blocked",
+            "missing_inputs": [],
+            "dependent_missing_inputs": [],
+            "resolved_fields": validation.get("resolved_fields") or [],
+            "conflicts": conflicts,
+            "warnings": validation.get("warnings") or [],
+            "component_costing_ready": False,
+            "message": "Confirm conflicting customer-input fields before external component costing.",
         }
     strategy = state.get("manufacturing_strategy") or {}
     unit_data = state.get("unit_data") or {}
@@ -2710,6 +2818,7 @@ def trigger_next_component_costing(
     if (state.get("bom") or {}).get("status") != "received":
         raise ValueError("BOM output must be received before triggering component costing.")
     normalized_bom = _load_normalized_bom(project_code, product_id)
+    state["customer_input_validation"] = _refresh_resolved_customer_context(state)
     state["master_data_refresh"] = _refresh_master_data_for_state(state)
     validation = _component_validation_response(state)
     if validation:
