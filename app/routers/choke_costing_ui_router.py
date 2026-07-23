@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import hashlib
@@ -18,8 +19,8 @@ from services.azure_blob_storage_service import (
 )
 from services.agent_file_proxy_service import (
     build_agent_file_url,
+    inspect_agent_file_token,
     uploaded_pdf_path,
-    validate_agent_file_token,
 )
 from services.choke_orchestrator import run_choke_orchestration
 from services.project_data_paths import (
@@ -42,6 +43,7 @@ from services.customer_input_extraction import (
 
 BASE_DIR = BACKEND_ROOT
 RESULTS_DIR = COSTING_RUNS_DIR
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Choke Costing UI"])
 
@@ -469,8 +471,26 @@ def get_agent_drawing_file(
     token: str = Query(..., min_length=10),
 ):
     try:
-        if not validate_agent_file_token(project_code, filename, token):
-            raise HTTPException(status_code=403, detail="Invalid or expired Agent file token")
+        token_result = inspect_agent_file_token(project_code, filename, token)
+        logger.info(
+            "Agent PDF token check project=%s file=%s path=%s expires=%s current=%s method=GET valid=%s reason=%s",
+            project_code,
+            filename,
+            token_result.get("normalized_relative_path"),
+            token_result.get("expires_at_utc"),
+            token_result.get("current_utc"),
+            token_result.get("valid"),
+            token_result.get("reason"),
+        )
+        if not token_result.get("valid"):
+            detail = {
+                "message": "Agent file token rejected",
+                "reason": token_result.get("reason"),
+                "normalized_relative_path": token_result.get("normalized_relative_path"),
+                "expires_at_utc": token_result.get("expires_at_utc"),
+                "current_utc": token_result.get("current_utc"),
+            }
+            raise HTTPException(status_code=403, detail=detail)
         candidate = uploaded_pdf_path(project_code, filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

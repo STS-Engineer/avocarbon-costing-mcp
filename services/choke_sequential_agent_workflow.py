@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 import os
 import re
@@ -28,6 +29,7 @@ from services.customer_input_extraction import (
 )
 from services.manufacturing_strategy import resolve_canonical_product
 from services.agent_file_proxy_service import build_agent_file_url, verify_agent_pdf_url
+from services.azure_blob_storage_service import refresh_blob_sas_url
 from services.project_data_paths import (
     BACKEND_ROOT,
     COSTING_RUNS_DIR,
@@ -180,6 +182,26 @@ def _drawing_file_url_from_path(
         )
     except (RuntimeError, ValueError):
         return None
+
+
+def _file_evidence(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return None
+    stat = path.stat()
+    return {
+        "path": _relative(path),
+        "size": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _existing_bom_output_evidence(project_code: str, product_id: str) -> Dict[str, Any]:
+    evidence = {
+        "raw_bom": _file_evidence(_bom_raw_path(project_code, product_id)),
+        "normalized_bom": _file_evidence(_bom_normalized_path(project_code, product_id)),
+    }
+    return {key: value for key, value in evidence.items() if value is not None}
 
 
 def _write_json(path: Path, payload: Any) -> str:
@@ -473,7 +495,6 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
         "most_triggering",
         "most_received",
         "calculated",
-        "blocked",
     }
     if state.get("status") not in advanced_statuses:
         state["status"] = "bom_received"
@@ -548,7 +569,7 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
     normalized_exists = any(
         path.exists() for path in data_reference_candidates(normalized_reference)
     )
-    if (state.get("bom") or {}).get("status") == "received" or normalized_exists:
+    if (state.get("bom") or {}).get("status") == "received":
         was_inconsistent = (
             state.get("status") != "bom_received"
             or (state.get("bom") or {}).get("retryable") is not False
@@ -558,8 +579,18 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
         _apply_bom_received_precedence(state)
         if was_inconsistent:
             _save_state(state)
-    if state.get("status") in {"created", "pending"} and raw_exists:
-        state["diagnostic_warning"] = "Raw BOM exists but state was not updated correctly."
+    elif raw_exists or normalized_exists:
+        state["stale_previous_output"] = {
+            "raw_bom_exists": raw_exists,
+            "normalized_bom_exists": normalized_exists,
+            "reason": "BOM files exist but no current write-back marked them received.",
+            "trigger_run_id": (state.get("bom") or {}).get("trigger_run_id"),
+        }
+        state["diagnostic_warning"] = (
+            "Previous BOM files exist but are not attributed to the current trigger run."
+        )
+    if (state.get("bom") or {}).get("status") != "received":
+        state["missing_outputs"] = ["bom"]
     state["canonical_data_root"] = path_diagnostics["resolved_data_root"]
     state["canonical_workflow_state_path"] = path_diagnostics["resolved_workflow_state_path"]
     state["process_id"] = path_diagnostics["process_id"]
@@ -702,7 +733,9 @@ def _trigger_bom_agent_with_retries(
     status_before: Optional[str],
 ) -> Dict[str, Any]:
     _load_env()
-    max_attempts = 1 if dry_run else _positive_int_env("WORKSPACE_AGENT_TRIGGER_MAX_ATTEMPTS", 3)
+    # One user action creates one Workspace Agent request. A later retry is an
+    # explicit workflow action with a fresh drawing URL.
+    max_attempts = 1
     backoffs = _trigger_backoff_seconds()
     attempts = []
     last_result: Dict[str, Any] = {}
@@ -791,28 +824,56 @@ def _build_bom_trigger_payload(
     request_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     _load_env()
+    project_code = _safe_part(project_code, "project_code")
+    product_id = _safe_part(product_id, "product_id")
     save_address = _relative(_bom_raw_path(project_code, product_id))
     drawing_file_path = normalized_input.get("drawing_file_path")
-    generated_local_url = _drawing_file_url_from_path(drawing_file_path, request_base_url)
-    drawing_file_url = (
-        normalized_input.get("drawing_agent_proxy_url")
-        or generated_local_url
-        or normalized_input.get("drawing_file_url")
-        or normalized_input.get("drawing_sas_url")
-        or normalized_input.get("drawing_blob_url")
+    generated_proxy_url = _drawing_file_url_from_path(drawing_file_path, request_base_url)
+    sas_refresh = {"status": "not_available", "reason": "blob_metadata_missing"}
+    if normalized_input.get("drawing_azure_upload") or normalized_input.get("drawing_blob_url"):
+        sas_refresh = refresh_blob_sas_url(
+            normalized_input.get("drawing_azure_upload"),
+            normalized_input.get("drawing_blob_url"),
+        )
+    fresh_sas_url = sas_refresh.get("sas_url") if sas_refresh.get("status") == "generated" else None
+    diagnostic_url = (
+        normalized_input.get("drawing_file_url")
+        if normalized_input.get("drawing_access_mode") == "diagnostic_url"
+        else None
     )
-    drawing_access_mode = normalized_input.get("drawing_access_mode")
-    if normalized_input.get("drawing_agent_proxy_url") or generated_local_url:
+    drawing_file_url = (
+        generated_proxy_url
+        or fresh_sas_url
+        or diagnostic_url
+    )
+    drawing_access_mode = None
+    if generated_proxy_url:
         drawing_access_mode = "backend_signed_proxy"
-    elif not drawing_access_mode:
-        if normalized_input.get("drawing_sas_url"):
-            drawing_access_mode = "azure_blob_sas"
-        elif normalized_input.get("drawing_blob_url"):
-            drawing_access_mode = "azure_blob"
-        elif drawing_file_url:
-            drawing_access_mode = "local"
-        else:
-            drawing_access_mode = "missing"
+    elif fresh_sas_url:
+        drawing_access_mode = "azure_blob_sas"
+    elif diagnostic_url:
+        drawing_access_mode = "diagnostic_url"
+    else:
+        drawing_access_mode = "missing"
+    drawing_url_candidates = []
+    if generated_proxy_url:
+        drawing_url_candidates.append({
+            "access_mode": "backend_signed_proxy",
+            "url": generated_proxy_url,
+            "fresh": True,
+        })
+    if fresh_sas_url:
+        drawing_url_candidates.append({
+            "access_mode": "azure_blob_sas",
+            "url": fresh_sas_url,
+            "fresh": True,
+        })
+    if diagnostic_url:
+        drawing_url_candidates.append({
+            "access_mode": "diagnostic_url",
+            "url": diagnostic_url,
+            "fresh": False,
+        })
     warnings = []
     if drawing_file_path and not drawing_file_url:
         warnings.append("Uploaded drawing PDF exists but no drawing_file_url could be generated.")
@@ -837,7 +898,7 @@ def _build_bom_trigger_payload(
         "product_id": product_id,
         **classification_trace(choke_classification),
         "drawing_file_url": drawing_file_url,
-        "drawing_agent_proxy_url": normalized_input.get("drawing_agent_proxy_url") or generated_local_url,
+        "drawing_agent_proxy_url": generated_proxy_url,
         "drawing_reference": normalized_input.get("drawing_reference"),
         "save_address": save_address,
         "instruction": writeback_instruction,
@@ -849,12 +910,51 @@ def _build_bom_trigger_payload(
         "save_address": save_address,
         "drawing_file_path": drawing_file_path,
         "drawing_file_url": drawing_file_url,
-        "drawing_agent_proxy_url": normalized_input.get("drawing_agent_proxy_url") or generated_local_url,
+        "drawing_agent_proxy_url": generated_proxy_url,
         "drawing_access_mode": drawing_access_mode,
         "drawing_blob_url": normalized_input.get("drawing_blob_url"),
-        "drawing_sas_url": normalized_input.get("drawing_sas_url"),
+        "drawing_sas_url": fresh_sas_url,
+        "drawing_sas_refresh": sas_refresh,
+        "drawing_url_candidates": drawing_url_candidates,
         "drawing_url_is_local": _is_local_url(drawing_file_url),
         "warnings": warnings,
+    }
+
+
+def _validate_and_select_drawing_url(bom_trigger: Dict[str, Any]) -> Dict[str, Any]:
+    validations = []
+    selected = None
+    for candidate in bom_trigger.get("drawing_url_candidates") or []:
+        check = verify_agent_pdf_url(candidate.get("url"))
+        result = {
+            "access_mode": candidate.get("access_mode"),
+            "fresh": candidate.get("fresh"),
+            "validation": check,
+        }
+        validations.append(result)
+        if check.get("success"):
+            selected = {
+                "access_mode": candidate.get("access_mode"),
+                "url": candidate.get("url"),
+                "validation": check,
+            }
+            break
+    if selected:
+        bom_trigger["drawing_file_url"] = selected["url"]
+        bom_trigger["drawing_access_mode"] = selected["access_mode"]
+        bom_trigger["payload"]["drawing_file_url"] = selected["url"]
+        bom_trigger["input_text"] = json.dumps(
+            bom_trigger["payload"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    return {
+        "success": selected is not None,
+        "method": "GET",
+        "selected": selected,
+        "candidate_validations": validations,
+        "rejection_reason": None if selected else "no_accessible_drawing_url",
     }
 
 
@@ -965,6 +1065,16 @@ def start_real_choke_workflow(
     save_address = bom_trigger["save_address"]
     existing_state = _load_state(project_code, product_id)
     status_before = existing_state.get("status")
+    trigger_run_id = str(uuid.uuid4())
+    trigger_requested_at = _now_iso()
+    stale_previous_output = _existing_bom_output_evidence(project_code, product_id)
+    validation_attempt = {
+        "attempt_id": str(uuid.uuid4()),
+        "stage": "drawing_access_validation",
+        "status": "started",
+        "timestamp": trigger_requested_at,
+        "method": "GET",
+    }
     state = existing_state
     state.update({
         "input_file": customer_input["_input_file"],
@@ -975,7 +1085,7 @@ def start_real_choke_workflow(
         "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
         "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
         "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
-        "status": "starting",
+        "status": "validating_drawing_access",
         "current_step": "Step 1 BOM Agent",
         "manufacturing_strategy": manufacturing_strategy,
         "choke_classification": choke_classification,
@@ -992,7 +1102,9 @@ def start_real_choke_workflow(
     })
     state["bom"] = {
         **dict(state.get("bom") or {}),
-        "status": "pending",
+        "status": "validating_drawing_access",
+        "trigger_run_id": trigger_run_id,
+        "trigger_requested_at": trigger_requested_at,
         "save_path": save_address,
         "drawing_file_path": bom_trigger.get("drawing_file_path"),
         "drawing_file_url": bom_trigger.get("drawing_file_url"),
@@ -1003,9 +1115,10 @@ def start_real_choke_workflow(
         "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
         "warnings": bom_trigger.get("warnings") or [],
         "trigger_result": None,
-        "trigger_attempts": [],
+        "trigger_attempts": [validation_attempt],
         "retryable": False,
         "input_text": input_text,
+        "stale_previous_output": stale_previous_output or None,
     }
     _save_state(state)
     persisted_state, persisted_path = _existing_state(project_code, product_id)
@@ -1028,32 +1141,59 @@ def start_real_choke_workflow(
         },
     )
 
-    pdf_url_check = {"success": True, "skipped": bool(dry_run)}
+    pdf_url_check = {"success": True, "skipped": bool(dry_run), "method": "GET"}
     if not dry_run:
-        pdf_url_check = verify_agent_pdf_url(bom_trigger.get("drawing_file_url"))
+        pdf_url_check = _validate_and_select_drawing_url(bom_trigger)
+        validation_attempt.update({
+            "status": "accepted" if pdf_url_check.get("success") else "failed",
+            "completed_at": _now_iso(),
+            "selected_access_mode": (
+                (pdf_url_check.get("selected") or {}).get("access_mode")
+            ),
+            "candidate_validations": pdf_url_check.get("candidate_validations") or [],
+        })
+        persisted_state["bom"]["trigger_attempts"] = [validation_attempt]
+        persisted_state["bom"]["pdf_url_check"] = pdf_url_check
         if not pdf_url_check.get("success"):
-            persisted_state["status"] = "blocked"
+            persisted_state["status"] = "bom_trigger_failed"
+            persisted_state["current_step"] = "Step 1 BOM Agent"
+            persisted_state["missing_outputs"] = ["bom"]
             persisted_state["bom"] = {
                 **dict(persisted_state.get("bom") or {}),
-                "status": "failed",
-                "retryable": False,
+                "status": "bom_trigger_failed",
+                "retryable": True,
                 "pdf_url_check": pdf_url_check,
             }
             persisted_state.setdefault("errors", []).append({
                 "stage": "bom_pdf_access",
-                "message": "Agent PDF proxy validation failed; Workspace Agent was not triggered.",
+                "message": "No current drawing URL passed PDF validation; Workspace Agent was not triggered.",
                 "details": pdf_url_check,
             })
             _save_state(persisted_state)
             return {
-                "message": "Agent PDF proxy validation failed; Workspace Agent was not triggered.",
-                "status": "blocked",
+                "message": "Drawing access validation failed; retry will generate fresh URLs.",
+                "status": "bom_trigger_failed",
+                "retryable": True,
                 "state": persisted_state,
                 "canonical_workflow_state_path": str(persisted_path),
                 "workflow_state_exists_before_trigger": True,
                 "data_root": str(DATA_ROOT),
                 "pdf_url_check": pdf_url_check,
             }
+        persisted_state.update({
+            "drawing_file_url": bom_trigger.get("drawing_file_url"),
+            "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
+            "status": "awaiting_bom_trigger",
+        })
+        persisted_state["bom"] = {
+            **dict(persisted_state.get("bom") or {}),
+            "status": "awaiting_bom_trigger",
+            "drawing_file_url": bom_trigger.get("drawing_file_url"),
+            "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
+            "input_text": bom_trigger.get("input_text"),
+        }
+        _save_state(persisted_state)
+    input_text = bom_trigger["input_text"]
     trigger_result = _trigger_bom_agent_with_retries(
         project_code=project_code,
         product_id=product_id,
@@ -1066,27 +1206,29 @@ def start_real_choke_workflow(
     workflow_status = (
         "bom_triggered"
         if accepted
-        else "bom_trigger_failed_retryable"
+        else "bom_trigger_failed"
         if retryable_failure
-        else "blocked"
+        else "bom_failed"
     )
     bom_status = (
         "triggered"
         if accepted
-        else "trigger_failed_retryable"
+        else "bom_trigger_failed"
         if retryable_failure
-        else "failed"
+        else "bom_failed"
     )
     latest_state, _ = _existing_state(project_code, product_id)
     state = latest_state or persisted_state
     if (state.get("bom") or {}).get("status") != "received":
         state["status"] = workflow_status
         state["current_step"] = "Step 1 BOM Agent"
+        combined_attempts = [validation_attempt, *(trigger_result.get("attempts") or [])]
         state["bom"] = {
             **dict(state.get("bom") or {}),
             "status": bom_status,
+            "lifecycle_status": "awaiting_bom_callback" if accepted else bom_status,
             "trigger_result": trigger_result,
-            "trigger_attempts": trigger_result.get("attempts") or [],
+            "trigger_attempts": combined_attempts,
             "retryable": retryable_failure,
             "pdf_url_check": pdf_url_check,
         }
@@ -1132,6 +1274,28 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     if state is None:
         raise FileNotFoundError("Workflow state not found. Start the workflow before retrying the BOM Agent.")
     status_before = state.get("status")
+    existing_bom = dict(state.get("bom") or {})
+    if existing_bom.get("status") == "received":
+        return {
+            "status": "bom_received",
+            "project_code": project_code,
+            "product_id": product_id,
+            "skipped": True,
+            "reason": "bom_already_received",
+            "state": state,
+        }
+    if (
+        existing_bom.get("status") in {"triggered", "awaiting_bom_callback"}
+        and ((existing_bom.get("trigger_result") or {}).get("status") == "accepted")
+    ):
+        return {
+            "status": "bom_triggered",
+            "project_code": project_code,
+            "product_id": product_id,
+            "skipped": True,
+            "reason": "bom_trigger_already_active",
+            "state": state,
+        }
     append_workflow_event(
         project_code,
         product_id,
@@ -1141,13 +1305,12 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     )
 
     customer_input = dict(state.get("customer_input") or {})
-    existing_bom = dict(state.get("bom") or {})
     for key in [
         "drawing_file_path",
-        "drawing_file_url",
         "drawing_access_mode",
         "drawing_blob_url",
         "drawing_sas_url",
+        "drawing_azure_upload",
     ]:
         value = state.get(key) or existing_bom.get(key)
         if value not in [None, ""]:
@@ -1159,7 +1322,63 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     if not bom_trigger.get("drawing_file_url"):
         raise ValueError("BOM Agent retry requires drawing_file_url in workflow state or customer_input.")
 
-    input_text = existing_bom.get("input_text") or bom_trigger["input_text"]
+    validation_attempt = {
+        "attempt_id": str(uuid.uuid4()),
+        "stage": "drawing_access_validation",
+        "status": "started",
+        "timestamp": _now_iso(),
+        "method": "GET",
+    }
+    state["status"] = "validating_drawing_access"
+    state["current_step"] = "Step 1 BOM Agent"
+    state["missing_outputs"] = ["bom"]
+    state["bom"] = {
+        **existing_bom,
+        "status": "validating_drawing_access",
+        "trigger_run_id": str(uuid.uuid4()),
+        "trigger_requested_at": _now_iso(),
+        "trigger_result": None,
+        "trigger_attempts": [validation_attempt],
+        "retryable": False,
+        "drawing_agent_proxy_url": bom_trigger.get("drawing_agent_proxy_url"),
+        "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
+    }
+    _save_state(state)
+    pdf_url_check = _validate_and_select_drawing_url(bom_trigger)
+    validation_attempt.update({
+        "status": "accepted" if pdf_url_check.get("success") else "failed",
+        "completed_at": _now_iso(),
+        "selected_access_mode": (
+            (pdf_url_check.get("selected") or {}).get("access_mode")
+        ),
+        "candidate_validations": pdf_url_check.get("candidate_validations") or [],
+    })
+    if not pdf_url_check.get("success"):
+        state["status"] = "bom_trigger_failed"
+        state["bom"] = {
+            **dict(state.get("bom") or {}),
+            "status": "bom_trigger_failed",
+            "retryable": True,
+            "pdf_url_check": pdf_url_check,
+            "trigger_attempts": [validation_attempt],
+        }
+        state.setdefault("errors", []).append({
+            "stage": "bom_pdf_access",
+            "message": "Drawing access validation failed during retry.",
+            "details": pdf_url_check,
+        })
+        _save_state(state)
+        return {
+            "status": "bom_trigger_failed",
+            "retryable": True,
+            "project_code": project_code,
+            "product_id": product_id,
+            "bom": state["bom"],
+            "trigger_attempts": state["bom"]["trigger_attempts"],
+            "state": state,
+        }
+
+    input_text = bom_trigger["input_text"]
     trigger_result = _trigger_bom_agent_with_retries(
         project_code=project_code,
         product_id=product_id,
@@ -1172,26 +1391,30 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     state["status"] = (
         "bom_triggered"
         if accepted
-        else "bom_trigger_failed_retryable"
+        else "bom_trigger_failed"
         if retryable_failure
-        else "blocked"
+        else "bom_failed"
     )
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
     state["bom"] = {
-        **existing_bom,
+        **dict(state.get("bom") or {}),
         "status": (
             "triggered"
             if accepted
-            else "trigger_failed_retryable"
+            else "bom_trigger_failed"
             if retryable_failure
-            else "failed"
+            else "bom_failed"
         ),
         "retryable": retryable_failure,
         "trigger_result": trigger_result,
-        "trigger_attempts": trigger_result.get("attempts") or [],
+        "trigger_attempts": [validation_attempt, *(trigger_result.get("attempts") or [])],
         "input_text": input_text,
         "save_path": existing_bom.get("save_path") or bom_trigger.get("save_address"),
+        "drawing_file_url": bom_trigger.get("drawing_file_url"),
+        "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
+        "pdf_url_check": pdf_url_check,
+        "lifecycle_status": "awaiting_bom_callback" if accepted else None,
     }
     _save_state(state)
     return {
@@ -2093,9 +2316,13 @@ def save_bom_output(
         state["bom"] = {
             **existing_bom,
             "status": "received",
+            "lifecycle_status": "bom_received",
             "save_path": _relative(raw_path),
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
+            "received_for_trigger_run_id": existing_bom.get("trigger_run_id"),
+            "raw_bom_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+            "normalized_bom_sha256": hashlib.sha256(normalized_path.read_bytes()).hexdigest(),
             "retryable": False,
         }
         _apply_bom_received_precedence(state)

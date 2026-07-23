@@ -71,7 +71,7 @@ def main():
     assert observed.get("pdf_was_checked") is True
     assert "/api/choke-costing/agent-files/" in observed["pdf_url"]
     assert "/mcp/api/" not in observed["pdf_url"]
-    assert observed["state"]["status"] == "starting"
+    assert observed["state"]["status"] == "awaiting_bom_trigger"
     assert observed["state"]["input_file"]
     assert observed["state"]["drawing_file_path"]
     assert result["workflow_state_exists_before_trigger"] is True

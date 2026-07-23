@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import unquote, urlsplit
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -124,6 +125,46 @@ def generate_blob_sas_url(
         expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
     )
     return f"{blob_client.url}?{sas_token}"
+
+
+def refresh_blob_sas_url(
+    upload_metadata: Optional[Dict[str, Any]] = None,
+    blob_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    metadata = upload_metadata if isinstance(upload_metadata, dict) else {}
+    container = str(metadata.get("container") or "").strip()
+    blob_name = str(metadata.get("blob_name") or "").strip()
+    source_blob_url = str(blob_url or metadata.get("blob_url") or "").strip()
+    if (not container or not blob_name) and source_blob_url:
+        path_parts = [
+            unquote(part)
+            for part in urlsplit(source_blob_url).path.split("/")
+            if part
+        ]
+        if len(path_parts) >= 2:
+            container = container or path_parts[0]
+            blob_name = blob_name or "/".join(path_parts[1:])
+    if not container or not blob_name:
+        return {
+            "status": "not_available",
+            "reason": "blob_container_or_name_missing",
+        }
+    try:
+        sas_url = generate_blob_sas_url(container, blob_name)
+        return {
+            "status": "generated",
+            "container": container,
+            "blob_name": blob_name,
+            "sas_url": sas_url,
+            "fresh": True,
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "container": container,
+            "blob_name": blob_name,
+            "reason": str(exc),
+        }
 
 
 def upload_file_to_blob(
