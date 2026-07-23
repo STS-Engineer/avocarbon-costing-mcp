@@ -3,8 +3,10 @@ from services import choke_sequential_agent_workflow as workflow
 
 OLD_MOST_INSTRUCTION = "Analyze only this work package and call save_most_output."
 BOM_INSTRUCTION = (
-    "Analyze the drawing according to your permanent agent instructions and call "
-    "save_bom_output with the complete BOM JSON."
+    "Analyze the drawing according to your permanent agent instructions. "
+    "After producing the complete BOM JSON, call save_bom_output exactly once "
+    "with the exact project_code, product_id, trigger_run_id, and raw_json. "
+    "The backend accepts completion only from this correlated write-back."
 )
 
 

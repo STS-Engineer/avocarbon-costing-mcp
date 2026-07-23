@@ -8,7 +8,7 @@ import time
 import unicodedata
 import uuid
 from urllib.parse import quote
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from services import choke_component_costing as component_costing
@@ -562,6 +562,25 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
     state.setdefault("most", {})
     state.setdefault("missing_outputs", [])
     state.setdefault("errors", [])
+    status_before_wait_update = state.get("status")
+    _apply_bom_callback_waiting_state(state)
+    if state.get("status") != status_before_wait_update:
+        _save_state(state)
+        if state.get("status") == "bom_callback_timeout":
+            append_workflow_event(
+                project_code,
+                product_id,
+                "bom_callback_timeout",
+                accepted_at=(state.get("bom") or {}).get("accepted_at"),
+                elapsed_waiting_seconds=(
+                    (state.get("bom") or {}).get("elapsed_waiting_seconds")
+                ),
+                callback_timeout_seconds=(
+                    (state.get("bom") or {}).get("callback_timeout_seconds")
+                ),
+                status_before=status_before_wait_update,
+                status_after="bom_callback_timeout",
+            )
     normalized_reference = (
         (state.get("bom") or {}).get("normalized_path")
         or _relative(_bom_normalized_path(project_code, product_id))
@@ -692,6 +711,77 @@ def _positive_int_env(name: str, default: int) -> int:
         return default
 
 
+def _bom_callback_timeout_seconds() -> int:
+    return _positive_int_env("BOM_CALLBACK_TIMEOUT_SECONDS", 900)
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _apply_bom_callback_waiting_state(
+    state: Dict[str, Any],
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    bom = dict(state.get("bom") or {})
+    if bom.get("status") in {"received", "bom_normalized"}:
+        return state
+    lifecycle_status = bom.get("lifecycle_status")
+    if lifecycle_status not in {
+        "trigger_request_accepted",
+        "awaiting_bom_callback",
+        "bom_callback_timeout",
+    }:
+        return state
+
+    accepted_at = _parse_iso_datetime(bom.get("accepted_at"))
+    if accepted_at is None:
+        return state
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    timeout_seconds = int(
+        bom.get("callback_timeout_seconds") or _bom_callback_timeout_seconds()
+    )
+    elapsed_seconds = max(0, int((current - accepted_at).total_seconds()))
+    remaining_seconds = max(0, timeout_seconds - elapsed_seconds)
+    timed_out = elapsed_seconds >= timeout_seconds
+    bom.update({
+        "accepted_at": accepted_at.isoformat(),
+        "callback_timeout_seconds": timeout_seconds,
+        "elapsed_waiting_seconds": elapsed_seconds,
+        "callback_timeout_remaining_seconds": remaining_seconds,
+        "retryable": timed_out,
+        "retry_available": timed_out,
+        "lifecycle_status": (
+            "bom_callback_timeout" if timed_out else "awaiting_bom_callback"
+        ),
+    })
+    state["bom"] = bom
+    state["status"] = (
+        "bom_callback_timeout" if timed_out else "awaiting_bom_callback"
+    )
+    state["current_step"] = "Step 1 BOM Agent"
+    state["retryable"] = timed_out
+    state["retry_available"] = timed_out
+    state["missing_outputs"] = ["bom"]
+    if timed_out:
+        state["message"] = (
+            "BOM callback timeout reached. A controlled retry is now available."
+        )
+    else:
+        state["message"] = (
+            "Agent request accepted and queued. Waiting for BOM output."
+        )
+    return state
+
+
 def _trigger_backoff_seconds() -> List[float]:
     configured = os.getenv("WORKSPACE_AGENT_TRIGGER_BACKOFF_SECONDS", "5,15,30")
     values = []
@@ -789,18 +879,18 @@ def _trigger_bom_agent_with_retries(
                 attempt_number=attempt_number,
                 http_status=last_result.get("http_status"),
                 status_before=status_before,
-                status_after="bom_triggered",
+                status_after="trigger_request_accepted",
             )
             break
         if not has_next_attempt:
             append_workflow_event(
                 project_code,
                 product_id,
-                "bom_trigger_failed_retryable" if retryable else "bom_trigger_failed_non_retryable",
+                "trigger_request_failed",
                 attempt_number=attempt_number,
                 http_status=last_result.get("http_status"),
                 status_before=status_before,
-                status_after="bom_trigger_failed_retryable" if retryable else "blocked",
+                status_after="trigger_request_failed",
             )
             break
         time.sleep(next_retry_seconds or 0)
@@ -822,10 +912,12 @@ def _build_bom_trigger_payload(
     product_id: str,
     normalized_input: Dict[str, Any],
     request_base_url: Optional[str] = None,
+    trigger_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     _load_env()
     project_code = _safe_part(project_code, "project_code")
     product_id = _safe_part(product_id, "product_id")
+    trigger_run_id = str(trigger_run_id or uuid.uuid4()).strip()
     save_address = _relative(_bom_raw_path(project_code, product_id))
     drawing_file_path = normalized_input.get("drawing_file_path")
     generated_proxy_url = _drawing_file_url_from_path(drawing_file_path, request_base_url)
@@ -889,13 +981,16 @@ def _build_bom_trigger_payload(
         )
 
     writeback_instruction = (
-        "Analyze the drawing according to your permanent agent instructions and call "
-        "save_bom_output with the complete BOM JSON."
+        "Analyze the drawing according to your permanent agent instructions. "
+        "After producing the complete BOM JSON, call save_bom_output exactly once "
+        "with the exact project_code, product_id, trigger_run_id, and raw_json. "
+        "The backend accepts completion only from this correlated write-back."
     )
     choke_classification = classify_choke(normalized_input, {})
     payload = {
         "project_code": project_code,
         "product_id": product_id,
+        "trigger_run_id": trigger_run_id,
         **classification_trace(choke_classification),
         "drawing_file_url": drawing_file_url,
         "drawing_agent_proxy_url": generated_proxy_url,
@@ -918,6 +1013,7 @@ def _build_bom_trigger_payload(
         "drawing_url_candidates": drawing_url_candidates,
         "drawing_url_is_local": _is_local_url(drawing_file_url),
         "warnings": warnings,
+        "trigger_run_id": trigger_run_id,
     }
 
 
@@ -1055,18 +1151,19 @@ def start_real_choke_workflow(
     run_dir = _run_dir(project_code, product_id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    trigger_run_id = str(uuid.uuid4())
+    trigger_requested_at = _now_iso()
     bom_trigger = _build_bom_trigger_payload(
         project_code,
         product_id,
         normalized_input,
         request_base_url=request_base_url,
+        trigger_run_id=trigger_run_id,
     )
     input_text = bom_trigger["input_text"]
     save_address = bom_trigger["save_address"]
     existing_state = _load_state(project_code, product_id)
     status_before = existing_state.get("status")
-    trigger_run_id = str(uuid.uuid4())
-    trigger_requested_at = _now_iso()
     stale_previous_output = _existing_bom_output_evidence(project_code, product_id)
     validation_attempt = {
         "attempt_id": str(uuid.uuid4()),
@@ -1183,11 +1280,12 @@ def start_real_choke_workflow(
         persisted_state.update({
             "drawing_file_url": bom_trigger.get("drawing_file_url"),
             "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
-            "status": "awaiting_bom_trigger",
+            "status": "trigger_request_sending",
         })
         persisted_state["bom"] = {
             **dict(persisted_state.get("bom") or {}),
-            "status": "awaiting_bom_trigger",
+            "status": "trigger_request_sending",
+            "lifecycle_status": "trigger_request_sending",
             "drawing_file_url": bom_trigger.get("drawing_file_url"),
             "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
             "input_text": bom_trigger.get("input_text"),
@@ -1204,18 +1302,14 @@ def start_real_choke_workflow(
     accepted = trigger_result.get("status") in {"accepted", "dry_run"}
     retryable_failure = not accepted and trigger_result.get("retryable") is True
     workflow_status = (
-        "bom_triggered"
+        "awaiting_bom_callback"
         if accepted
-        else "bom_trigger_failed"
-        if retryable_failure
-        else "bom_failed"
+        else "trigger_request_failed"
     )
     bom_status = (
-        "triggered"
+        "awaiting_bom_callback"
         if accepted
-        else "bom_trigger_failed"
-        if retryable_failure
-        else "bom_failed"
+        else "trigger_request_failed"
     )
     latest_state, _ = _existing_state(project_code, product_id)
     state = latest_state or persisted_state
@@ -1227,9 +1321,15 @@ def start_real_choke_workflow(
             **dict(state.get("bom") or {}),
             "status": bom_status,
             "lifecycle_status": "awaiting_bom_callback" if accepted else bom_status,
+            "trigger_request_status": (
+                "trigger_request_accepted" if accepted else "trigger_request_failed"
+            ),
+            "accepted_at": _now_iso() if accepted else None,
+            "callback_timeout_seconds": _bom_callback_timeout_seconds(),
             "trigger_result": trigger_result,
             "trigger_attempts": combined_attempts,
-            "retryable": retryable_failure,
+            "retryable": False if accepted else retryable_failure,
+            "retry_available": False if accepted else retryable_failure,
             "pdf_url_check": pdf_url_check,
         }
         if not accepted:
@@ -1254,7 +1354,11 @@ def start_real_choke_workflow(
         raw_bom_save_path=save_address,
     )
     return {
-        "message": "BOM Agent triggered first. Waiting for BOM output write-back.",
+        "message": (
+            "Agent request accepted and queued. Waiting for BOM output."
+            if accepted
+            else "BOM Agent trigger request failed."
+        ),
         "state": state,
         "trigger_report": {
             "bom": state["bom"],
@@ -1284,16 +1388,20 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
             "reason": "bom_already_received",
             "state": state,
         }
+    _apply_bom_callback_waiting_state(state)
+    existing_bom = dict(state.get("bom") or {})
     if (
-        existing_bom.get("status") in {"triggered", "awaiting_bom_callback"}
+        existing_bom.get("lifecycle_status") == "awaiting_bom_callback"
         and ((existing_bom.get("trigger_result") or {}).get("status") == "accepted")
     ):
         return {
-            "status": "bom_triggered",
+            "status": "awaiting_bom_callback",
             "project_code": project_code,
             "product_id": product_id,
             "skipped": True,
-            "reason": "bom_trigger_already_active",
+            "reason": "bom_callback_wait_still_active",
+            "message": "Agent request is already accepted and still within the callback timeout.",
+            "retry_available": False,
             "state": state,
         }
     append_workflow_event(
@@ -1318,7 +1426,14 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     customer_input.setdefault("project_code", project_code)
     customer_input.setdefault("workflow_product_id", product_id)
     customer_input.setdefault("product_id", product_id)
-    bom_trigger = _build_bom_trigger_payload(project_code, product_id, customer_input)
+    trigger_run_id = str(uuid.uuid4())
+    trigger_requested_at = _now_iso()
+    bom_trigger = _build_bom_trigger_payload(
+        project_code,
+        product_id,
+        customer_input,
+        trigger_run_id=trigger_run_id,
+    )
     if not bom_trigger.get("drawing_file_url"):
         raise ValueError("BOM Agent retry requires drawing_file_url in workflow state or customer_input.")
 
@@ -1335,8 +1450,8 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     state["bom"] = {
         **existing_bom,
         "status": "validating_drawing_access",
-        "trigger_run_id": str(uuid.uuid4()),
-        "trigger_requested_at": _now_iso(),
+        "trigger_run_id": trigger_run_id,
+        "trigger_requested_at": trigger_requested_at,
         "trigger_result": None,
         "trigger_attempts": [validation_attempt],
         "retryable": False,
@@ -1378,6 +1493,15 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
             "state": state,
         }
 
+    state["status"] = "trigger_request_sending"
+    state["bom"] = {
+        **dict(state.get("bom") or {}),
+        "status": "trigger_request_sending",
+        "lifecycle_status": "trigger_request_sending",
+        "pdf_url_check": pdf_url_check,
+        "trigger_attempts": [validation_attempt],
+    }
+    _save_state(state)
     input_text = bom_trigger["input_text"]
     trigger_result = _trigger_bom_agent_with_retries(
         project_code=project_code,
@@ -1388,25 +1512,23 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     )
     accepted = trigger_result.get("status") == "accepted"
     retryable_failure = not accepted and trigger_result.get("retryable") is True
-    state["status"] = (
-        "bom_triggered"
-        if accepted
-        else "bom_trigger_failed"
-        if retryable_failure
-        else "bom_failed"
-    )
+    state["status"] = "awaiting_bom_callback" if accepted else "trigger_request_failed"
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
     state["bom"] = {
         **dict(state.get("bom") or {}),
         "status": (
-            "triggered"
+            "awaiting_bom_callback"
             if accepted
-            else "bom_trigger_failed"
-            if retryable_failure
-            else "bom_failed"
+            else "trigger_request_failed"
         ),
-        "retryable": retryable_failure,
+        "trigger_request_status": (
+            "trigger_request_accepted" if accepted else "trigger_request_failed"
+        ),
+        "accepted_at": _now_iso() if accepted else None,
+        "callback_timeout_seconds": _bom_callback_timeout_seconds(),
+        "retryable": False if accepted else retryable_failure,
+        "retry_available": False if accepted else retryable_failure,
         "trigger_result": trigger_result,
         "trigger_attempts": [validation_attempt, *(trigger_result.get("attempts") or [])],
         "input_text": input_text,
@@ -1424,6 +1546,11 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
         "bom": state["bom"],
         "trigger_attempts": state["bom"]["trigger_attempts"],
         "state": state,
+        "message": (
+            "Agent request accepted and queued. Waiting for BOM output."
+            if accepted
+            else "BOM Agent trigger request failed."
+        ),
     }
 
 
@@ -2133,6 +2260,7 @@ def save_bom_output(
     project_code: str,
     product_id: str,
     raw_json: Dict[str, Any],
+    trigger_run_id: Optional[str] = None,
     allow_create_without_start: bool = False,
 ) -> Dict[str, Any]:
     raw_keys = list(raw_json.keys()) if isinstance(raw_json, dict) else []
@@ -2150,6 +2278,7 @@ def save_bom_output(
         "raw_json_top_level_keys": raw_keys,
         "data_root": str(DATA_ROOT),
         "request_correlation_id": correlation_id,
+        "trigger_run_id_received": trigger_run_id,
     }
     logger.info("save_bom_output called: %s", json.dumps(initial_debug, default=str))
 
@@ -2219,7 +2348,65 @@ def save_bom_output(
                 workflow_state_path=missing_response["workflow_state_path"],
             )
             return missing_response
+        expected_trigger_run_id = str(
+            ((existing_state or {}).get("bom") or {}).get("trigger_run_id") or ""
+        ).strip()
+        received_trigger_run_id = str(trigger_run_id or "").strip()
+        if expected_trigger_run_id and not received_trigger_run_id:
+            response = {
+                "success": False,
+                "status": "rejected",
+                "error_code": "missing_trigger_run_id",
+                "message": "BOM callback is missing trigger_run_id for the current run.",
+                "project_code": project_code,
+                "product_id": product_id,
+                "workflow_state_path": str(_state_path(project_code, product_id)),
+            }
+            append_workflow_event(
+                project_code,
+                product_id,
+                "save_bom_output_rejected",
+                error_code=response["error_code"],
+                expected_trigger_run_id=expected_trigger_run_id,
+            )
+            return response
+        if expected_trigger_run_id and received_trigger_run_id != expected_trigger_run_id:
+            stale_callback = {
+                "received_at": _now_iso(),
+                "received_trigger_run_id": received_trigger_run_id,
+                "expected_trigger_run_id": expected_trigger_run_id,
+                "raw_json_top_level_keys": raw_keys,
+            }
+            existing_state.setdefault("stale_bom_callbacks", []).append(stale_callback)
+            _save_state(existing_state)
+            response = {
+                "success": False,
+                "status": "stale_callback",
+                "error_code": "trigger_run_id_mismatch",
+                "message": "BOM callback belongs to a different trigger run.",
+                "project_code": project_code,
+                "product_id": product_id,
+                "expected_trigger_run_id": expected_trigger_run_id,
+                "received_trigger_run_id": received_trigger_run_id,
+                "workflow_state_path": str(_state_path(project_code, product_id)),
+            }
+            append_workflow_event(
+                project_code,
+                product_id,
+                "stale_bom_callback_recorded",
+                expected_trigger_run_id=expected_trigger_run_id,
+                received_trigger_run_id=received_trigger_run_id,
+            )
+            return response
         status_before = (existing_state or {}).get("status")
+        append_workflow_event(
+            project_code,
+            product_id,
+            "bom_received",
+            trigger_run_id=received_trigger_run_id or expected_trigger_run_id,
+            status_before=status_before,
+            status_after="bom_received",
+        )
         run_dir = _run_dir(project_code, product_id).resolve()
         state_path = _state_path(project_code, product_id).resolve()
         raw_path = _bom_raw_path(project_code, product_id).resolve()
@@ -2287,6 +2474,15 @@ def save_bom_output(
             component_ids=component_ids,
             request_correlation_id=correlation_id,
         )
+        append_workflow_event(
+            project_code,
+            product_id,
+            "bom_normalized",
+            trigger_run_id=received_trigger_run_id or expected_trigger_run_id,
+            normalized_bom_path=str(normalized_path),
+            component_ids=component_ids,
+            status_after="bom_normalized",
+        )
 
         state = existing_state if isinstance(existing_state, dict) else _load_state(project_code, product_id)
         if existing_state is None and allow_create_without_start:
@@ -2316,11 +2512,15 @@ def save_bom_output(
         state["bom"] = {
             **existing_bom,
             "status": "received",
-            "lifecycle_status": "bom_received",
+            "callback_status": "bom_received",
+            "normalization_status": "bom_normalized",
+            "lifecycle_status": "bom_normalized",
             "save_path": _relative(raw_path),
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
-            "received_for_trigger_run_id": existing_bom.get("trigger_run_id"),
+            "received_for_trigger_run_id": (
+                received_trigger_run_id or existing_bom.get("trigger_run_id")
+            ),
             "raw_bom_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
             "normalized_bom_sha256": hashlib.sha256(normalized_path.read_bytes()).hexdigest(),
             "retryable": False,

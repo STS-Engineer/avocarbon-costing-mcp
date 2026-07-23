@@ -31,6 +31,9 @@ from services.project_data_paths import (
     CustomerInputFileNotFound,
     get_workflow_run_paths,
 )
+from services.choke_writeback_mcp_diagnostic import (
+    get_writeback_mcp_connectivity_diagnostic,
+)
 
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
@@ -44,6 +47,7 @@ class StartWorkflowRequest(BaseModel):
 class SaveBomOutputRequest(BaseModel):
     project_code: str
     product_id: str
+    trigger_run_id: str | None = None
     raw_json: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -158,6 +162,11 @@ def workflow_writeback_debug(project_code: str, product_id: str):
     return _handle(lambda: get_writeback_debug(project_code, product_id))
 
 
+@router.get("/mcp-diagnostic")
+def mcp_connectivity_diagnostic():
+    return _handle(get_writeback_mcp_connectivity_diagnostic)
+
+
 @router.get("/bom-output/{project_code}/{product_id}")
 def bom_output(project_code: str, product_id: str):
     return _handle(lambda: get_bom_output(project_code, product_id))
@@ -184,6 +193,7 @@ def save_bom(request: SaveBomOutputRequest):
     return _handle(lambda: save_bom_output(
         project_code=request.project_code,
         product_id=request.product_id,
+        trigger_run_id=request.trigger_run_id,
         raw_json=request.raw_json,
     ))
 

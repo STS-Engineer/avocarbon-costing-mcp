@@ -164,9 +164,14 @@ def trigger_workspace_agent(
             result = {
                 "status": "accepted" if status_code == 202 else "failed",
                 "http_status": status_code,
-                "note": "Workspace Agent trigger accepted. Output must be saved by agent/MCP or loaded from save_address.",
+                "note": (
+                    "Agent request accepted and queued. Waiting for callback."
+                    if status_code == 202
+                    else "Workspace Agent trigger request was not accepted."
+                ),
                 "response": _response_payload(response_text),
                 "request_correlation_id": _correlation_id(response.headers),
+                "conversation_url_verified": False,
             }
     except urllib.error.HTTPError as exc:
         response_text = exc.read().decode("utf-8", errors="replace")

@@ -270,7 +270,7 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
     result = workflow.retry_bom_agent("P", "10")
 
     assert len(trigger_calls) == 1
-    assert result["status"] == "bom_triggered"
+    assert result["status"] == "awaiting_bom_callback"
     assert result["state"]["missing_outputs"] == ["bom"]
     assert [item["stage"] for item in result["trigger_attempts"]] == [
         "drawing_access_validation",
@@ -282,9 +282,11 @@ def test_active_trigger_retry_is_idempotently_skipped(monkeypatch):
     state = {
         "project_code": "P",
         "product_id": "10",
-        "status": "bom_triggered",
+        "status": "awaiting_bom_callback",
         "bom": {
-            "status": "triggered",
+            "status": "awaiting_bom_callback",
+            "lifecycle_status": "awaiting_bom_callback",
+            "accepted_at": workflow._now_iso(),
             "trigger_result": {"status": "accepted"},
         },
     }
@@ -293,7 +295,7 @@ def test_active_trigger_retry_is_idempotently_skipped(monkeypatch):
     result = workflow.retry_bom_agent("P", "10")
 
     assert result["skipped"] is True
-    assert result["reason"] == "bom_trigger_already_active"
+    assert result["reason"] == "bom_callback_wait_still_active"
 
 
 def test_trigger_payload_keeps_product_id_as_canonical_string(monkeypatch):

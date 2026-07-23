@@ -620,13 +620,15 @@ def find_project_product(project_code: str, product_reference: str):
 def save_bom_output(
     project_code: str,
     product_id: str,
+    trigger_run_id: str,
     raw_json: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
 
-    Save the final Choke BOM Analyzer JSON to the backend workflow. This is equivalent
-    to POST /api/choke-workflow/save-bom-output.
+    Save the final Choke BOM Analyzer JSON to the backend workflow. Pass the exact
+    trigger_run_id received in the Agent request. This is equivalent to
+    POST /api/choke-workflow/save-bom-output.
     """
     try:
         from services.choke_sequential_agent_workflow import save_bom_output as workflow_save_bom_output
@@ -634,6 +636,7 @@ def save_bom_output(
         workflow_response = workflow_save_bom_output(
             project_code=project_code,
             product_id=product_id,
+            trigger_run_id=trigger_run_id,
             raw_json=raw_json,
         )
         if workflow_response.get("success"):
