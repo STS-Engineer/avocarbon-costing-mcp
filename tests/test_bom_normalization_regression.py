@@ -11,6 +11,8 @@ bare numeric row ids (e.g. "id": 1) instead of semantic component ids caused:
   - trigger-most to silently no-op with an ambiguous HTTP 200
 """
 
+from pathlib import Path
+
 import services.choke_sequential_agent_workflow as workflow
 
 
@@ -268,9 +270,11 @@ def test_trigger_most_returns_explicit_reason_when_decomposition_blocked(monkeyp
 
     assert result["success"] is False
     assert result["triggered"] is False
-    assert result["reason"] == "process_decomposition_blocked"
+    assert result["reason"] == "no_confirmed_operations"
     assert result["blocked_reason"]
-    assert result["status"] == "no_most_triggered"
+    assert result["status"] == "most_blocked"
+    assert state["status"] == "most_blocked"
+    assert state["most"]["status"] == "most_blocked"
     assert result["triggered_work_packages"] == []
 
 
@@ -298,6 +302,9 @@ def test_trigger_most_triggers_pending_packages_and_moves_state(monkeypatch):
     triggered_ids = {item["work_package_id"] for item in result["triggered_work_packages"]}
     assert triggered_ids == {"wp_10_wire_winding", "wp_30_soldering_tinning"}
     assert state["status"] == "most_triggered"
+    assert state["most"]["lifecycle_status"] == "awaiting_most_callback"
+    assert result["most"]["trigger_result"]["status"] == "dry_run"
+    assert result["most"]["trigger_result"]["http_status"] == 200
 
 
 def test_trigger_most_skips_already_received_work_packages_idempotently(monkeypatch):
@@ -323,5 +330,234 @@ def test_trigger_most_skips_already_received_work_packages_idempotently(monkeypa
 
     skipped_ids = {item["work_package_id"] for item in result["skipped_work_packages"]}
     assert "wp_10_wire_winding" in skipped_ids
-    triggered_ids = {item["work_package_id"] for item in result["triggered_work_packages"]}
-    assert "wp_10_wire_winding" not in triggered_ids
+
+
+def test_rod_choke_unit_bearing_quantities_create_only_evidence_based_winding():
+    normalized_bom = workflow.normalize_bom({
+        "bill_of_material": [
+            {
+                "component_id": "ferrite_core",
+                "poste": "Ferrite",
+                "produit_designation": "Ferrite core rod",
+                "quantite": "2 pcs",
+            },
+            {
+                "component_id": "magnet_wire",
+                "poste": "Fil",
+                "produit_designation": "Copper wire AIEW",
+                "quantite": "1 bobinage / piece",
+            },
+            {
+                "component_id": "lead_tinning",
+                "poste": "Etamage",
+                "produit_designation": "Tin coating on copper wire",
+                "quantite": "2 zones potentielles",
+                "status": "to_confirm",
+            },
+        ],
+    })
+    state = _state(
+        customer_input={"product": "Rod Choke", "annual_quantity": 360000},
+        choke_classification={
+            "choke_family": "choke",
+            "choke_subtype": "rod_choke",
+            "raw_detected_product_name": "Rod Choke",
+        },
+    )
+
+    process = workflow.build_most_process_decomposition(state, normalized_bom)
+
+    assert process["status"] == "created"
+    assert [item["operation_key"] for item in process["work_packages"]] == ["wire_winding"]
+    assert process["work_packages"][0]["component_ids"] == [
+        "magnet_wire",
+        "ferrite_core",
+    ]
+    assert process["exact_historical_profile_match"] is None
+    assert all(item["component_type"] == "finished_choke_operation" for item in process["work_packages"])
+
+
+def test_most_request_is_persisted_before_workspace_http_call(monkeypatch):
+    normalized_bom = workflow.normalize_bom(_full_choke_bom())
+    required_ids = [
+        item["component_id"]
+        for item in workflow._required_external_components(normalized_bom)
+    ]
+    state = _state(
+        product_id=300440157,
+        bom={"status": "received"},
+        required_external_component_ids=required_ids,
+        components={cid: {"status": "received"} for cid in required_ids},
+    )
+    persisted = []
+    monkeypatch.setattr(workflow, "_existing_state", lambda *_a, **_k: (state, "FAKE_PATH"))
+    monkeypatch.setattr(workflow, "_load_normalized_bom", lambda *_a, **_k: normalized_bom)
+    monkeypatch.setattr(
+        workflow,
+        "_save_state",
+        lambda value: persisted.append({
+            "status": value["status"],
+            "most_statuses": {
+                key: item.get("status")
+                for key, item in value["most"].items()
+                if isinstance(item, dict) and item.get("work_package_id")
+            },
+        }) or value,
+    )
+    monkeypatch.setattr(workflow, "append_workflow_event", lambda *_a, **_k: {})
+
+    def accepted_trigger(*_args, **_kwargs):
+        assert persisted
+        assert "trigger_request_sending" in persisted[-1]["most_statuses"].values()
+        return {"status": "accepted", "http_status": 202}
+
+    monkeypatch.setattr(workflow, "_trigger", accepted_trigger)
+
+    result = workflow.trigger_most_operations(
+        "TEST-PROJECT", "300440157", dry_run=False
+    )
+
+    assert result["status"] == "most_triggered"
+    assert result["lifecycle_status"] == "awaiting_most_callback"
+    assert result["state"]["product_id"] == "300440157"
+    assert all(
+        isinstance(item["trigger_run_id"], str)
+        for item in result["triggered_work_packages"]
+    )
+
+
+def test_duplicate_most_trigger_is_blocked_while_awaiting_callback(monkeypatch):
+    normalized_bom = workflow.normalize_bom(_full_choke_bom())
+    process = workflow.build_most_process_decomposition(_state(), normalized_bom)
+    required_ids = [
+        item["component_id"]
+        for item in workflow._required_external_components(normalized_bom)
+    ]
+    most = {
+        item["work_package_id"]: {
+            **item,
+            "status": "trigger_request_accepted",
+            "lifecycle_status": "awaiting_most_callback",
+        }
+        for item in process["work_packages"]
+    }
+    state = _state(
+        status="most_triggered",
+        bom={"status": "received"},
+        required_external_component_ids=required_ids,
+        components={cid: {"status": "received"} for cid in required_ids},
+        most=most,
+    )
+    _patch_common(monkeypatch, state, normalized_bom)
+    monkeypatch.setattr(
+        workflow,
+        "_trigger",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("duplicate trigger")),
+    )
+
+    result = workflow.trigger_most_operations(
+        "TEST-PROJECT", "TEST-PRODUCT", dry_run=False
+    )
+
+    assert result["status"] == "most_triggered"
+    assert result["reason"] == "already_triggered"
+    assert result["triggered_work_packages"] == []
+
+
+def test_most_callback_requires_current_trigger_run_id(monkeypatch):
+    work_package = {
+        "work_package_id": "wp_10_wire_winding",
+        "status": "confirmed",
+        "component_ids": ["ferrite_core", "magnet_wire"],
+    }
+    state = _state(
+        bom={"status": "received"},
+        process_decomposition={"work_packages": [work_package]},
+        most={
+            "wp_10_wire_winding": {
+                **work_package,
+                "trigger_run_id": "most-run-current",
+                "status": "trigger_request_accepted",
+            },
+        },
+    )
+    monkeypatch.setattr(workflow, "_existing_state", lambda *_a, **_k: (state, "FAKE_PATH"))
+    monkeypatch.setattr(workflow, "_save_state", lambda value: value)
+    monkeypatch.setattr(workflow, "append_workflow_event", lambda *_a, **_k: {})
+
+    missing = workflow.save_most_output(
+        "TEST-PROJECT", "TEST-PRODUCT", "wp_10_wire_winding", {}
+    )
+    stale = workflow.save_most_output(
+        "TEST-PROJECT",
+        "TEST-PRODUCT",
+        "wp_10_wire_winding",
+        {},
+        trigger_run_id="most-run-old",
+    )
+
+    assert missing["error_code"] == "missing_trigger_run_id"
+    assert stale["error_code"] == "trigger_run_id_mismatch"
+    assert state["most"]["wp_10_wire_winding"]["stale_callbacks"]
+
+
+def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
+    work_package = {
+        "work_package_id": "wp_10_wire_winding",
+        "status": "confirmed",
+        "component_ids": ["ferrite_core", "magnet_wire"],
+    }
+    state = _state(
+        status="most_triggered",
+        bom={"status": "received"},
+        process_decomposition={
+            "work_packages": [work_package],
+            "required_work_package_ids": ["wp_10_wire_winding"],
+        },
+        required_most_work_package_ids=["wp_10_wire_winding"],
+        components={
+            "ferrite_core": {"status": "received"},
+            "magnet_wire": {"status": "received"},
+        },
+        most={
+            "wp_10_wire_winding": {
+                **work_package,
+                "trigger_run_id": "most-run-current",
+                "status": "trigger_request_accepted",
+            },
+        },
+    )
+    raw_path = Path("data/test_runs/most_callback_test/raw.json")
+    normalized_path = Path("data/test_runs/most_callback_test/normalized.json")
+    writes = {}
+    monkeypatch.setattr(workflow, "_existing_state", lambda *_a, **_k: (state, "FAKE_PATH"))
+    monkeypatch.setattr(workflow, "_load_normalized_bom", lambda *_a, **_k: {"components": []})
+    monkeypatch.setattr(workflow, "_most_output_path", lambda *_a, **_k: raw_path)
+    monkeypatch.setattr(
+        workflow, "_normalized_most_output_path", lambda *_a, **_k: normalized_path
+    )
+    monkeypatch.setattr(
+        workflow, "_write_json", lambda path, value: writes.__setitem__(str(path), value)
+    )
+    monkeypatch.setattr(workflow, "_save_state", lambda value: value)
+    monkeypatch.setattr(workflow, "append_workflow_event", lambda *_a, **_k: {})
+
+    result = workflow.save_most_output(
+        "TEST-PROJECT",
+        "TEST-PRODUCT",
+        "wp_10_wire_winding",
+        {
+            "work_package_id": "wp_10_wire_winding",
+            "operation_name": "Winding",
+            "cycle_time_seconds": 12,
+        },
+        trigger_run_id="most-run-current",
+    )
+
+    assert result["success"] is True
+    assert result["state_status_after"] == "most_received"
+    assert state["most"]["wp_10_wire_winding"]["received_for_trigger_run_id"] == (
+        "most-run-current"
+    )
+    assert str(raw_path) in writes
+    assert str(normalized_path) in writes

@@ -60,7 +60,7 @@ MOST_WRITEBACK_INSTRUCTION = (
     "Do not depend on or search for a generated runtime callable name because "
     "generated names may change between runs. "
     "Pass the exact project_code, product_id, work_package_id, most_scope_id, "
-    "and raw_json containing the complete native MOST JSON object. "
+    "trigger_run_id, and raw_json containing the complete native MOST JSON object. "
     "Do not perform tool discovery through database tools or unrelated write actions. "
     "Never call create_or_update_component, create_or_update_bom_line, "
     "save_component_output, save_component_costing_result, store_agent_json, "
@@ -459,6 +459,11 @@ def append_workflow_event(
 
 
 def _save_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        revision = int(state.get("workflow_revision") or 0)
+    except (TypeError, ValueError):
+        revision = 0
+    state["workflow_revision"] = revision + 1
     state["updated_at"] = _now_iso()
     _write_json(_state_path(state["project_code"], state["product_id"]), state)
     return state
@@ -3657,14 +3662,20 @@ def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict
     return result
 
 
-def _most_trigger_payload(state: Dict[str, Any], work_package: Dict[str, Any]) -> Dict[str, Any]:
+def _most_trigger_payload(
+    state: Dict[str, Any],
+    work_package: Dict[str, Any],
+    trigger_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     work_package_id = work_package["work_package_id"]
+    trigger_run_id = str(trigger_run_id or uuid.uuid4())
     return {
         "project_code": state["project_code"],
-        "product_id": state["product_id"],
+        "product_id": str(state["product_id"]),
         **classification_trace(state.get("choke_classification")),
         "work_package_id": work_package_id,
         "most_scope_id": work_package_id,
+        "trigger_run_id": trigger_run_id,
         "operation_name": work_package.get("operation_name"),
         "component_ids": work_package.get("component_ids") or [],
         "technical_inputs": work_package.get("technical_inputs") or {},
@@ -3676,15 +3687,91 @@ def _most_trigger_payload(state: Dict[str, Any], work_package: Dict[str, Any]) -
     }
 
 
+def _most_eligibility_report(
+    normalized_bom: Dict[str, Any],
+    process: Dict[str, Any],
+) -> Dict[str, Any]:
+    operations = [
+        *(process.get("operations") or []),
+        *(process.get("excluded_operations") or []),
+    ]
+    component_rows = []
+    for component in normalized_bom.get("components") or []:
+        component_id = component.get("component_id")
+        linked_operations = [
+            operation
+            for operation in operations
+            if component_id and component_id in (operation.get("component_ids") or [])
+        ]
+        confirmed_operations = [
+            operation.get("operation_name")
+            for operation in linked_operations
+            if operation.get("status") == "confirmed"
+        ]
+        component_rows.append({
+            "component_id": component_id,
+            "component_name": component.get("component"),
+            "component_classification": (
+                component.get("category")
+                or component.get("external_component_type")
+                or component.get("component_type")
+            ),
+            "costing_route": component.get("costing_route"),
+            "external_or_internal": (
+                "external"
+                if component.get("costing_route") == "external_component_costing"
+                else "internal"
+            ),
+            "proposed_operations": [
+                operation.get("operation_name") for operation in linked_operations
+            ],
+            "confirmed_for_most": bool(confirmed_operations),
+            "confirmed_operations": confirmed_operations,
+            "exclusion_reason": (
+                None
+                if confirmed_operations
+                else "No confirmed finished-product operation uses this BOM component."
+            ),
+        })
+    operation_rows = []
+    for operation in operations:
+        evidence = operation.get("evidence") or []
+        operation_rows.append({
+            "operation_key": operation.get("operation_key"),
+            "operation_name": operation.get("operation_name"),
+            "operation_confidence": (
+                max(
+                    (item.get("confidence") or "" for item in evidence),
+                    key=lambda value: {"confirmed": 4, "high": 3, "medium": 2, "low": 1}.get(
+                        str(value).lower(), 0
+                    ),
+                    default=None,
+                )
+            ),
+            "evidence": evidence,
+            "confirmed_for_most": operation.get("status") == "confirmed",
+            "status": operation.get("status"),
+            "exclusion_reason": (
+                None
+                if operation.get("status") == "confirmed"
+                else operation.get("reason_selected")
+            ),
+            "component_ids": operation.get("component_ids") or [],
+        })
+    return {"components": component_rows, "operations": operation_rows}
+
+
 def trigger_most_operations(
     project_code: str,
     product_id: str,
     dry_run: bool = False,
     force: bool = False,
 ) -> Dict[str, Any]:
+    product_id = str(product_id)
     state, _ = _existing_state(project_code, product_id)
     if state is None:
         raise ValueError("Workflow state not found. Start the workflow before triggering MOST.")
+    state["product_id"] = product_id
     if (state.get("bom") or {}).get("status") != "received":
         raise ValueError("BOM output must be received before triggering MOST.")
     normalized_bom = _load_normalized_bom(project_code, product_id)
@@ -3701,11 +3788,37 @@ def trigger_most_operations(
     if customer_input.get("annual_quantity") in [None, "", 0]:
         raise ValueError("MOST/component-operation planning needs annual_quantity before operations can be triggered.")
     process = build_most_process_decomposition(state, normalized_bom)
+    eligible_operations = [
+        item for item in process.get("operations") or []
+        if item.get("status") == "confirmed"
+    ]
+    skipped_operations = [
+        item for item in [
+            *(process.get("operations") or []),
+            *(process.get("excluded_operations") or []),
+        ]
+        if item.get("status") != "confirmed"
+    ]
+    eligibility_report = _most_eligibility_report(normalized_bom, process)
+    process["eligibility_report"] = eligibility_report
     state["process_decomposition"] = process
     state["required_most_work_package_ids"] = process.get("required_work_package_ids") or []
     state.setdefault("most", {})
 
     if process.get("status") == "blocked":
+        blocking_reason = process.get("blocked_reason") or "no_confirmed_operations"
+        state["status"] = "most_blocked"
+        state["current_step"] = "Step 3 MOST Assemblage"
+        state["most"].update({
+            "status": "most_blocked",
+            "lifecycle_status": "most_blocked",
+            "trigger_result": None,
+            "trigger_attempts": [],
+            "blocking_reason": blocking_reason,
+            "eligible_operations": eligible_operations,
+            "skipped_operations": skipped_operations,
+            "eligibility_report": eligibility_report,
+        })
         state["missing_outputs"] = [
             f"most:{item}" for item in state["required_most_work_package_ids"]
             if (state["most"].get(item) or {}).get("status") != "received"
@@ -3717,10 +3830,12 @@ def trigger_most_operations(
         )
         return {
             "success": False,
-            "status": "no_most_triggered",
+            "status": "most_blocked",
+            "lifecycle_status": "most_blocked",
             "triggered": False,
-            "reason": "process_decomposition_blocked",
-            "blocked_reason": process.get("blocked_reason"),
+            "reason": blocking_reason,
+            "blocked_reason": blocking_reason,
+            "message": "No confirmed assembly/process operations are eligible for MOST.",
             "missing_inputs": process.get("missing_inputs") or [],
             "project_code": project_code,
             "product_id": product_id,
@@ -3728,8 +3843,25 @@ def trigger_most_operations(
             "skipped_work_packages": [],
             "failed_work_packages": [],
             "most_triggers": [],
+            "most": {
+                "status": "most_blocked",
+                "lifecycle_status": "most_blocked",
+                "trigger_result": None,
+                "trigger_attempts": [],
+            },
+            "eligible_operations": eligible_operations,
+            "skipped_operations": skipped_operations,
+            "eligibility_report": eligibility_report,
             "required_most_work_package_ids": state["required_most_work_package_ids"],
             "process_decomposition": process,
+            "process_route": process,
+            "errors": state.get("errors") or [],
+            "warnings": [
+                *(state.get("warnings") or []),
+                *(process.get("assumptions") or []),
+            ],
+            "blocking_reason": blocking_reason,
+            "missing_outputs": state.get("missing_outputs") or [],
             "state": state,
         }
 
@@ -3745,13 +3877,49 @@ def trigger_most_operations(
             }
             skipped.append({"work_package_id": work_package_id, "status": "blocked", "reason": work_package.get("blocking_reason")})
             continue
-        if not force and previous.get("status") in {"triggered", "received", "failed"}:
+        if not force and previous.get("status") in {
+            "trigger_request_sending",
+            "trigger_request_accepted",
+            "awaiting_most_callback",
+            "triggered",
+            "received",
+        }:
             skipped.append({"work_package_id": work_package_id, "status": previous.get("status"), "reason": "already_processed"})
             continue
         correlation_id = str(uuid.uuid4())
-        payload = _most_trigger_payload(state, work_package)
+        trigger_run_id = str(uuid.uuid4())
+        payload = _most_trigger_payload(state, work_package, trigger_run_id)
         conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
-        append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), save_path=payload["save_address"])
+        sending_attempt = {
+            "status": "trigger_request_sending",
+            "requested_at": _now_iso(),
+            "trigger_run_id": trigger_run_id,
+        }
+        state["most"][work_package_id] = {
+            **previous,
+            **work_package,
+            "status": "trigger_request_sending",
+            "lifecycle_status": "trigger_request_sending",
+            "trigger_run_id": trigger_run_id,
+            "conversation_key": conversation_key,
+            "correlation_id": correlation_id,
+            "trigger_payload": payload,
+            "trigger_attempts": [sending_attempt],
+            "save_path": payload["save_address"],
+            "normalized_path": _relative(
+                _normalized_most_output_path(project_code, product_id, work_package_id)
+            ),
+        }
+        state["status"] = "most_triggering"
+        state["current_step"] = "Step 3 MOST Assemblage"
+        state["most"].update({
+            "status": "trigger_request_sending",
+            "lifecycle_status": "trigger_request_sending",
+            "trigger_result": None,
+            "trigger_attempts": [sending_attempt],
+        })
+        _save_state(state)
+        append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="trigger_request_sending", save_path=payload["save_address"])
         trigger_result = _trigger(
             "CHATGPT_MOST_AGENT_ID",
             "MOST Assemblage",
@@ -3761,31 +3929,120 @@ def trigger_most_operations(
             dry_run=dry_run,
         )
         accepted = trigger_result.get("status") in {"accepted", "dry_run"}
+        completed_attempt = {
+            "status": "trigger_request_accepted" if accepted else "trigger_request_failed",
+            "completed_at": _now_iso(),
+            "trigger_run_id": trigger_run_id,
+            "http_status": trigger_result.get("http_status"),
+            "request_correlation_id": trigger_result.get("request_correlation_id"),
+        }
         entry = {
             **previous,
             **work_package,
-            "status": "triggered" if accepted else "failed",
+            "status": "trigger_request_accepted" if accepted else "trigger_request_failed",
+            "lifecycle_status": "awaiting_most_callback" if accepted else "trigger_request_failed",
+            "trigger_run_id": trigger_run_id,
             "conversation_key": conversation_key,
             "correlation_id": correlation_id,
             "trigger_payload": payload,
             "trigger_result": trigger_result,
+            "trigger_attempts": [sending_attempt, completed_attempt],
             "save_path": payload["save_address"],
             "normalized_path": _relative(_normalized_most_output_path(project_code, product_id, work_package_id)),
             "received_at": previous.get("received_at") if not force else None,
         }
         state["most"][work_package_id] = entry
-        summary = {"work_package_id": work_package_id, "status": "accepted" if accepted else "failed", "http_status": trigger_result.get("http_status"), "correlation_id": correlation_id}
+        _save_state(state)
+        summary = {"work_package_id": work_package_id, "status": "accepted" if accepted else "failed", "http_status": trigger_result.get("http_status"), "correlation_id": correlation_id, "trigger_run_id": trigger_run_id}
         if accepted:
             triggered.append(summary)
-            append_workflow_event(project_code, product_id, "most_trigger_accepted", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="triggered")
+            append_workflow_event(project_code, product_id, "most_trigger_accepted", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="awaiting_most_callback")
         else:
             failed.append(summary)
             append_workflow_event(project_code, product_id, "most_trigger_failed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="failed", http_status=trigger_result.get("http_status"))
     required_ids = state["required_most_work_package_ids"]
     state["missing_outputs"] = [f"most:{item}" for item in required_ids if (state["most"].get(item) or {}).get("status") != "received"]
+    awaiting_existing = any(
+        (state["most"].get(item) or {}).get("status")
+        in {"trigger_request_sending", "trigger_request_accepted", "awaiting_most_callback", "triggered"}
+        for item in required_ids
+    )
+    all_received = bool(required_ids) and all(
+        (state["most"].get(item) or {}).get("status") == "received"
+        for item in required_ids
+    )
     if triggered:
+        accepted_results = [
+            (state["most"].get(summary["work_package_id"]) or {}).get("trigger_result")
+            or {}
+            for summary in triggered
+        ]
+        result_statuses = {item.get("status") for item in accepted_results}
+        result_http_statuses = {item.get("http_status") for item in accepted_results}
         state["status"] = "most_triggered"
-        state["current_step"] = "Step 3 MOST Agent"
+        state["current_step"] = "Step 3 MOST Assemblage"
+        state["most"].update({
+            "status": "trigger_request_accepted",
+            "lifecycle_status": "awaiting_most_callback",
+            "trigger_result": accepted_results[0] if len(accepted_results) == 1 else {
+                "status": (
+                    next(iter(result_statuses))
+                    if len(result_statuses) == 1
+                    else "mixed"
+                ),
+                "http_status": (
+                    next(iter(result_http_statuses))
+                    if len(result_http_statuses) == 1
+                    else None
+                ),
+                "results": accepted_results,
+            },
+            "trigger_attempts": [
+                item
+                for summary in triggered
+                for item in (
+                    (state["most"].get(summary["work_package_id"]) or {}).get(
+                        "trigger_attempts"
+                    ) or []
+                )
+            ],
+            "eligible_operations": eligible_operations,
+            "skipped_operations": skipped_operations,
+            "eligibility_report": eligibility_report,
+        })
+    elif failed:
+        failed_results = [
+            (state["most"].get(summary["work_package_id"]) or {}).get("trigger_result")
+            or {}
+            for summary in failed
+        ]
+        state["status"] = "most_trigger_failed"
+        state["current_step"] = "Step 3 MOST Assemblage"
+        state["most"].update({
+            "status": "trigger_request_failed",
+            "lifecycle_status": "trigger_request_failed",
+            "trigger_result": failed_results[0] if len(failed_results) == 1 else {
+                "status": "failed",
+                "results": failed_results,
+            },
+            "eligible_operations": eligible_operations,
+            "skipped_operations": skipped_operations,
+            "eligibility_report": eligibility_report,
+        })
+    elif awaiting_existing:
+        state["status"] = "most_triggered"
+        state["current_step"] = "Step 3 MOST Assemblage"
+        state["most"].update({
+            "status": "trigger_request_accepted",
+            "lifecycle_status": "awaiting_most_callback",
+        })
+    elif all_received:
+        state["status"] = "most_received"
+        state["current_step"] = "Step 4 Final Calculation"
+        state["most"].update({
+            "status": "most_received",
+            "lifecycle_status": "most_received",
+        })
     _save_state(state)
     if triggered:
         success, reason = True, None
@@ -3797,7 +4054,25 @@ def trigger_most_operations(
         success, reason = True, "nothing_to_trigger"
     return {
         "success": success,
-        "status": "most_triggered" if triggered else ("most_trigger_failed" if failed else "no_most_triggered"),
+        "status": (
+            "most_received"
+            if all_received
+            else
+            "most_triggered"
+            if triggered or awaiting_existing
+            else "most_trigger_failed"
+            if failed
+            else "most_blocked"
+        ),
+        "lifecycle_status": (
+            "awaiting_most_callback"
+            if triggered or awaiting_existing
+            else "trigger_request_failed"
+            if failed
+            else "most_received"
+            if all_received
+            else "most_blocked"
+        ),
         "triggered": bool(triggered),
         "reason": reason,
         "project_code": project_code,
@@ -3806,8 +4081,25 @@ def trigger_most_operations(
         "skipped_work_packages": skipped,
         "failed_work_packages": failed,
         "most_triggers": [state["most"][item["work_package_id"]] for item in triggered],
+        "most": {
+            "status": state["most"].get("status"),
+            "lifecycle_status": state["most"].get("lifecycle_status"),
+            "trigger_result": state["most"].get("trigger_result"),
+            "trigger_attempts": state["most"].get("trigger_attempts") or [],
+        },
+        "eligible_operations": eligible_operations,
+        "skipped_operations": skipped_operations,
+        "eligibility_report": eligibility_report,
         "required_most_work_package_ids": required_ids,
         "process_decomposition": process,
+        "process_route": process,
+        "errors": state.get("errors") or [],
+        "warnings": [
+            *(state.get("warnings") or []),
+            *(process.get("assumptions") or []),
+        ],
+        "blocking_reason": None if triggered or awaiting_existing or all_received else reason,
+        "missing_outputs": state.get("missing_outputs") or [],
         "state": state,
     }
 
@@ -3852,7 +4144,13 @@ def normalize_most_output(state: Dict[str, Any], work_package: Dict[str, Any], r
     }
 
 
-def save_most_output(project_code: str, product_id: str, work_package_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
+def save_most_output(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+    raw_json: Dict[str, Any],
+    trigger_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
     work_package_id = _safe_part(work_package_id, "work_package_id")
     correlation_id = str(uuid.uuid4())
     state, state_path = _existing_state(project_code, product_id)
@@ -3874,6 +4172,36 @@ def save_most_output(project_code: str, product_id: str, work_package_id: str, r
             raise ValueError(f"work_package_id {work_package_id} does not exist in process decomposition.")
         if work_package.get("status") == "blocked":
             raise ValueError(f"work_package_id {work_package_id} is blocked: {work_package.get('blocking_reason')}")
+        existing_entry = (state.get("most") or {}).get(work_package_id) or {}
+        expected_trigger_run_id = str(existing_entry.get("trigger_run_id") or "").strip()
+        received_trigger_run_id = str(trigger_run_id or "").strip()
+        if expected_trigger_run_id and not received_trigger_run_id:
+            return {
+                "success": False,
+                "status": "rejected",
+                "error_code": "missing_trigger_run_id",
+                "message": "MOST callback is missing trigger_run_id for the current work package run.",
+                "project_code": project_code,
+                "product_id": str(product_id),
+                "work_package_id": work_package_id,
+            }
+        if expected_trigger_run_id and received_trigger_run_id != expected_trigger_run_id:
+            existing_entry.setdefault("stale_callbacks", []).append({
+                "received_at": _now_iso(),
+                "received_trigger_run_id": received_trigger_run_id,
+                "expected_trigger_run_id": expected_trigger_run_id,
+            })
+            state["most"][work_package_id] = existing_entry
+            _save_state(state)
+            return {
+                "success": False,
+                "status": "stale_callback",
+                "error_code": "trigger_run_id_mismatch",
+                "message": "MOST callback belongs to a different trigger run.",
+                "project_code": project_code,
+                "product_id": str(product_id),
+                "work_package_id": work_package_id,
+            }
         normalized_bom = _load_normalized_bom(project_code, product_id)
         external_ids = {item["component_id"] for item in _required_external_components(normalized_bom, include_unconfirmed=True)}
         applicable = [item for item in work_package.get("component_ids") or [] if item in external_ids]
@@ -3894,6 +4222,7 @@ def save_most_output(project_code: str, product_id: str, work_package_id: str, r
             "save_path": _relative(raw_path),
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
+            "received_for_trigger_run_id": received_trigger_run_id or expected_trigger_run_id or None,
         }
         required = list(state.get("required_most_work_package_ids") or process.get("required_work_package_ids") or [])
         remaining = [item for item in required if (state["most"].get(item) or {}).get("status") != "received"]
@@ -3901,9 +4230,17 @@ def save_most_output(project_code: str, product_id: str, work_package_id: str, r
         if not remaining:
             state["status"] = "most_received"
             state["current_step"] = "Step 4 Final Calculation"
+            state["most"].update({
+                "status": "most_received",
+                "lifecycle_status": "most_received",
+            })
         elif state.get("status") != "most_triggered":
             state["status"] = "most_triggered"
             state["current_step"] = "Step 3 MOST Agent"
+            state["most"].update({
+                "status": "trigger_request_accepted",
+                "lifecycle_status": "awaiting_most_callback",
+            })
         _save_state(state)
         append_workflow_event(project_code, product_id, "save_most_output_completed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, status_after=state.get("status"), raw_path=_relative(raw_path), normalized_path=_relative(normalized_path))
         if not remaining:

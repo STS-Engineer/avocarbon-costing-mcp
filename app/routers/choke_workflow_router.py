@@ -82,6 +82,7 @@ class SaveMostOutputRequest(BaseModel):
     project_code: str
     product_id: str
     work_package_id: str
+    trigger_run_id: str | None = None
     raw_json: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -273,6 +274,7 @@ def save_most(request: SaveMostOutputRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         work_package_id=request.work_package_id,
+        trigger_run_id=request.trigger_run_id,
         raw_json=request.raw_json,
     ))
 

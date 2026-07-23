@@ -166,6 +166,7 @@
           "project_code",
           "product_id",
           "work_package_id",
+          "trigger_run_id",
           "raw_json"
         ],
         "properties": {
@@ -180,6 +181,10 @@
           "work_package_id": {
             "type": "string",
             "description": "MOST work package ID from the MOST agent input payload."
+          },
+          "trigger_run_id": {
+            "type": "string",
+            "description": "Current MOST trigger correlation ID from the work-package payload."
           },
           "raw_json": {
             "type": "object",

@@ -76,18 +76,26 @@ def _number(value: Any) -> Optional[float]:
         value = value.get("value", value.get("quantity"))
     if value in (None, "") or isinstance(value, bool):
         return None
+    text = str(value).strip().replace(",", ".")
+    match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", text)
+    if not match:
+        return None
     try:
-        return float(str(value).replace(",", "."))
+        return float(match.group(0))
     except (TypeError, ValueError):
         return None
 
 
 def _component_kind(component: Dict[str, Any]) -> Optional[str]:
-    identity = " ".join(str(component.get(key) or "") for key in (
-        "component_id", "category", "external_component_type", "component_type", "component"
+    canonical_identity = " ".join(str(component.get(key) or "") for key in (
+        "component_id", "category", "external_component_type", "component_type"
     )).lower()
     for kind, aliases in _COMPONENT_ALIASES.items():
-        if any(alias in identity for alias in aliases):
+        if any(alias in canonical_identity for alias in aliases):
+            return kind
+    description = str(component.get("component") or "").lower()
+    for kind, aliases in _COMPONENT_ALIASES.items():
+        if any(alias in description for alias in aliases):
             return kind
     return None
 

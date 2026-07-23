@@ -21,7 +21,13 @@ WRITEBACK_TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     },
     "save_most_output": {
         "description": "Save one final MOST operation JSON to the backend workflow",
-        "required": ["project_code", "product_id", "work_package_id", "raw_json"],
+        "required": [
+            "project_code",
+            "product_id",
+            "work_package_id",
+            "trigger_run_id",
+            "raw_json",
+        ],
     },
     "get_choke_workflow_status": {
         "description": "Read the current Choke workflow status",

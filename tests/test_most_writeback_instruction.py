@@ -62,6 +62,7 @@ def test_most_trigger_payload_uses_strong_writeback_instruction():
         "product_id",
         "work_package_id",
         "most_scope_id",
+        "trigger_run_id",
         "raw_json",
     ):
         assert required_name in instruction
@@ -76,6 +77,7 @@ def test_most_payload_fields_and_identity_are_unchanged():
     assert payload["product_id"] == "TEST-PRODUCT"
     assert payload["work_package_id"] == "wp_20_wire_winding"
     assert payload["most_scope_id"] == "wp_20_wire_winding"
+    assert isinstance(payload["trigger_run_id"], str)
     assert payload["operation_name"] == "Wire winding"
     assert payload["component_ids"] == ["magnet_wire"]
     assert payload["technical_inputs"] == {"turns": 13}

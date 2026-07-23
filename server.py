@@ -715,6 +715,7 @@ def save_component_output(
 def save_most_output(
     project_code: str,
     product_id: str,
+    trigger_run_id: str,
     raw_json: Dict[str, Any],
     most_scope_id: Optional[str] = None,
     work_package_id: Optional[str] = None,
@@ -735,6 +736,7 @@ def save_most_output(
             project_code=project_code,
             product_id=product_id,
             work_package_id=scope_id,
+            trigger_run_id=trigger_run_id,
             raw_json=raw_json,
         )
         traceability = _save_agent_json_traceability(
