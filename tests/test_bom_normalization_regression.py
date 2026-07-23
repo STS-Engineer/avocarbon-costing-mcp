@@ -564,11 +564,49 @@ def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
 
     assert result["success"] is True
     assert result["state_status_after"] == "most_received"
-    assert state["most"]["wp_10_wire_winding"]["received_for_trigger_run_id"] == (
-        "most-run-current"
-    )
+    saved_entry = state["most"]["wp_10_wire_winding"]
+    assert saved_entry["received_for_trigger_run_id"] == "most-run-current"
+    assert saved_entry["status"] == "received"
+    assert saved_entry["lifecycle_status"] == "most_received"
+    assert saved_entry["retryable"] is False
+    assert saved_entry["failure_reason"] is None
+    assert state["most"]["retryable"] is False
+    assert state["most"]["failure_reason"] is None
     assert str(raw_path) in writes
     assert str(normalized_path) in writes
+
+
+def test_most_received_precedence_clears_stale_retry_state():
+    state = _state(
+        status="most_received",
+        current_step="Step 4 Final Calculation",
+        process_decomposition={
+            "required_work_package_ids": ["wp_10_wire_winding"],
+        },
+        required_most_work_package_ids=["wp_10_wire_winding"],
+        missing_outputs=[],
+        most={
+            "status": "most_received",
+            "lifecycle_status": "most_received",
+            "retryable": True,
+            "failure_reason": "missing_trigger_run_id",
+            "wp_10_wire_winding": {
+                "status": "received",
+                "lifecycle_status": "awaiting_most_callback",
+                "retryable": True,
+                "failure_reason": "missing_trigger_run_id",
+            },
+        },
+    )
+
+    workflow._apply_most_received_precedence(state)
+
+    entry = state["most"]["wp_10_wire_winding"]
+    assert entry["lifecycle_status"] == "most_received"
+    assert entry["retryable"] is False
+    assert entry["failure_reason"] is None
+    assert state["most"]["retryable"] is False
+    assert state["most"]["failure_reason"] is None
 
 
 def test_retry_most_work_package_triggers_only_failed_scope(monkeypatch):

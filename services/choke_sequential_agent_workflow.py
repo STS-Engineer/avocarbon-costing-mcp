@@ -522,6 +522,45 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+def _apply_most_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
+    most = state.setdefault("most", {})
+    required = list(
+        state.get("required_most_work_package_ids")
+        or (state.get("process_decomposition") or {}).get("required_work_package_ids")
+        or []
+    )
+    for work_package_id in required:
+        entry = most.get(work_package_id)
+        if not isinstance(entry, dict) or entry.get("status") != "received":
+            continue
+        entry.update({
+            "lifecycle_status": "most_received",
+            "retryable": False,
+            "failure_reason": None,
+        })
+
+    remaining = [
+        work_package_id
+        for work_package_id in required
+        if (most.get(work_package_id) or {}).get("status") != "received"
+    ]
+    if required and not remaining:
+        most.update({
+            "status": "most_received",
+            "lifecycle_status": "most_received",
+            "retryable": False,
+            "failure_reason": None,
+        })
+        state["status"] = "most_received"
+        state["current_step"] = "Step 4 Final Calculation"
+        state["missing_outputs"] = [
+            item
+            for item in state.get("missing_outputs") or []
+            if not str(item).startswith("most:")
+        ]
+    return state
+
+
 def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
     path_diagnostics = workflow_path_diagnostics(project_code, product_id)
     logger.info("workflow status path: %s", json.dumps(path_diagnostics, default=str))
@@ -619,6 +658,29 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
         )
     if (state.get("bom") or {}).get("status") != "received":
         state["missing_outputs"] = ["bom"]
+    most_semantics_before = json.dumps(
+        {
+            "status": state.get("status"),
+            "current_step": state.get("current_step"),
+            "missing_outputs": state.get("missing_outputs"),
+            "most": state.get("most"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+    _apply_most_received_precedence(state)
+    most_semantics_after = json.dumps(
+        {
+            "status": state.get("status"),
+            "current_step": state.get("current_step"),
+            "missing_outputs": state.get("missing_outputs"),
+            "most": state.get("most"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+    if most_semantics_after != most_semantics_before:
+        _save_state(state)
     state["canonical_data_root"] = path_diagnostics["resolved_data_root"]
     state["canonical_workflow_state_path"] = path_diagnostics["resolved_workflow_state_path"]
     state["process_id"] = path_diagnostics["process_id"]
@@ -4396,6 +4458,9 @@ def save_most_output(
             **existing,
             **work_package,
             "status": "received",
+            "lifecycle_status": "most_received",
+            "retryable": False,
+            "failure_reason": None,
             "save_path": _relative(raw_path),
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
@@ -4410,6 +4475,8 @@ def save_most_output(
             state["most"].update({
                 "status": "most_received",
                 "lifecycle_status": "most_received",
+                "retryable": False,
+                "failure_reason": None,
             })
         elif state.get("status") != "most_triggered":
             state["status"] = "most_triggered"
