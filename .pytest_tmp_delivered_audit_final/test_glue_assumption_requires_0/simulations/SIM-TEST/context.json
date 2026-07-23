@@ -1,0 +1,34 @@
+{
+  "simulation_id": "SIM-TEST",
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "product_line": "Chokes",
+  "product": "Fuse choke",
+  "destination_zone": "China South Pacific",
+  "annual_quantity": 600000,
+  "reporting_currency": "RMB",
+  "created_at": "2026-07-23T17:46:23.325333+00:00",
+  "updated_at": "2026-07-23T17:46:23.325342+00:00",
+  "production_plant": "Kunshan",
+  "manufacturing_strategy": {
+    "status": "found",
+    "source": "test.product_matrix",
+    "production_plant": "Kunshan"
+  },
+  "unit_data": {
+    "status": "found",
+    "source": "test.unit",
+    "plant": "Kunshan",
+    "operating_currency": "RMB",
+    "selling_currency": "RMB",
+    "dl_rate_operating_per_hour": 32,
+    "voh_rate_operating_per_hour": 9.6,
+    "foh_percent_dc": 77,
+    "fee_percent_dc": 56,
+    "open_hours_per_year": 6000
+  },
+  "master_data_sources": {
+    "manufacturing_strategy": "test.product_matrix",
+    "unit_data": "test.unit"
+  }
+}

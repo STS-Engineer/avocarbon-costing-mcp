@@ -98,6 +98,15 @@ class CalculateRealOutputsRequest(BaseModel):
     project_code: str
     product_id: str
     unit_data: Dict[str, Any] | None = None
+    result_mode: str = "firm"
+
+    @field_validator("result_mode")
+    @classmethod
+    def validate_result_mode(cls, value):
+        normalized = str(value or "firm").strip().lower()
+        if normalized not in {"firm", "preliminary"}:
+            raise ValueError("result_mode must be 'firm' or 'preliminary'")
+        return normalized
 
 
 class UpdateCommercialFieldsRequest(BaseModel):
@@ -311,6 +320,7 @@ def calculate_final_outputs(request: CalculateRealOutputsRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         unit_data_override=request.unit_data,
+        result_mode=request.result_mode,
     ))
 
 

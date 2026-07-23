@@ -1,0 +1,173 @@
+{
+  "schema_version": "1.0",
+  "simulation_id": "SIM-TEST",
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "currency": "RMB",
+  "plant": "Kunshan",
+  "annual_quantity": 600000.0,
+  "cost_breakdown": {
+    "material": 0.2,
+    "indexed_material": 0.12,
+    "non_indexed_material": 0.08,
+    "transport": 0.03,
+    "direct_labor": 0.017777777777777778,
+    "voh": 0.010822222222222223,
+    "direct_cost": 0.0586,
+    "foh": 0.045122,
+    "fees": 0.032816000000000005,
+    "manufacturing_cost": 0.336538,
+    "tooling_adder": 0.0,
+    "specific_capex_adder": 0.0
+  },
+  "initial_selling_price": 0.336538,
+  "target_price": null,
+  "margin_to_target": null,
+  "yearly_prices": [
+    {
+      "year": "SOP",
+      "price": 0.336538,
+      "price_before_productivity": 0.336538,
+      "productivity_amount": 0.0,
+      "material_indexation_amount": 0.0,
+      "plant_indexation_amount": 0.0
+    },
+    {
+      "year": "SOP+1",
+      "price_before_productivity": 0.336538,
+      "productivity_perimeter": "added_value",
+      "productivity_base": 0.13653800000000002,
+      "productivity_rate": 0.0,
+      "productivity_amount": 0.0,
+      "material_indexation_amount": 0.0,
+      "plant_indexation_amount": 0.0,
+      "price": 0.336538
+    },
+    {
+      "year": "SOP+2",
+      "price_before_productivity": 0.336538,
+      "productivity_perimeter": "added_value",
+      "productivity_base": 0.13653800000000002,
+      "productivity_rate": 0.0,
+      "productivity_amount": 0.0,
+      "material_indexation_amount": 0.0,
+      "plant_indexation_amount": 0.0,
+      "price": 0.336538
+    },
+    {
+      "year": "SOP+3",
+      "price_before_productivity": 0.336538,
+      "productivity_perimeter": "added_value",
+      "productivity_base": 0.13653800000000002,
+      "productivity_rate": 0.0,
+      "productivity_amount": 0.0,
+      "material_indexation_amount": 0.0,
+      "plant_indexation_amount": 0.0,
+      "price": 0.336538
+    }
+  ],
+  "calculation_details": {
+    "components": [
+      {
+        "component_id": "ferrite_core",
+        "component_name": "Ferrite core",
+        "quantity_per_product": 2.0,
+        "delivered_cost_per_component": 0.1,
+        "extended_material_cost": 0.2,
+        "transportation_contribution": 0.02,
+        "customs_contribution": 0.004,
+        "forwarder_contribution": 0.006,
+        "logistics_contribution": 0.03,
+        "basis_status": "estimated",
+        "commercially_usable": false
+      }
+    ],
+    "operations": [
+      {
+        "operation_id": "ferrite_core-op",
+        "operation_name": "Assembly",
+        "status": "calculated",
+        "theoretical_pieces_per_hour": 1000.0,
+        "effective_pieces_per_hour": 900.0,
+        "oee_decimal": 0.9,
+        "operator_percent_decimal": 0.5,
+        "machine_hours_per_1000": 1.1111111111111112,
+        "direct_labor_hours_per_1000": 0.5555555555555556,
+        "direct_labor_hourly_rate_selling_currency": 32.0,
+        "direct_labor_cost_per_piece": 0.017777777777777778,
+        "yearly_production_hours": 666.6666666666666,
+        "generic_occupancy_rate": 0.12222222222222223,
+        "allocated_generic_capex": 122.22222222222223,
+        "generic_capex_voh_per_hour": 0.0275,
+        "specific_capacity_units": 1,
+        "allocated_specific_capex": 500.0,
+        "specific_capex_voh_per_hour": 0.1125,
+        "tooling_consumption_per_piece": 0.0,
+        "tooling_cost_per_hour": 0.0,
+        "base_voh_hourly_rate_selling_currency": 9.6,
+        "total_voh_hourly_rate": 9.74,
+        "voh_cost_per_piece": 0.010822222222222223,
+        "component_id": "ferrite_core",
+        "scope_id": "ferrite_core"
+      }
+    ],
+    "plant_data": {
+      "status": "found",
+      "source": "test.unit",
+      "plant": "Kunshan",
+      "operating_currency": "RMB",
+      "selling_currency": "RMB",
+      "dl_rate_operating_per_hour": 32,
+      "voh_rate_operating_per_hour": 9.6,
+      "foh_percent_dc": 77,
+      "fee_percent_dc": 56,
+      "open_hours_per_year": 6000
+    },
+    "fx": [
+      {
+        "type": "30_day_average",
+        "operating_to_selling": null,
+        "source": null
+      }
+    ],
+    "commercial_quotations": {
+      "tooling": {
+        "margin_decimal": 0.1,
+        "quotation": 0.0,
+        "price_adder_per_piece": 0.0
+      },
+      "specific_capex": {
+        "margin_decimal": 0.1,
+        "quotation": 0.0,
+        "price_adder_per_piece": 0.0
+      }
+    }
+  },
+  "assumptions": [],
+  "warnings": [],
+  "blocking_errors": [],
+  "calculation_status": "complete",
+  "pending_validation": {
+    "roce": {
+      "formula_status": "pending_validation"
+    },
+    "npv": {
+      "formula_status": "pending_validation"
+    },
+    "working_capital": {
+      "formula_status": "pending_validation"
+    },
+    "ebitda": {
+      "formula_status": "pending_validation"
+    },
+    "operating_income": {
+      "formula_status": "pending_validation"
+    },
+    "taxes": {
+      "formula_status": "pending_validation"
+    },
+    "cash_generation": {
+      "formula_status": "pending_validation"
+    }
+  }
+}

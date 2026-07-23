@@ -1,0 +1,2019 @@
+{
+  "project_code": "RFQ-20260723-184624",
+  "customer": null,
+  "final_customer": null,
+  "product_line": "Chokes",
+  "product": "Rod Choke",
+  "product_id": "UNKNOWN-PART-20260723-184624",
+  "part_number": null,
+  "customer_delivery_zone": "India",
+  "annual_quantity": 100000,
+  "quotation_currency": "INR",
+  "target_price": null,
+  "target_price_currency": null,
+  "sop_date": null,
+  "_explicit_user_fields": [],
+  "delivery_country": "India",
+  "drawing_reference": "drawing.pdf",
+  "product_name": "Rod Choke",
+  "currency": "INR",
+  "workflow_product_id": "UNKNOWN-PART-20260723-184624",
+  "attachment_manifest": [
+    {
+      "attachment_id": "4f1949e95440af0e",
+      "original_filename": "drawing.pdf",
+      "stored_filename": "drawing.pdf",
+      "stored_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/drawing.pdf",
+      "mime_type": "application/pdf",
+      "file_size": 14,
+      "checksum_sha256": "4f1949e95440af0ece666ebd5f399c1d77d22de639950784d349fa5feb47dca5",
+      "uploaded_at": "2026-07-23T17:46:24.413304+00:00",
+      "source_role": "drawing_specification",
+      "reused_existing_file": false
+    },
+    {
+      "attachment_id": "cdb4fa633108cc5f",
+      "original_filename": "rfq.xlsm",
+      "stored_filename": "rfq.xlsm",
+      "stored_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/rfq.xlsm",
+      "mime_type": "application/vnd.ms-excel.sheet.macroEnabled.12",
+      "file_size": 4938,
+      "checksum_sha256": "cdb4fa633108cc5f1daefef415f5b5668b6048f584880b684347b16f16fb1857",
+      "uploaded_at": "2026-07-23T17:46:24.413304+00:00",
+      "source_role": "commercial_rfq_workbook",
+      "reused_existing_file": false
+    }
+  ],
+  "customer_input_resolution": {
+    "fields": {
+      "product_family": {
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      "drawing_reference": {
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      },
+      "product_name": {
+        "value": "Rod Choke",
+        "selected_candidate": {
+          "field": "product_name",
+          "value": "Rod Choke",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B1",
+          "raw_label": "Product",
+          "raw_value": "Rod Choke",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B1",
+        "confidence": "high"
+      },
+      "annual_quantity": {
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B2",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B2",
+        "confidence": "high"
+      },
+      "delivery_country": {
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_country",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      },
+      "quotation_currency": {
+        "value": "INR",
+        "selected_candidate": {
+          "field": "quotation_currency",
+          "value": "INR",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B4",
+          "raw_label": "Quotation currency",
+          "raw_value": "INR",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B4",
+        "confidence": "high"
+      },
+      "delivery_zone": {
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_zone",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "delivery_zone_normalization",
+          "delivery_location": {
+            "raw_country": "India",
+            "raw_city": null,
+            "raw_zone": null,
+            "normalized_zone": "India",
+            "mapping_source": "country_to_avocarbon_zone",
+            "mapping_rule": "India->India",
+            "confidence": "high"
+          }
+        },
+        "candidates": [
+          {
+            "field": "delivery_zone",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "delivery_zone_normalization",
+            "delivery_location": {
+              "raw_country": "India",
+              "raw_city": null,
+              "raw_zone": null,
+              "normalized_zone": "India",
+              "mapping_source": "country_to_avocarbon_zone",
+              "mapping_rule": "India->India",
+              "confidence": "high"
+            }
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      }
+    },
+    "resolved_fields": [
+      {
+        "field": "annual_quantity",
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B2",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B2",
+        "confidence": "high"
+      },
+      {
+        "field": "delivery_country",
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_country",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      },
+      {
+        "field": "delivery_zone",
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_zone",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "delivery_zone_normalization",
+          "delivery_location": {
+            "raw_country": "India",
+            "raw_city": null,
+            "raw_zone": null,
+            "normalized_zone": "India",
+            "mapping_source": "country_to_avocarbon_zone",
+            "mapping_rule": "India->India",
+            "confidence": "high"
+          }
+        },
+        "candidates": [
+          {
+            "field": "delivery_zone",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "delivery_zone_normalization",
+            "delivery_location": {
+              "raw_country": "India",
+              "raw_city": null,
+              "raw_zone": null,
+              "normalized_zone": "India",
+              "mapping_source": "country_to_avocarbon_zone",
+              "mapping_rule": "India->India",
+              "confidence": "high"
+            }
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      },
+      {
+        "field": "drawing_reference",
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      },
+      {
+        "field": "product_family",
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      {
+        "field": "product_name",
+        "value": "Rod Choke",
+        "selected_candidate": {
+          "field": "product_name",
+          "value": "Rod Choke",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B1",
+          "raw_label": "Product",
+          "raw_value": "Rod Choke",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B1",
+        "confidence": "high"
+      },
+      {
+        "field": "quotation_currency",
+        "value": "INR",
+        "selected_candidate": {
+          "field": "quotation_currency",
+          "value": "INR",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B4",
+          "raw_label": "Quotation currency",
+          "raw_value": "INR",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B4",
+        "confidence": "high"
+      }
+    ],
+    "missing_fields": [],
+    "conflicts": [],
+    "unresolved_conflicts": [],
+    "warnings": [],
+    "delivery_location": {
+      "raw_country": "India",
+      "raw_city": null,
+      "raw_zone": null,
+      "normalized_zone": "India",
+      "mapping_source": "country_to_avocarbon_zone",
+      "mapping_rule": "India->India",
+      "confidence": "high"
+    },
+    "component_costing_ready": true,
+    "validation": {
+      "status": "ready",
+      "resolved_fields": [
+        {
+          "field": "annual_quantity",
+          "value": 100000,
+          "selected_candidate": {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "annual_quantity",
+              "value": 100000,
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B2",
+              "raw_label": "Annual quantity",
+              "raw_value": 100000,
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B2",
+          "confidence": "high"
+        },
+        {
+          "field": "delivery_country",
+          "value": "India",
+          "selected_candidate": {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "delivery_country",
+              "value": "India",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B3",
+              "raw_label": "Delivery country",
+              "raw_value": "India",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B3",
+          "confidence": "high"
+        },
+        {
+          "field": "delivery_zone",
+          "value": "India",
+          "selected_candidate": {
+            "field": "delivery_zone",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "delivery_zone_normalization",
+            "delivery_location": {
+              "raw_country": "India",
+              "raw_city": null,
+              "raw_zone": null,
+              "normalized_zone": "India",
+              "mapping_source": "country_to_avocarbon_zone",
+              "mapping_rule": "India->India",
+              "confidence": "high"
+            }
+          },
+          "candidates": [
+            {
+              "field": "delivery_zone",
+              "value": "India",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B3",
+              "raw_label": "Delivery country",
+              "raw_value": "India",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "delivery_zone_normalization",
+              "delivery_location": {
+                "raw_country": "India",
+                "raw_city": null,
+                "raw_zone": null,
+                "normalized_zone": "India",
+                "mapping_source": "country_to_avocarbon_zone",
+                "mapping_rule": "India->India",
+                "confidence": "high"
+              }
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B3",
+          "confidence": "high"
+        },
+        {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "selected_candidate": {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          },
+          "candidates": [
+            {
+              "field": "drawing_reference",
+              "value": "drawing.pdf",
+              "source_file": "drawing.pdf",
+              "source_sheet": null,
+              "source_cell": "filename",
+              "raw_label": "PDF filename",
+              "raw_value": "drawing.pdf",
+              "confidence": "high",
+              "priority": 4,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "drawing_specification"
+            }
+          ],
+          "source": "drawing.pdf::filename",
+          "confidence": "high"
+        },
+        {
+          "field": "product_family",
+          "value": "Chokes",
+          "selected_candidate": {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          },
+          "candidates": [
+            {
+              "field": "product_family",
+              "value": "Chokes",
+              "source_file": "request_payload",
+              "source_sheet": null,
+              "source_cell": "product_line",
+              "raw_label": "product_line",
+              "raw_value": "Chokes",
+              "confidence": "high",
+              "priority": 2,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "structured_request_json"
+            }
+          ],
+          "source": "request_payload::product_line",
+          "confidence": "high"
+        },
+        {
+          "field": "product_name",
+          "value": "Rod Choke",
+          "selected_candidate": {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "product_name",
+              "value": "Rod Choke",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B1",
+              "raw_label": "Product",
+              "raw_value": "Rod Choke",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B1",
+          "confidence": "high"
+        },
+        {
+          "field": "quotation_currency",
+          "value": "INR",
+          "selected_candidate": {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "quotation_currency",
+              "value": "INR",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B4",
+              "raw_label": "Quotation currency",
+              "raw_value": "INR",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B4",
+          "confidence": "high"
+        }
+      ],
+      "missing_fields": [],
+      "conflicts": [],
+      "warnings": [],
+      "component_costing_ready": true,
+      "message": "Customer inputs resolved. Component costing can continue."
+    },
+    "discovered_files": [
+      {
+        "attachment_id": "4f1949e95440af0e",
+        "original_filename": "drawing.pdf",
+        "stored_filename": "drawing.pdf",
+        "stored_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/drawing.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 14,
+        "checksum_sha256": "4f1949e95440af0ece666ebd5f399c1d77d22de639950784d349fa5feb47dca5",
+        "uploaded_at": "2026-07-23T17:46:24.413304+00:00",
+        "source_role": "drawing_specification",
+        "reused_existing_file": false,
+        "extension": ".pdf"
+      },
+      {
+        "attachment_id": "cdb4fa633108cc5f",
+        "original_filename": "rfq.xlsm",
+        "stored_filename": "rfq.xlsm",
+        "stored_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/rfq.xlsm",
+        "mime_type": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        "file_size": 4938,
+        "checksum_sha256": "cdb4fa633108cc5f1daefef415f5b5668b6048f584880b684347b16f16fb1857",
+        "uploaded_at": "2026-07-23T17:46:24.413304+00:00",
+        "source_role": "commercial_rfq_workbook",
+        "reused_existing_file": false,
+        "extension": ".xlsm"
+      }
+    ],
+    "source_reports": [
+      {
+        "source_file": "request_payload",
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "drawing.pdf",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_delivered_audit_final\\test_api_multipart_pdf_plus_xl0\\uploads\\RFQ-20260723-184624\\drawing.pdf",
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "rfq.xlsm",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_delivered_audit_final\\test_api_multipart_pdf_plus_xl0\\uploads\\RFQ-20260723-184624\\rfq.xlsm",
+        "candidates": [
+          {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "warnings": [],
+        "sheets": [
+          {
+            "sheet": "Sheet",
+            "state": "visible",
+            "used_range": "A1:B4",
+            "merged_ranges": [],
+            "tables": []
+          }
+        ],
+        "macros_executed": false
+      }
+    ]
+  },
+  "resolved_customer_context": {
+    "fields": {
+      "product_family": {
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      "drawing_reference": {
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      },
+      "product_name": {
+        "value": "Rod Choke",
+        "selected_candidate": {
+          "field": "product_name",
+          "value": "Rod Choke",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B1",
+          "raw_label": "Product",
+          "raw_value": "Rod Choke",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B1",
+        "confidence": "high"
+      },
+      "annual_quantity": {
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B2",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B2",
+        "confidence": "high"
+      },
+      "delivery_country": {
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_country",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      },
+      "quotation_currency": {
+        "value": "INR",
+        "selected_candidate": {
+          "field": "quotation_currency",
+          "value": "INR",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B4",
+          "raw_label": "Quotation currency",
+          "raw_value": "INR",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B4",
+        "confidence": "high"
+      },
+      "delivery_zone": {
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_zone",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "delivery_zone_normalization",
+          "delivery_location": {
+            "raw_country": "India",
+            "raw_city": null,
+            "raw_zone": null,
+            "normalized_zone": "India",
+            "mapping_source": "country_to_avocarbon_zone",
+            "mapping_rule": "India->India",
+            "confidence": "high"
+          }
+        },
+        "candidates": [
+          {
+            "field": "delivery_zone",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "delivery_zone_normalization",
+            "delivery_location": {
+              "raw_country": "India",
+              "raw_city": null,
+              "raw_zone": null,
+              "normalized_zone": "India",
+              "mapping_source": "country_to_avocarbon_zone",
+              "mapping_rule": "India->India",
+              "confidence": "high"
+            }
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      }
+    },
+    "resolved_fields": [
+      {
+        "field": "annual_quantity",
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B2",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B2",
+        "confidence": "high"
+      },
+      {
+        "field": "delivery_country",
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_country",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      },
+      {
+        "field": "delivery_zone",
+        "value": "India",
+        "selected_candidate": {
+          "field": "delivery_zone",
+          "value": "India",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B3",
+          "raw_label": "Delivery country",
+          "raw_value": "India",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "delivery_zone_normalization",
+          "delivery_location": {
+            "raw_country": "India",
+            "raw_city": null,
+            "raw_zone": null,
+            "normalized_zone": "India",
+            "mapping_source": "country_to_avocarbon_zone",
+            "mapping_rule": "India->India",
+            "confidence": "high"
+          }
+        },
+        "candidates": [
+          {
+            "field": "delivery_zone",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "delivery_zone_normalization",
+            "delivery_location": {
+              "raw_country": "India",
+              "raw_city": null,
+              "raw_zone": null,
+              "normalized_zone": "India",
+              "mapping_source": "country_to_avocarbon_zone",
+              "mapping_rule": "India->India",
+              "confidence": "high"
+            }
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B3",
+        "confidence": "high"
+      },
+      {
+        "field": "drawing_reference",
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      },
+      {
+        "field": "product_family",
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      {
+        "field": "product_name",
+        "value": "Rod Choke",
+        "selected_candidate": {
+          "field": "product_name",
+          "value": "Rod Choke",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B1",
+          "raw_label": "Product",
+          "raw_value": "Rod Choke",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B1",
+        "confidence": "high"
+      },
+      {
+        "field": "quotation_currency",
+        "value": "INR",
+        "selected_candidate": {
+          "field": "quotation_currency",
+          "value": "INR",
+          "source_file": "rfq.xlsm",
+          "source_sheet": "Sheet",
+          "source_cell": "B4",
+          "raw_label": "Quotation currency",
+          "raw_value": "INR",
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "visible_commercial_workbook"
+        },
+        "candidates": [
+          {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "source": "rfq.xlsm:Sheet:B4",
+        "confidence": "high"
+      }
+    ],
+    "missing_fields": [],
+    "conflicts": [],
+    "unresolved_conflicts": [],
+    "warnings": [],
+    "delivery_location": {
+      "raw_country": "India",
+      "raw_city": null,
+      "raw_zone": null,
+      "normalized_zone": "India",
+      "mapping_source": "country_to_avocarbon_zone",
+      "mapping_rule": "India->India",
+      "confidence": "high"
+    },
+    "component_costing_ready": true,
+    "validation": {
+      "status": "ready",
+      "resolved_fields": [
+        {
+          "field": "annual_quantity",
+          "value": 100000,
+          "selected_candidate": {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "annual_quantity",
+              "value": 100000,
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B2",
+              "raw_label": "Annual quantity",
+              "raw_value": 100000,
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B2",
+          "confidence": "high"
+        },
+        {
+          "field": "delivery_country",
+          "value": "India",
+          "selected_candidate": {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "delivery_country",
+              "value": "India",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B3",
+              "raw_label": "Delivery country",
+              "raw_value": "India",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B3",
+          "confidence": "high"
+        },
+        {
+          "field": "delivery_zone",
+          "value": "India",
+          "selected_candidate": {
+            "field": "delivery_zone",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "delivery_zone_normalization",
+            "delivery_location": {
+              "raw_country": "India",
+              "raw_city": null,
+              "raw_zone": null,
+              "normalized_zone": "India",
+              "mapping_source": "country_to_avocarbon_zone",
+              "mapping_rule": "India->India",
+              "confidence": "high"
+            }
+          },
+          "candidates": [
+            {
+              "field": "delivery_zone",
+              "value": "India",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B3",
+              "raw_label": "Delivery country",
+              "raw_value": "India",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "delivery_zone_normalization",
+              "delivery_location": {
+                "raw_country": "India",
+                "raw_city": null,
+                "raw_zone": null,
+                "normalized_zone": "India",
+                "mapping_source": "country_to_avocarbon_zone",
+                "mapping_rule": "India->India",
+                "confidence": "high"
+              }
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B3",
+          "confidence": "high"
+        },
+        {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "selected_candidate": {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          },
+          "candidates": [
+            {
+              "field": "drawing_reference",
+              "value": "drawing.pdf",
+              "source_file": "drawing.pdf",
+              "source_sheet": null,
+              "source_cell": "filename",
+              "raw_label": "PDF filename",
+              "raw_value": "drawing.pdf",
+              "confidence": "high",
+              "priority": 4,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "drawing_specification"
+            }
+          ],
+          "source": "drawing.pdf::filename",
+          "confidence": "high"
+        },
+        {
+          "field": "product_family",
+          "value": "Chokes",
+          "selected_candidate": {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          },
+          "candidates": [
+            {
+              "field": "product_family",
+              "value": "Chokes",
+              "source_file": "request_payload",
+              "source_sheet": null,
+              "source_cell": "product_line",
+              "raw_label": "product_line",
+              "raw_value": "Chokes",
+              "confidence": "high",
+              "priority": 2,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "structured_request_json"
+            }
+          ],
+          "source": "request_payload::product_line",
+          "confidence": "high"
+        },
+        {
+          "field": "product_name",
+          "value": "Rod Choke",
+          "selected_candidate": {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "product_name",
+              "value": "Rod Choke",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B1",
+              "raw_label": "Product",
+              "raw_value": "Rod Choke",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B1",
+          "confidence": "high"
+        },
+        {
+          "field": "quotation_currency",
+          "value": "INR",
+          "selected_candidate": {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          "candidates": [
+            {
+              "field": "quotation_currency",
+              "value": "INR",
+              "source_file": "rfq.xlsm",
+              "source_sheet": "Sheet",
+              "source_cell": "B4",
+              "raw_label": "Quotation currency",
+              "raw_value": "INR",
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "visible_commercial_workbook"
+            }
+          ],
+          "source": "rfq.xlsm:Sheet:B4",
+          "confidence": "high"
+        }
+      ],
+      "missing_fields": [],
+      "conflicts": [],
+      "warnings": [],
+      "component_costing_ready": true,
+      "message": "Customer inputs resolved. Component costing can continue."
+    },
+    "discovered_files": [
+      {
+        "attachment_id": "4f1949e95440af0e",
+        "original_filename": "drawing.pdf",
+        "stored_filename": "drawing.pdf",
+        "stored_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/drawing.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 14,
+        "checksum_sha256": "4f1949e95440af0ece666ebd5f399c1d77d22de639950784d349fa5feb47dca5",
+        "uploaded_at": "2026-07-23T17:46:24.413304+00:00",
+        "source_role": "drawing_specification",
+        "reused_existing_file": false,
+        "extension": ".pdf"
+      },
+      {
+        "attachment_id": "cdb4fa633108cc5f",
+        "original_filename": "rfq.xlsm",
+        "stored_filename": "rfq.xlsm",
+        "stored_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/rfq.xlsm",
+        "mime_type": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        "file_size": 4938,
+        "checksum_sha256": "cdb4fa633108cc5f1daefef415f5b5668b6048f584880b684347b16f16fb1857",
+        "uploaded_at": "2026-07-23T17:46:24.413304+00:00",
+        "source_role": "commercial_rfq_workbook",
+        "reused_existing_file": false,
+        "extension": ".xlsm"
+      }
+    ],
+    "source_reports": [
+      {
+        "source_file": "request_payload",
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "drawing.pdf",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_delivered_audit_final\\test_api_multipart_pdf_plus_xl0\\uploads\\RFQ-20260723-184624\\drawing.pdf",
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "rfq.xlsm",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_delivered_audit_final\\test_api_multipart_pdf_plus_xl0\\uploads\\RFQ-20260723-184624\\rfq.xlsm",
+        "candidates": [
+          {
+            "field": "product_name",
+            "value": "Rod Choke",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B1",
+            "raw_label": "Product",
+            "raw_value": "Rod Choke",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B2",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          {
+            "field": "delivery_country",
+            "value": "India",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B3",
+            "raw_label": "Delivery country",
+            "raw_value": "India",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          },
+          {
+            "field": "quotation_currency",
+            "value": "INR",
+            "source_file": "rfq.xlsm",
+            "source_sheet": "Sheet",
+            "source_cell": "B4",
+            "raw_label": "Quotation currency",
+            "raw_value": "INR",
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "visible_commercial_workbook"
+          }
+        ],
+        "warnings": [],
+        "sheets": [
+          {
+            "sheet": "Sheet",
+            "state": "visible",
+            "used_range": "A1:B4",
+            "merged_ranges": [],
+            "tables": []
+          }
+        ],
+        "macros_executed": false
+      }
+    ]
+  },
+  "drawing_file_path": ".pytest_tmp_delivered_audit_final/test_api_multipart_pdf_plus_xl0/uploads/RFQ-20260723-184624/drawing.pdf",
+  "drawing_file_url_local": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/files/RFQ-20260723-184624/drawing.pdf",
+  "drawing_agent_proxy_url": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/agent-files/RFQ-20260723-184624/drawing.pdf?token=1784843184.dead40966074075b8f26618e3db449b8f353b698c888e96bdcc96b7da434fbf9",
+  "drawing_file_url": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/agent-files/RFQ-20260723-184624/drawing.pdf?token=1784843184.dead40966074075b8f26618e3db449b8f353b698c888e96bdcc96b7da434fbf9",
+  "drawing_blob_url": null,
+  "drawing_sas_url": null,
+  "drawing_access_mode": "backend_signed_proxy",
+  "drawing_azure_upload": {
+    "status": "not_configured",
+    "message": "AZURE_STORAGE_CONNECTION_STRING is not configured"
+  },
+  "drawing_original_filename": "drawing.pdf",
+  "technical_fields_pending_bom": true,
+  "technical_fields_extracted_from_bom": false,
+  "warnings": [
+    "Azure Blob is not configured; using the backend PDF URL fallback."
+  ],
+  "created_at": "2026-07-23T17:46:24.451582+00:00"
+}
