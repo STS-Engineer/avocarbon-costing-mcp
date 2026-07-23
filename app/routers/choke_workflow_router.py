@@ -2,7 +2,7 @@ import json
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from services.choke_sequential_agent_workflow import (
     calculate_final_choke_costing_from_saved_outputs,
@@ -34,6 +34,13 @@ from services.project_data_paths import (
 )
 from services.choke_writeback_mcp_diagnostic import (
     get_writeback_mcp_connectivity_diagnostic,
+)
+from services.choke_financial_workflow import (
+    calculate_saved_financial_plan,
+    get_financial_model_audit,
+    get_financial_readiness,
+    get_saved_financial_result,
+    solve_saved_selling_price,
 )
 
 
@@ -136,6 +143,28 @@ class UpdateCommercialFieldsRequest(BaseModel):
         if value is None:
             return None
         return str(value).strip()
+
+
+class FinancialPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    project_code: str
+    product_id: str
+    mode: str = "preliminary"
+    financial_inputs: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value):
+        normalized = str(value or "preliminary").strip().lower()
+        if normalized not in {"firm", "preliminary"}:
+            raise ValueError("mode must be 'firm' or 'preliminary'")
+        return normalized
+
+
+def _financial_inputs(request: FinancialPlanRequest) -> Dict[str, Any]:
+    payload = request.model_dump(exclude={"project_code", "product_id", "financial_inputs"})
+    return {**request.financial_inputs, **payload}
 
 
 def _handle(callback):
@@ -344,3 +373,36 @@ def get_final_result(project_code: str, product_id: str):
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail="Saved final result is not valid JSON") from exc
+
+
+@router.get("/financial-model-audit")
+def financial_model_audit():
+    return {"status": "ok", "audit": get_financial_model_audit()}
+
+
+@router.get("/financial-readiness/{project_code}/{product_id}")
+def workflow_financial_readiness(project_code: str, product_id: str):
+    return _handle(lambda: get_financial_readiness(project_code, product_id))
+
+
+@router.post("/calculate-financial-plan")
+def calculate_workflow_financial_plan(request: FinancialPlanRequest):
+    return _handle(lambda: calculate_saved_financial_plan(
+        request.project_code,
+        request.product_id,
+        _financial_inputs(request),
+    ))
+
+
+@router.post("/solve-selling-price")
+def solve_workflow_selling_price(request: FinancialPlanRequest):
+    return _handle(lambda: solve_saved_selling_price(
+        request.project_code,
+        request.product_id,
+        _financial_inputs(request),
+    ))
+
+
+@router.get("/financial-result/{project_code}/{product_id}")
+def workflow_financial_result(project_code: str, product_id: str):
+    return _handle(lambda: get_saved_financial_result(project_code, product_id))

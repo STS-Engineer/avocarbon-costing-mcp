@@ -440,3 +440,88 @@ Response: the saved `orchestration_result.json` envelope. This is broader than t
 - `/choke-costing` is the legacy validation UI. The future production UI will be React/Vite in a separate repository.
 
 The React frontend should build new workflow screens against `/api/choke-costing/customer-inputs/*` and `/api/choke-workflow/*`.
+
+## Financial plan and selling price
+
+These endpoints consume the saved technical result. They never rerun BOM,
+component-costing, or MOST agents.
+
+### Financial readiness
+
+`GET /api/choke-workflow/financial-readiness/{project_code}/{product_id}`
+
+Returns `financial_status` (`ready`, `preliminary_incomplete`, or `blocked`),
+the exact `missing_inputs`, technical-result revision, and warnings.
+
+### Calculate annual financial plan
+
+`POST /api/choke-workflow/calculate-financial-plan`
+
+```json
+{
+  "project_code": "24018-CHO-00",
+  "product_id": "300440157",
+  "mode": "preliminary",
+  "sop_year": 2027,
+  "annual_quantities": {
+    "Y-1": 0,
+    "Y0": 360000,
+    "Y1": 360000,
+    "Y2": 360000,
+    "Y3": 360000,
+    "Y4": 360000,
+    "Y5": 360000,
+    "Y6": 360000
+  },
+  "initial_selling_price": 20,
+  "customer_productivity": {
+    "percentage": 2,
+    "start_year": 1,
+    "duration": 3,
+    "basis": "added_value"
+  },
+  "material_indexation_rates": {},
+  "plant_indexation_rates": {},
+  "fx_adjustment_rates": {},
+  "customer_payment_days": 45,
+  "customer_incoterm": "FCA",
+  "customer_delivery_frequency_days": 7,
+  "platform": false,
+  "production_plant": "Chennai",
+  "tax_rate": 25,
+  "discount_rate": 12,
+  "financing_rate": 8,
+  "profitability_target": {"type": "npv_zero", "value": 0},
+  "ap_value_basis": "base_purchase_value",
+  "wip_value_basis": "delivered_material_plus_conversion",
+  "supplier_terms": {},
+  "capex_tooling_treatment": {},
+  "investment_fx_rates": {"EUR": 90}
+}
+```
+
+The response contains the Y-1 through Y6 table, P&L, AR/AP, stock buckets,
+TWC, cash flow, NPV, assumptions, warnings, and source revisions. Empty
+objects for indexation mean an explicit zero-indexation assumption.
+
+### Solve Y0 selling price
+
+`POST /api/choke-workflow/solve-selling-price`
+
+Uses the same request contract. `initial_selling_price` may be omitted. The
+target supports `npv_zero` or `npv_amount`. The response reports the bracket,
+iterations, convergence, achieved NPV, solved price, and full annual table.
+No price is fabricated when the target is not bracketed.
+
+### Get saved financial result
+
+`GET /api/choke-workflow/financial-result/{project_code}/{product_id}`
+
+Returns the last annual plan, or the last solver result if no annual plan has
+been saved.
+
+### Financial model audit
+
+`GET /api/choke-workflow/financial-model-audit`
+
+Returns the existing-model reuse and durable-schema gap assessment.

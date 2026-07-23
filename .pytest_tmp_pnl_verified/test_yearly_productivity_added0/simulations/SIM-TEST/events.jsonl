@@ -1,0 +1,6 @@
+{"timestamp": "2026-07-23T18:41:28.408091+00:00", "event": "simulation_created", "simulation_id": "SIM-TEST"}
+{"timestamp": "2026-07-23T18:41:28.426343+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "bom", "identifier": null, "replaced": false}
+{"timestamp": "2026-07-23T18:41:28.430882+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "component_costing", "identifier": "ferrite_core", "replaced": false}
+{"timestamp": "2026-07-23T18:41:28.438643+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "most_component", "identifier": "ferrite_core", "replaced": false}
+{"timestamp": "2026-07-23T18:41:28.443773+00:00", "event": "context_updated", "simulation_id": "SIM-TEST", "fields": ["commercial"]}
+{"timestamp": "2026-07-23T18:41:28.479701+00:00", "event": "simulation_calculated", "simulation_id": "SIM-TEST", "status": "complete", "blocking_errors": []}

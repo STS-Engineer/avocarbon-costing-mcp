@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "output_type": "most_component",
+  "project_code": "24003-CHO-00",
+  "product_id": "316-5001",
+  "scope_id": "ferrite_core",
+  "component_id": "ferrite_core",
+  "component_name": "ferrite_core",
+  "status": "assumption_based",
+  "source": {
+    "agent": "Manual Choke Simulation",
+    "entry_mode": "pasted_json",
+    "analysis_date": "2026-07-23"
+  },
+  "commercial_context": {
+    "product": "Fuse choke",
+    "annual_quantity": 600000.0,
+    "destination_zone": "China South Pacific",
+    "production_plant": "Kunshan",
+    "reporting_currency": "RMB"
+  },
+  "data": {
+    "method": "engineering_estimate",
+    "operations": [
+      {
+        "operation_id": "ferrite_core-op",
+        "operation_name": "Assembly",
+        "strokes_per_hour": 1000,
+        "pieces_per_stroke": 1,
+        "oee_percent": 90,
+        "operator_percent": 50,
+        "generic_capex": 1000,
+        "specific_capex": 500,
+        "tooling_cost": 0,
+        "lifetime_warranty": false
+      }
+    ]
+  },
+  "assumptions": [],
+  "unconfirmed_values": [],
+  "required_confirmations": []
+}

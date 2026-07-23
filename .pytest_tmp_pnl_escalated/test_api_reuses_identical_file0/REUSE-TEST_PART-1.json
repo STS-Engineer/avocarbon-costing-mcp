@@ -1,0 +1,1211 @@
+{
+  "project_code": "REUSE-TEST",
+  "customer": null,
+  "final_customer": null,
+  "product_line": "Chokes",
+  "product": null,
+  "product_id": "PART-1",
+  "part_number": null,
+  "customer_delivery_zone": null,
+  "annual_quantity": 100000,
+  "quotation_currency": null,
+  "target_price": null,
+  "target_price_currency": null,
+  "sop_date": null,
+  "_explicit_user_fields": [
+    "project_code",
+    "product_id"
+  ],
+  "drawing_reference": "drawing.pdf",
+  "product_name": null,
+  "currency": null,
+  "workflow_product_id": "PART-1",
+  "attachment_manifest": [
+    {
+      "attachment_id": "df1dec5a5bec094f",
+      "original_filename": "drawing.pdf",
+      "stored_filename": "drawing.pdf",
+      "stored_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/drawing.pdf",
+      "mime_type": "application/pdf",
+      "file_size": 9,
+      "checksum_sha256": "df1dec5a5bec094f7c63ddbd5729867f6ae9473aa39b67a398d8328369a4c6b1",
+      "uploaded_at": "2026-07-23T18:37:28.520914+00:00",
+      "source_role": "drawing_specification",
+      "reused_existing_file": true
+    },
+    {
+      "attachment_id": "bef41b9d25b76474",
+      "original_filename": "rfq.csv",
+      "stored_filename": "rfq.csv",
+      "stored_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/rfq.csv",
+      "mime_type": "text/csv",
+      "file_size": 22,
+      "checksum_sha256": "bef41b9d25b764743c63563504d460237f2f56cb7f3771175cdadeaf410e08e4",
+      "uploaded_at": "2026-07-23T18:37:28.520914+00:00",
+      "source_role": "commercial_data",
+      "reused_existing_file": true
+    }
+  ],
+  "customer_input_resolution": {
+    "fields": {
+      "project_code": {
+        "value": "REUSE-TEST",
+        "selected_candidate": {
+          "field": "project_code",
+          "value": "REUSE-TEST",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "project_code",
+          "raw_label": "project_code",
+          "raw_value": "REUSE-TEST",
+          "confidence": "confirmed",
+          "priority": 1,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "explicit_user_confirmed"
+        },
+        "candidates": [
+          {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          }
+        ],
+        "source": "request_payload::project_code",
+        "confidence": "confirmed"
+      },
+      "product_family": {
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      "annual_quantity": {
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.csv",
+          "source_sheet": "CSV",
+          "source_cell": "R1C1",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "commercial_csv"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          }
+        ],
+        "source": "rfq.csv:CSV:R1C1",
+        "confidence": "high"
+      },
+      "drawing_reference": {
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      }
+    },
+    "resolved_fields": [
+      {
+        "field": "annual_quantity",
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.csv",
+          "source_sheet": "CSV",
+          "source_cell": "R1C1",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "commercial_csv"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          }
+        ],
+        "source": "rfq.csv:CSV:R1C1",
+        "confidence": "high"
+      },
+      {
+        "field": "drawing_reference",
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      },
+      {
+        "field": "product_family",
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      {
+        "field": "project_code",
+        "value": "REUSE-TEST",
+        "selected_candidate": {
+          "field": "project_code",
+          "value": "REUSE-TEST",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "project_code",
+          "raw_label": "project_code",
+          "raw_value": "REUSE-TEST",
+          "confidence": "confirmed",
+          "priority": 1,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "explicit_user_confirmed"
+        },
+        "candidates": [
+          {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          }
+        ],
+        "source": "request_payload::project_code",
+        "confidence": "confirmed"
+      }
+    ],
+    "missing_fields": [
+      "product_name",
+      "delivery_zone",
+      "quotation_currency"
+    ],
+    "conflicts": [],
+    "unresolved_conflicts": [],
+    "warnings": [],
+    "delivery_location": {
+      "raw_country": null,
+      "raw_city": null,
+      "raw_zone": null,
+      "normalized_zone": null,
+      "mapping_source": null,
+      "mapping_rule": null,
+      "confidence": "low"
+    },
+    "component_costing_ready": false,
+    "validation": {
+      "status": "blocked",
+      "resolved_fields": [
+        {
+          "field": "annual_quantity",
+          "value": 100000,
+          "selected_candidate": {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          },
+          "candidates": [
+            {
+              "field": "annual_quantity",
+              "value": 100000,
+              "source_file": "rfq.csv",
+              "source_sheet": "CSV",
+              "source_cell": "R1C1",
+              "raw_label": "Annual quantity",
+              "raw_value": 100000,
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "commercial_csv"
+            }
+          ],
+          "source": "rfq.csv:CSV:R1C1",
+          "confidence": "high"
+        },
+        {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "selected_candidate": {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          },
+          "candidates": [
+            {
+              "field": "drawing_reference",
+              "value": "drawing.pdf",
+              "source_file": "drawing.pdf",
+              "source_sheet": null,
+              "source_cell": "filename",
+              "raw_label": "PDF filename",
+              "raw_value": "drawing.pdf",
+              "confidence": "high",
+              "priority": 4,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "drawing_specification"
+            }
+          ],
+          "source": "drawing.pdf::filename",
+          "confidence": "high"
+        },
+        {
+          "field": "product_family",
+          "value": "Chokes",
+          "selected_candidate": {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          },
+          "candidates": [
+            {
+              "field": "product_family",
+              "value": "Chokes",
+              "source_file": "request_payload",
+              "source_sheet": null,
+              "source_cell": "product_line",
+              "raw_label": "product_line",
+              "raw_value": "Chokes",
+              "confidence": "high",
+              "priority": 2,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "structured_request_json"
+            }
+          ],
+          "source": "request_payload::product_line",
+          "confidence": "high"
+        },
+        {
+          "field": "project_code",
+          "value": "REUSE-TEST",
+          "selected_candidate": {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          },
+          "candidates": [
+            {
+              "field": "project_code",
+              "value": "REUSE-TEST",
+              "source_file": "request_payload",
+              "source_sheet": null,
+              "source_cell": "project_code",
+              "raw_label": "project_code",
+              "raw_value": "REUSE-TEST",
+              "confidence": "confirmed",
+              "priority": 1,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "explicit_user_confirmed"
+            }
+          ],
+          "source": "request_payload::project_code",
+          "confidence": "confirmed"
+        }
+      ],
+      "missing_fields": [
+        "product_name",
+        "delivery_zone",
+        "quotation_currency"
+      ],
+      "conflicts": [],
+      "warnings": [],
+      "component_costing_ready": false,
+      "message": "Missing after checking all customer-input files: product_name, delivery_zone, quotation_currency."
+    },
+    "discovered_files": [
+      {
+        "attachment_id": "bef41b9d25b76474",
+        "original_filename": "rfq.csv",
+        "stored_filename": "rfq.csv",
+        "stored_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/rfq.csv",
+        "mime_type": "text/csv",
+        "file_size": 22,
+        "checksum_sha256": "bef41b9d25b764743c63563504d460237f2f56cb7f3771175cdadeaf410e08e4",
+        "uploaded_at": "2026-07-23T18:37:28.520914+00:00",
+        "source_role": "commercial_data",
+        "reused_existing_file": true,
+        "extension": ".csv"
+      },
+      {
+        "attachment_id": "df1dec5a5bec094f",
+        "original_filename": "drawing.pdf",
+        "stored_filename": "drawing.pdf",
+        "stored_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/drawing.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 9,
+        "checksum_sha256": "df1dec5a5bec094f7c63ddbd5729867f6ae9473aa39b67a398d8328369a4c6b1",
+        "uploaded_at": "2026-07-23T18:37:28.520914+00:00",
+        "source_role": "drawing_specification",
+        "reused_existing_file": true,
+        "extension": ".pdf"
+      }
+    ],
+    "source_reports": [
+      {
+        "source_file": "request_payload",
+        "candidates": [
+          {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          },
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "rfq.csv",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_pnl_escalated\\test_api_reuses_identical_file0\\uploads\\REUSE-TEST\\rfq.csv",
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "drawing.pdf",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_pnl_escalated\\test_api_reuses_identical_file0\\uploads\\REUSE-TEST\\drawing.pdf",
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "warnings": []
+      }
+    ]
+  },
+  "resolved_customer_context": {
+    "fields": {
+      "project_code": {
+        "value": "REUSE-TEST",
+        "selected_candidate": {
+          "field": "project_code",
+          "value": "REUSE-TEST",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "project_code",
+          "raw_label": "project_code",
+          "raw_value": "REUSE-TEST",
+          "confidence": "confirmed",
+          "priority": 1,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "explicit_user_confirmed"
+        },
+        "candidates": [
+          {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          }
+        ],
+        "source": "request_payload::project_code",
+        "confidence": "confirmed"
+      },
+      "product_family": {
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      "annual_quantity": {
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.csv",
+          "source_sheet": "CSV",
+          "source_cell": "R1C1",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "commercial_csv"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          }
+        ],
+        "source": "rfq.csv:CSV:R1C1",
+        "confidence": "high"
+      },
+      "drawing_reference": {
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      }
+    },
+    "resolved_fields": [
+      {
+        "field": "annual_quantity",
+        "value": 100000,
+        "selected_candidate": {
+          "field": "annual_quantity",
+          "value": 100000,
+          "source_file": "rfq.csv",
+          "source_sheet": "CSV",
+          "source_cell": "R1C1",
+          "raw_label": "Annual quantity",
+          "raw_value": 100000,
+          "confidence": "high",
+          "priority": 3,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "commercial_csv"
+        },
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          }
+        ],
+        "source": "rfq.csv:CSV:R1C1",
+        "confidence": "high"
+      },
+      {
+        "field": "drawing_reference",
+        "value": "drawing.pdf",
+        "selected_candidate": {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "source_file": "drawing.pdf",
+          "source_sheet": null,
+          "source_cell": "filename",
+          "raw_label": "PDF filename",
+          "raw_value": "drawing.pdf",
+          "confidence": "high",
+          "priority": 4,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "drawing_specification"
+        },
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "source": "drawing.pdf::filename",
+        "confidence": "high"
+      },
+      {
+        "field": "product_family",
+        "value": "Chokes",
+        "selected_candidate": {
+          "field": "product_family",
+          "value": "Chokes",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "product_line",
+          "raw_label": "product_line",
+          "raw_value": "Chokes",
+          "confidence": "high",
+          "priority": 2,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "structured_request_json"
+        },
+        "candidates": [
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "source": "request_payload::product_line",
+        "confidence": "high"
+      },
+      {
+        "field": "project_code",
+        "value": "REUSE-TEST",
+        "selected_candidate": {
+          "field": "project_code",
+          "value": "REUSE-TEST",
+          "source_file": "request_payload",
+          "source_sheet": null,
+          "source_cell": "project_code",
+          "raw_label": "project_code",
+          "raw_value": "REUSE-TEST",
+          "confidence": "confirmed",
+          "priority": 1,
+          "is_formula": false,
+          "formula": null,
+          "source_type": "explicit_user_confirmed"
+        },
+        "candidates": [
+          {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          }
+        ],
+        "source": "request_payload::project_code",
+        "confidence": "confirmed"
+      }
+    ],
+    "missing_fields": [
+      "product_name",
+      "delivery_zone",
+      "quotation_currency"
+    ],
+    "conflicts": [],
+    "unresolved_conflicts": [],
+    "warnings": [],
+    "delivery_location": {
+      "raw_country": null,
+      "raw_city": null,
+      "raw_zone": null,
+      "normalized_zone": null,
+      "mapping_source": null,
+      "mapping_rule": null,
+      "confidence": "low"
+    },
+    "component_costing_ready": false,
+    "validation": {
+      "status": "blocked",
+      "resolved_fields": [
+        {
+          "field": "annual_quantity",
+          "value": 100000,
+          "selected_candidate": {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          },
+          "candidates": [
+            {
+              "field": "annual_quantity",
+              "value": 100000,
+              "source_file": "rfq.csv",
+              "source_sheet": "CSV",
+              "source_cell": "R1C1",
+              "raw_label": "Annual quantity",
+              "raw_value": 100000,
+              "confidence": "high",
+              "priority": 3,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "commercial_csv"
+            }
+          ],
+          "source": "rfq.csv:CSV:R1C1",
+          "confidence": "high"
+        },
+        {
+          "field": "drawing_reference",
+          "value": "drawing.pdf",
+          "selected_candidate": {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          },
+          "candidates": [
+            {
+              "field": "drawing_reference",
+              "value": "drawing.pdf",
+              "source_file": "drawing.pdf",
+              "source_sheet": null,
+              "source_cell": "filename",
+              "raw_label": "PDF filename",
+              "raw_value": "drawing.pdf",
+              "confidence": "high",
+              "priority": 4,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "drawing_specification"
+            }
+          ],
+          "source": "drawing.pdf::filename",
+          "confidence": "high"
+        },
+        {
+          "field": "product_family",
+          "value": "Chokes",
+          "selected_candidate": {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          },
+          "candidates": [
+            {
+              "field": "product_family",
+              "value": "Chokes",
+              "source_file": "request_payload",
+              "source_sheet": null,
+              "source_cell": "product_line",
+              "raw_label": "product_line",
+              "raw_value": "Chokes",
+              "confidence": "high",
+              "priority": 2,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "structured_request_json"
+            }
+          ],
+          "source": "request_payload::product_line",
+          "confidence": "high"
+        },
+        {
+          "field": "project_code",
+          "value": "REUSE-TEST",
+          "selected_candidate": {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          },
+          "candidates": [
+            {
+              "field": "project_code",
+              "value": "REUSE-TEST",
+              "source_file": "request_payload",
+              "source_sheet": null,
+              "source_cell": "project_code",
+              "raw_label": "project_code",
+              "raw_value": "REUSE-TEST",
+              "confidence": "confirmed",
+              "priority": 1,
+              "is_formula": false,
+              "formula": null,
+              "source_type": "explicit_user_confirmed"
+            }
+          ],
+          "source": "request_payload::project_code",
+          "confidence": "confirmed"
+        }
+      ],
+      "missing_fields": [
+        "product_name",
+        "delivery_zone",
+        "quotation_currency"
+      ],
+      "conflicts": [],
+      "warnings": [],
+      "component_costing_ready": false,
+      "message": "Missing after checking all customer-input files: product_name, delivery_zone, quotation_currency."
+    },
+    "discovered_files": [
+      {
+        "attachment_id": "bef41b9d25b76474",
+        "original_filename": "rfq.csv",
+        "stored_filename": "rfq.csv",
+        "stored_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/rfq.csv",
+        "mime_type": "text/csv",
+        "file_size": 22,
+        "checksum_sha256": "bef41b9d25b764743c63563504d460237f2f56cb7f3771175cdadeaf410e08e4",
+        "uploaded_at": "2026-07-23T18:37:28.520914+00:00",
+        "source_role": "commercial_data",
+        "reused_existing_file": true,
+        "extension": ".csv"
+      },
+      {
+        "attachment_id": "df1dec5a5bec094f",
+        "original_filename": "drawing.pdf",
+        "stored_filename": "drawing.pdf",
+        "stored_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/drawing.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 9,
+        "checksum_sha256": "df1dec5a5bec094f7c63ddbd5729867f6ae9473aa39b67a398d8328369a4c6b1",
+        "uploaded_at": "2026-07-23T18:37:28.520914+00:00",
+        "source_role": "drawing_specification",
+        "reused_existing_file": true,
+        "extension": ".pdf"
+      }
+    ],
+    "source_reports": [
+      {
+        "source_file": "request_payload",
+        "candidates": [
+          {
+            "field": "project_code",
+            "value": "REUSE-TEST",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "project_code",
+            "raw_label": "project_code",
+            "raw_value": "REUSE-TEST",
+            "confidence": "confirmed",
+            "priority": 1,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "explicit_user_confirmed"
+          },
+          {
+            "field": "product_family",
+            "value": "Chokes",
+            "source_file": "request_payload",
+            "source_sheet": null,
+            "source_cell": "product_line",
+            "raw_label": "product_line",
+            "raw_value": "Chokes",
+            "confidence": "high",
+            "priority": 2,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "structured_request_json"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "rfq.csv",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_pnl_escalated\\test_api_reuses_identical_file0\\uploads\\REUSE-TEST\\rfq.csv",
+        "candidates": [
+          {
+            "field": "annual_quantity",
+            "value": 100000,
+            "source_file": "rfq.csv",
+            "source_sheet": "CSV",
+            "source_cell": "R1C1",
+            "raw_label": "Annual quantity",
+            "raw_value": 100000,
+            "confidence": "high",
+            "priority": 3,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "commercial_csv"
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "source_file": "drawing.pdf",
+        "source_path": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.pytest_tmp_pnl_escalated\\test_api_reuses_identical_file0\\uploads\\REUSE-TEST\\drawing.pdf",
+        "candidates": [
+          {
+            "field": "drawing_reference",
+            "value": "drawing.pdf",
+            "source_file": "drawing.pdf",
+            "source_sheet": null,
+            "source_cell": "filename",
+            "raw_label": "PDF filename",
+            "raw_value": "drawing.pdf",
+            "confidence": "high",
+            "priority": 4,
+            "is_formula": false,
+            "formula": null,
+            "source_type": "drawing_specification"
+          }
+        ],
+        "warnings": []
+      }
+    ]
+  },
+  "drawing_file_path": ".pytest_tmp_pnl_escalated/test_api_reuses_identical_file0/uploads/REUSE-TEST/drawing.pdf",
+  "drawing_file_url_local": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/files/REUSE-TEST/drawing.pdf",
+  "drawing_agent_proxy_url": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/agent-files/REUSE-TEST/drawing.pdf?token=1784846248.730c31378003a9ba500ddf7670043f0ced1f02bfa77d932fd1ae07384530c99b",
+  "drawing_file_url": "https://8eeb-41-224-4-231.ngrok-free.app/api/choke-costing/agent-files/REUSE-TEST/drawing.pdf?token=1784846248.730c31378003a9ba500ddf7670043f0ced1f02bfa77d932fd1ae07384530c99b",
+  "drawing_blob_url": null,
+  "drawing_sas_url": null,
+  "drawing_access_mode": "backend_signed_proxy",
+  "drawing_azure_upload": {
+    "status": "not_configured",
+    "message": "AZURE_STORAGE_CONNECTION_STRING is not configured"
+  },
+  "drawing_original_filename": "drawing.pdf",
+  "technical_fields_pending_bom": true,
+  "technical_fields_extracted_from_bom": false,
+  "warnings": [
+    "Azure Blob is not configured; using the backend PDF URL fallback."
+  ],
+  "created_at": "2026-07-23T18:37:28.549922+00:00"
+}

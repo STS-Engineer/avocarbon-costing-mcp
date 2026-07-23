@@ -5153,14 +5153,29 @@ def calculate_final_choke_costing_from_saved_outputs(
         "transport_cost_per_piece_exact": (
             None if not component_outputs else format(transport_cost_per_piece, "f")
         ),
+        "base_material_cost_per_piece": (
+            None if not component_outputs else float(material_cost_per_piece)
+        ),
+        "logistics_cost_per_piece": (
+            None if not component_outputs else float(transport_cost_per_piece)
+        ),
         "dl_cost_per_piece": dl_cost,
         "voh_cost_per_piece": voh_cost,
         "direct_cost_per_piece": direct_cost,
+        "added_value_direct_cost_per_piece": direct_cost,
         "foh_percent_dc": foh_percent,
         "foh_cost_per_piece": foh_cost,
         "fee_percent_dc": fee_percent,
         "fee_cost_per_piece": fee_cost,
         "manufacturing_cost_per_piece": manufacturing_cost,
+        "manufacturing_added_value_cost_per_piece": manufacturing_cost,
+        "total_cost_before_commercial_items_per_piece": (
+            None
+            if manufacturing_cost is None
+            else float(material_cost_per_piece) + manufacturing_cost
+        ),
+        "foh_basis": "added_value_direct_cost",
+        "fee_basis": "added_value_direct_cost",
         "component_breakdown": component_breakdown,
         "transport_breakdown_by_component": transport_breakdown,
         "unresolved_material_components": unresolved_material_components,
@@ -5179,6 +5194,23 @@ def calculate_final_choke_costing_from_saved_outputs(
     }
     output_path = _run_dir(project_code, product_id) / "final_choke_costing_result.json"
     result["save_path"] = _write_json(output_path, result)
+    if _state_path(project_code, product_id).exists():
+        state["workflow_status"] = state.get("status")
+        state["bom_status"] = (state.get("bom") or {}).get("status")
+        state["component_status"] = (
+            "received"
+            if component_outputs
+            and all(
+                item.get("status") == "resolved"
+                for item in component_breakdown
+                if item.get("component_id") != "glue" or result_mode == "firm"
+            )
+            else "partial"
+        )
+        state["most_status"] = (state.get("most") or {}).get("status")
+        state["final_calculation_status"] = result_status
+        state.setdefault("financial_status", "not_calculated")
+        _save_state(state)
     return result
 
 
