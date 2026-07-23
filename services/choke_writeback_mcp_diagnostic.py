@@ -28,6 +28,13 @@ WRITEBACK_TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "trigger_run_id",
             "raw_json",
         ],
+        "properties": {
+            "project_code": "string",
+            "product_id": "string",
+            "work_package_id": "string",
+            "trigger_run_id": "string",
+            "raw_json": ["object", "string"],
+        },
     },
     "get_choke_workflow_status": {
         "description": "Read the current Choke workflow status",
@@ -39,6 +46,7 @@ WRITEBACK_TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
 def get_writeback_mcp_connectivity_diagnostic() -> Dict[str, Any]:
     public_rest_base = get_public_rest_base_url()
     save_schema = WRITEBACK_TOOL_SCHEMAS.get("save_bom_output")
+    save_most_schema = WRITEBACK_TOOL_SCHEMAS.get("save_most_output")
     required = set((save_schema or {}).get("required") or [])
     schema_valid = {
         "project_code",
@@ -53,6 +61,15 @@ def get_writeback_mcp_connectivity_diagnostic() -> Dict[str, Any]:
         "save_bom_output_exists": save_schema is not None,
         "save_bom_output_schema_valid": schema_valid,
         "save_bom_output_schema": save_schema,
+        "save_most_output_exists": save_most_schema is not None,
+        "save_most_output_schema_valid": {
+            "project_code",
+            "product_id",
+            "work_package_id",
+            "trigger_run_id",
+            "raw_json",
+        }.issubset(set((save_most_schema or {}).get("required") or [])),
+        "save_most_output_schema": save_most_schema,
         "authentication": {
             "server_auth_mode": os.getenv("MCP_AUTH_TYPE") or "not_configured",
             "secret_values_exposed": False,

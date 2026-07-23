@@ -19,6 +19,7 @@ from services.choke_sequential_agent_workflow import (
     save_bom_output,
     save_component_output,
     save_most_output,
+    retry_most_work_package,
     retry_bom_agent,
     run_storage_self_test,
     test_bom_agent_trigger,
@@ -64,6 +65,13 @@ class RetryBomRequest(BaseModel):
     product_id: str
 
 
+class RetryMostWorkPackageRequest(BaseModel):
+    project_code: str
+    product_id: str
+    work_package_id: str
+    dry_run: bool = False
+
+
 class TestBomAgentTriggerRequest(BaseModel):
     project_code: str
     product_id: str
@@ -83,7 +91,7 @@ class SaveMostOutputRequest(BaseModel):
     product_id: str
     work_package_id: str
     trigger_run_id: str | None = None
-    raw_json: Dict[str, Any] = Field(default_factory=dict)
+    raw_json: Dict[str, Any] | str = Field(default_factory=dict)
 
 
 class CalculateRealOutputsRequest(BaseModel):
@@ -255,6 +263,16 @@ def trigger_most(request: TriggerStageRequest):
         product_id=request.product_id,
         dry_run=request.dry_run,
         force=request.force,
+    ))
+
+
+@router.post("/retry-most-work-package")
+def retry_most(request: RetryMostWorkPackageRequest):
+    return _handle(lambda: retry_most_work_package(
+        project_code=request.project_code,
+        product_id=request.product_id,
+        work_package_id=request.work_package_id,
+        dry_run=request.dry_run,
     ))
 
 

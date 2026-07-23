@@ -1,4 +1,10 @@
+import inspect
+import json
+from pathlib import Path
+
+import server
 from services import choke_sequential_agent_workflow as workflow
+from services.choke_writeback_mcp_diagnostic import WRITEBACK_TOOL_SCHEMAS
 
 
 OLD_MOST_INSTRUCTION = "Analyze only this work package and call save_most_output."
@@ -66,6 +72,10 @@ def test_most_trigger_payload_uses_strong_writeback_instruction():
         "raw_json",
     ):
         assert required_name in instruction
+    assert "Copy trigger_run_id exactly from this input" in instruction
+    assert "never invent or omit it" in instruction
+    assert "MOST_WRITEBACK_BLOCKED" in instruction
+    assert "Confirm the save_most_output success response" in instruction
     assert instruction != OLD_MOST_INSTRUCTION
     assert "call save_most_output" not in instruction
 
@@ -78,6 +88,7 @@ def test_most_payload_fields_and_identity_are_unchanged():
     assert payload["work_package_id"] == "wp_20_wire_winding"
     assert payload["most_scope_id"] == "wp_20_wire_winding"
     assert isinstance(payload["trigger_run_id"], str)
+    assert payload["operation_id"] is None
     assert payload["operation_name"] == "Wire winding"
     assert payload["component_ids"] == ["magnet_wire"]
     assert payload["technical_inputs"] == {"turns": 13}
@@ -117,3 +128,22 @@ def test_bom_instruction_unchanged_and_component_instruction_requires_pricing_ba
     assert "unit_price_basis" in component["instruction"]
     assert "unit_price_currency" in component["instruction"]
     assert "transportation_cost_basis" in component["instruction"]
+
+
+def test_connector_diagnostic_and_openapi_require_trigger_run_id():
+    assert "trigger_run_id" in WRITEBACK_TOOL_SCHEMAS["save_most_output"]["required"]
+
+    schema = json.loads(
+        Path("docs/choke_agent_writeback_openapi.json").read_text(encoding="utf-8")
+    )
+    request_schema = schema["components"]["schemas"]["SaveMostOutputRequest"]
+    assert "trigger_run_id" in request_schema["required"]
+    assert request_schema["properties"]["trigger_run_id"]["type"] == "string"
+    assert {item["type"] for item in request_schema["properties"]["raw_json"]["oneOf"]} == {
+        "object",
+        "string",
+    }
+
+    runtime_signature = inspect.signature(server.save_most_output)
+    parameter = runtime_signature.parameters["trigger_run_id"]
+    assert parameter.default is inspect.Parameter.empty

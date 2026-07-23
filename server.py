@@ -716,7 +716,7 @@ def save_most_output(
     project_code: str,
     product_id: str,
     trigger_run_id: str,
-    raw_json: Dict[str, Any],
+    raw_json: Dict[str, Any] | str,
     most_scope_id: Optional[str] = None,
     work_package_id: Optional[str] = None,
 ) -> Dict[str, Any]:

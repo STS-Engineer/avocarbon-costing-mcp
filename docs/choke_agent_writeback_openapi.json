@@ -187,9 +187,16 @@
             "description": "Current MOST trigger correlation ID from the work-package payload."
           },
           "raw_json": {
-            "type": "object",
-            "description": "The complete final MOST operation JSON produced by the MOST Agent.",
-            "additionalProperties": true
+            "description": "The complete final MOST operation JSON produced by the MOST Agent, as an object or a JSON-encoded string.",
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "string"
+              }
+            ]
           }
         },
         "additionalProperties": false

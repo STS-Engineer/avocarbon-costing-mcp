@@ -305,6 +305,11 @@ def test_trigger_most_triggers_pending_packages_and_moves_state(monkeypatch):
     assert state["most"]["lifecycle_status"] == "awaiting_most_callback"
     assert result["most"]["trigger_result"]["status"] == "dry_run"
     assert result["most"]["trigger_result"]["http_status"] == 200
+    trigger_run_ids = {
+        state["most"][item]["trigger_payload"]["trigger_run_id"]
+        for item in triggered_ids
+    }
+    assert len(trigger_run_ids) == 1
 
 
 def test_trigger_most_skips_already_received_work_packages_idempotently(monkeypatch):
@@ -498,7 +503,10 @@ def test_most_callback_requires_current_trigger_run_id(monkeypatch):
 
     assert missing["error_code"] == "missing_trigger_run_id"
     assert stale["error_code"] == "trigger_run_id_mismatch"
-    assert state["most"]["wp_10_wire_winding"]["stale_callbacks"]
+    assert state["most"]["wp_10_wire_winding"]["stale_callback_history"]
+    assert state["most"]["lifecycle_status"] == "most_writeback_failed"
+    assert state["most"]["wp_10_wire_winding"]["status"] == "writeback_failed"
+    assert state["most"]["wp_10_wire_winding"]["retryable"] is True
 
 
 def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
@@ -561,3 +569,70 @@ def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
     )
     assert str(raw_path) in writes
     assert str(normalized_path) in writes
+
+
+def test_retry_most_work_package_triggers_only_failed_scope(monkeypatch):
+    normalized_bom = workflow.normalize_bom(_full_choke_bom())
+    process = workflow.build_most_process_decomposition(_state(), normalized_bom)
+    required_components = [
+        item["component_id"]
+        for item in workflow._required_external_components(normalized_bom)
+    ]
+    most = {
+        item["work_package_id"]: {
+            **item,
+            "status": "trigger_request_accepted",
+            "lifecycle_status": "awaiting_most_callback",
+            "trigger_run_id": "old-most-run",
+            "trigger_attempts": [{"status": "trigger_request_accepted"}],
+        }
+        for item in process["work_packages"]
+    }
+    state = _state(
+        status="most_triggered",
+        bom={"status": "received"},
+        required_external_component_ids=required_components,
+        components={
+            component_id: {"status": "received"}
+            for component_id in required_components
+        },
+        process_decomposition=process,
+        required_most_work_package_ids=process["required_work_package_ids"],
+        most=most,
+    )
+    _patch_common(monkeypatch, state, normalized_bom)
+    calls = []
+
+    def accepted_trigger(_agent, _name, input_text, conversation_key, *_args, **_kwargs):
+        payload = __import__("json").loads(input_text)
+        calls.append((payload, conversation_key))
+        return {"status": "accepted", "http_status": 202}
+
+    monkeypatch.setattr(workflow, "_trigger", accepted_trigger)
+
+    result = workflow.retry_most_work_package(
+        "TEST-PROJECT",
+        "TEST-PRODUCT",
+        "wp_10_wire_winding",
+    )
+
+    assert result["status"] == "most_triggered"
+    assert len(calls) == 1
+    payload, conversation_key = calls[0]
+    assert payload["work_package_id"] == "wp_10_wire_winding"
+    assert payload["product_id"] == "TEST-PRODUCT"
+    assert payload["trigger_run_id"] != "old-most-run"
+    assert conversation_key == (
+        "TEST-PROJECT:TEST-PRODUCT:most:wp_10_wire_winding:v1"
+    )
+    assert state["most"]["wp_10_wire_winding"]["writeback_failure_history"]
+    assert state["most"]["wp_30_soldering_tinning"]["trigger_run_id"] == "old-most-run"
+
+    duplicate = workflow.retry_most_work_package(
+        "TEST-PROJECT",
+        "TEST-PRODUCT",
+        "wp_10_wire_winding",
+    )
+    assert duplicate["status"] == "most_retry_blocked"
+    assert duplicate["reason"] == "retry_already_active"
+    assert len(calls) == 1

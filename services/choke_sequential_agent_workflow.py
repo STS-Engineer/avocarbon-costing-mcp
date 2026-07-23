@@ -61,6 +61,10 @@ MOST_WRITEBACK_INSTRUCTION = (
     "generated names may change between runs. "
     "Pass the exact project_code, product_id, work_package_id, most_scope_id, "
     "trigger_run_id, and raw_json containing the complete native MOST JSON object. "
+    "Copy trigger_run_id exactly from this input and pass it unchanged to "
+    "save_most_output; never invent or omit it. If trigger_run_id is absent, stop "
+    "and return MOST_WRITEBACK_BLOCKED. Confirm the save_most_output success "
+    "response before reporting completion. "
     "Do not perform tool discovery through database tools or unrelated write actions. "
     "Never call create_or_update_component, create_or_update_bom_line, "
     "save_component_output, save_component_costing_result, store_agent_json, "
@@ -3676,6 +3680,7 @@ def _most_trigger_payload(
         "work_package_id": work_package_id,
         "most_scope_id": work_package_id,
         "trigger_run_id": trigger_run_id,
+        "operation_id": work_package.get("operation_id"),
         "operation_name": work_package.get("operation_name"),
         "component_ids": work_package.get("component_ids") or [],
         "technical_inputs": work_package.get("technical_inputs") or {},
@@ -3766,6 +3771,8 @@ def trigger_most_operations(
     product_id: str,
     dry_run: bool = False,
     force: bool = False,
+    only_work_package_id: Optional[str] = None,
+    active_trigger_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     product_id = str(product_id)
     state, _ = _existing_state(project_code, product_id)
@@ -3866,7 +3873,22 @@ def trigger_most_operations(
         }
 
     triggered, skipped, failed = [], [], []
-    for work_package in process.get("work_packages") or []:
+    work_packages = list(process.get("work_packages") or [])
+    if only_work_package_id:
+        only_work_package_id = _safe_part(
+            only_work_package_id, "only_work_package_id"
+        )
+        work_packages = [
+            item
+            for item in work_packages
+            if item.get("work_package_id") == only_work_package_id
+        ]
+        if not work_packages:
+            raise ValueError(
+                f"work_package_id {only_work_package_id} does not exist in process decomposition."
+            )
+    trigger_run_id = str(active_trigger_run_id or uuid.uuid4())
+    for work_package in work_packages:
         work_package_id = work_package["work_package_id"]
         previous = state["most"].get(work_package_id) or {}
         if work_package.get("status") == "blocked":
@@ -3887,7 +3909,6 @@ def trigger_most_operations(
             skipped.append({"work_package_id": work_package_id, "status": previous.get("status"), "reason": "already_processed"})
             continue
         correlation_id = str(uuid.uuid4())
-        trigger_run_id = str(uuid.uuid4())
         payload = _most_trigger_payload(state, work_package, trigger_run_id)
         conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
         sending_attempt = {
@@ -3904,7 +3925,10 @@ def trigger_most_operations(
             "conversation_key": conversation_key,
             "correlation_id": correlation_id,
             "trigger_payload": payload,
-            "trigger_attempts": [sending_attempt],
+            "trigger_attempts": [
+                *(previous.get("trigger_attempts") or []),
+                sending_attempt,
+            ],
             "save_path": payload["save_address"],
             "normalized_path": _relative(
                 _normalized_most_output_path(project_code, product_id, work_package_id)
@@ -3916,7 +3940,11 @@ def trigger_most_operations(
             "status": "trigger_request_sending",
             "lifecycle_status": "trigger_request_sending",
             "trigger_result": None,
-            "trigger_attempts": [sending_attempt],
+            "trigger_attempts": [
+                *(state["most"].get("trigger_attempts") or []),
+                sending_attempt,
+            ],
+            "active_trigger_run_id": trigger_run_id,
         })
         _save_state(state)
         append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="trigger_request_sending", save_path=payload["save_address"])
@@ -3946,7 +3974,11 @@ def trigger_most_operations(
             "correlation_id": correlation_id,
             "trigger_payload": payload,
             "trigger_result": trigger_result,
-            "trigger_attempts": [sending_attempt, completed_attempt],
+            "trigger_attempts": [
+                *(previous.get("trigger_attempts") or []),
+                sending_attempt,
+                completed_attempt,
+            ],
             "save_path": payload["save_address"],
             "normalized_path": _relative(_normalized_most_output_path(project_code, product_id, work_package_id)),
             "received_at": previous.get("received_at") if not force else None,
@@ -4009,6 +4041,7 @@ def trigger_most_operations(
             "eligible_operations": eligible_operations,
             "skipped_operations": skipped_operations,
             "eligibility_report": eligibility_report,
+            "active_trigger_run_id": trigger_run_id,
         })
     elif failed:
         failed_results = [
@@ -4028,6 +4061,7 @@ def trigger_most_operations(
             "eligible_operations": eligible_operations,
             "skipped_operations": skipped_operations,
             "eligibility_report": eligibility_report,
+            "active_trigger_run_id": trigger_run_id,
         })
     elif awaiting_existing:
         state["status"] = "most_triggered"
@@ -4104,6 +4138,94 @@ def trigger_most_operations(
     }
 
 
+def retry_most_work_package(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    product_id = str(product_id)
+    work_package_id = _safe_part(work_package_id, "work_package_id")
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found.")
+    entry = (state.get("most") or {}).get(work_package_id)
+    if not isinstance(entry, dict) or not entry.get("work_package_id"):
+        raise ValueError(
+            f"work_package_id {work_package_id} does not exist in the active MOST route."
+        )
+    if entry.get("status") == "received":
+        return {
+            "success": False,
+            "status": "most_retry_blocked",
+            "reason": "work_package_already_received",
+            "project_code": project_code,
+            "product_id": product_id,
+            "work_package_id": work_package_id,
+            "state": state,
+        }
+    retry_count = int(entry.get("retry_count") or 0)
+    if entry.get("status") in {
+        "trigger_request_sending",
+        "trigger_request_accepted",
+        "awaiting_most_callback",
+    } and retry_count > 0:
+        return {
+            "success": False,
+            "status": "most_retry_blocked",
+            "reason": "retry_already_active",
+            "project_code": project_code,
+            "product_id": product_id,
+            "work_package_id": work_package_id,
+            "active_trigger_run_id": entry.get("trigger_run_id"),
+            "state": state,
+        }
+    failure = {
+        "recorded_at": _now_iso(),
+        "failure_reason": "missing_trigger_run_id",
+        "failed_trigger_run_id": entry.get("trigger_run_id"),
+        "status_before": entry.get("status"),
+        "source": "controlled_retry_request",
+    }
+    entry.setdefault("writeback_failure_history", []).append(failure)
+    entry.update({
+        "status": "writeback_failed",
+        "lifecycle_status": "most_writeback_failed",
+        "retryable": True,
+        "failure_reason": "missing_trigger_run_id",
+        "retry_count": retry_count + 1,
+    })
+    state["most"][work_package_id] = entry
+    state["most"].update({
+        "status": "writeback_failed",
+        "lifecycle_status": "most_writeback_failed",
+        "retryable": True,
+        "failure_reason": "missing_trigger_run_id",
+    })
+    state["status"] = "most_trigger_failed"
+    state["current_step"] = "Step 3 MOST Assemblage"
+    _save_state(state)
+    append_workflow_event(
+        project_code,
+        product_id,
+        "most_writeback_failed",
+        work_package_id=work_package_id,
+        trigger_run_id=entry.get("trigger_run_id"),
+        failure_reason="missing_trigger_run_id",
+        status_before=failure["status_before"],
+        status_after="writeback_failed",
+    )
+    new_trigger_run_id = str(uuid.uuid4())
+    return trigger_most_operations(
+        project_code=project_code,
+        product_id=product_id,
+        dry_run=dry_run,
+        force=True,
+        only_work_package_id=work_package_id,
+        active_trigger_run_id=new_trigger_run_id,
+    )
+
+
 def normalize_most_output(state: Dict[str, Any], work_package: Dict[str, Any], raw_json: Dict[str, Any]) -> Dict[str, Any]:
     def value(*keys: str) -> Any:
         return _output_value(raw_json, *keys)
@@ -4148,7 +4270,7 @@ def save_most_output(
     project_code: str,
     product_id: str,
     work_package_id: str,
-    raw_json: Dict[str, Any],
+    raw_json: Any,
     trigger_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     work_package_id = _safe_part(work_package_id, "work_package_id")
@@ -4161,21 +4283,70 @@ def save_most_output(
             raise ValueError("Workflow state not found. MOST write-back cannot create a workflow.")
         if (state.get("bom") or {}).get("status") != "received":
             raise ValueError("BOM output must be received before MOST write-back.")
+        if isinstance(raw_json, str):
+            try:
+                raw_json = json.loads(raw_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError("raw_json string must contain one valid JSON object.") from exc
         if not isinstance(raw_json, dict):
-            raise ValueError("raw_json must be a JSON object.")
+            raise ValueError("raw_json must be a JSON object or a string containing one JSON object.")
         returned_id = raw_json.get("work_package_id") or raw_json.get("most_scope_id")
         if returned_id not in [None, ""] and str(returned_id).strip() != work_package_id:
             raise ValueError("raw_json work_package_id does not match the tool work_package_id.")
         process = state.get("process_decomposition") or {}
         work_package = next((item for item in process.get("work_packages") or [] if item.get("work_package_id") == work_package_id), None)
         if not work_package:
-            raise ValueError(f"work_package_id {work_package_id} does not exist in process decomposition.")
+            state.setdefault("most", {}).setdefault(
+                "stale_callback_history", []
+            ).append({
+                "received_at": _now_iso(),
+                "work_package_id": work_package_id,
+                "trigger_run_id": str(trigger_run_id or ""),
+                "reason": "stale_work_package_id",
+            })
+            _save_state(state)
+            return {
+                "success": False,
+                "status": "stale_callback",
+                "error_code": "stale_work_package_id",
+                "message": "MOST callback work_package_id is not part of the active process route.",
+                "project_code": project_code,
+                "product_id": str(product_id),
+                "work_package_id": work_package_id,
+            }
         if work_package.get("status") == "blocked":
             raise ValueError(f"work_package_id {work_package_id} is blocked: {work_package.get('blocking_reason')}")
         existing_entry = (state.get("most") or {}).get(work_package_id) or {}
         expected_trigger_run_id = str(existing_entry.get("trigger_run_id") or "").strip()
         received_trigger_run_id = str(trigger_run_id or "").strip()
         if expected_trigger_run_id and not received_trigger_run_id:
+            rejected = {
+                "received_at": _now_iso(),
+                "received_trigger_run_id": None,
+                "expected_trigger_run_id": expected_trigger_run_id,
+                "reason": "missing_trigger_run_id",
+            }
+            existing_entry.setdefault("stale_callback_history", []).append(rejected)
+            existing_entry.update({
+                "status": "writeback_failed",
+                "lifecycle_status": "most_writeback_failed",
+                "retryable": True,
+                "failure_reason": "missing_trigger_run_id",
+            })
+            state["most"][work_package_id] = existing_entry
+            state["most"].setdefault("stale_callback_history", []).append({
+                **rejected,
+                "work_package_id": work_package_id,
+            })
+            state["most"].update({
+                "status": "writeback_failed",
+                "lifecycle_status": "most_writeback_failed",
+                "retryable": True,
+                "failure_reason": "missing_trigger_run_id",
+            })
+            state["status"] = "most_trigger_failed"
+            state["current_step"] = "Step 3 MOST Assemblage"
+            _save_state(state)
             return {
                 "success": False,
                 "status": "rejected",
@@ -4186,12 +4357,18 @@ def save_most_output(
                 "work_package_id": work_package_id,
             }
         if expected_trigger_run_id and received_trigger_run_id != expected_trigger_run_id:
-            existing_entry.setdefault("stale_callbacks", []).append({
+            stale_callback = {
                 "received_at": _now_iso(),
                 "received_trigger_run_id": received_trigger_run_id,
                 "expected_trigger_run_id": expected_trigger_run_id,
-            })
+                "reason": "trigger_run_id_mismatch",
+            }
+            existing_entry.setdefault("stale_callback_history", []).append(stale_callback)
             state["most"][work_package_id] = existing_entry
+            state["most"].setdefault("stale_callback_history", []).append({
+                **stale_callback,
+                "work_package_id": work_package_id,
+            })
             _save_state(state)
             return {
                 "success": False,
