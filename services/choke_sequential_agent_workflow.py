@@ -3792,10 +3792,10 @@ def _most_eligibility_report(
             ),
             "costing_route": component.get("costing_route"),
             "external_or_internal": (
-                "External"
+                "external"
                 if component.get("costing_route")
                 == "external_component_costing_agent"
-                else "Internal"
+                else "internal"
             ),
             "proposed_operations": [
                 operation.get("operation_name") for operation in linked_operations
@@ -4761,27 +4761,19 @@ def calculate_final_choke_costing_from_saved_outputs(
                 component_id, source_material_result, project_currency, fx_rates=fx_rates_override,
             )
         if material_result["status"] == "blocked":
-            missing_inputs.append(f"component_outputs:{component_id}:{material_result['reason']}")
             line_material_cost = None
-            unresolved_material_components.append({
-                "component_id": component_id,
-                "reason": material_result["reason"],
-                "message": (
-                    "Glue consumption per product required."
-                    if component_id == "glue"
-                    and material_result["reason"] == "technical_quantity_unit_unknown"
-                    else None
-                ),
-            })
+            line_material_decimal = None
         else:
             line_material_cost = material_result["material_cost_per_product"]
-            material_cost_per_piece += Decimal(str(line_material_cost))
-
-        transport_result = component_costing.compute_component_transport_cost(
-            component_id, raw, pricing_quantity_info, source_material_result.get("material_cost_per_product"),
-            target_currency=project_currency, fx_rates=fx_rates_override,
-            exclude_invalid=True,
-        )
+            line_material_decimal = (
+                Decimal(str(pricing_quantity_info.get("pricing_quantity")))
+                * Decimal(str(price_info.get("unit_price")))
+                if pricing_quantity_info.get("pricing_quantity") is not None
+                and price_info.get("unit_price") is not None
+                and normalize_currency_code(material_result.get("currency"))
+                == normalize_currency_code(price_info.get("unit_price_currency"))
+                else Decimal(str(line_material_cost))
+            )
         delivered_result = component_costing.resolve_delivered_unit_cost(
             raw, project_currency, fx_rates=fx_rates_override,
         )
@@ -4803,10 +4795,9 @@ def calculate_final_choke_costing_from_saved_outputs(
                 )
             )
             line_delivered_cost = float(line_delivered_decimal)
-            delivered_material_cost_per_piece += line_delivered_decimal
             line_transport_decimal = (
                 max(
-                    line_delivered_decimal - Decimal(str(line_material_cost)),
+                    line_delivered_decimal - line_material_decimal,
                     Decimal("0"),
                 )
                 if line_material_cost is not None else None
@@ -4815,8 +4806,6 @@ def calculate_final_choke_costing_from_saved_outputs(
                 float(line_transport_decimal)
                 if line_transport_decimal is not None else None
             )
-            if line_transport is not None:
-                transport_cost_per_piece += line_transport_decimal
             logistics_source = delivered_result.get("calculation_source")
         else:
             line_delivered_cost = None
@@ -4866,6 +4855,77 @@ def calculate_final_choke_costing_from_saved_outputs(
             missing_inputs.append(f"component_outputs:{component_id}:logistics_adders_unresolved")
 
         currency = _saved_component_currency(raw)
+        canonical_currency = (
+            delivered_result.get("delivered_cost_currency")
+            if delivered_basis_compatible else material_result.get("currency")
+        )
+        canonical_fields = {
+            "technical_quantity": pricing_quantity,
+            "technical_quantity_unit": (
+                f"{pricing_unit}/product" if pricing_unit else None
+            ),
+            "pricing_quantity": pricing_quantity,
+            "pricing_unit": pricing_unit,
+            "unit_cost": price_info.get("unit_price"),
+            "currency": canonical_currency,
+            "material_cost_per_piece": line_material_cost,
+            "delivered_material_cost_per_piece": line_delivered_cost,
+        }
+        missing_canonical_fields = [
+            name for name, value in canonical_fields.items()
+            if value in (None, "")
+        ]
+        reconciliation_difference = delivered_result.get(
+            "reconciliation_difference"
+        )
+        reconciliation_valid = (
+            reconciliation_difference is not None
+            and abs(Decimal(str(reconciliation_difference)))
+            <= component_costing.DELIVERED_COST_RECONCILIATION_TOLERANCE
+        )
+        component_status = (
+            "resolved"
+            if not missing_canonical_fields
+            and material_result.get("status") == "calculated"
+            and delivered_result.get("status") == "calculated"
+            and reconciliation_valid
+            else "blocked"
+        )
+        component_blocking_reason = None
+        if component_status == "blocked":
+            component_blocking_reason = (
+                material_result.get("reason")
+                if material_result.get("status") != "calculated" else None
+            ) or (
+                delivered_result.get("reason")
+                if delivered_result.get("status") != "calculated" else None
+            ) or (
+                "delivered_cost_reconciliation_mismatch"
+                if not reconciliation_valid else None
+            ) or (
+                f"{missing_canonical_fields[0]}_missing"
+                if missing_canonical_fields else "component_cost_unresolved"
+            )
+            missing_inputs.append(
+                f"component_outputs:{component_id}:{component_blocking_reason}"
+            )
+            unresolved_material_components.append({
+                "component_id": component_id,
+                "reason": component_blocking_reason,
+                "message": (
+                    "Glue consumption per product required."
+                    if component_id == "glue"
+                    and component_blocking_reason
+                    == "technical_quantity_unit_unknown"
+                    else None
+                ),
+            })
+        else:
+            material_cost_per_piece += line_material_decimal
+            delivered_material_cost_per_piece += line_delivered_decimal
+            transport_cost_per_piece += line_transport_decimal
+            warnings.extend(pricing_quantity_info.get("warnings") or [])
+
         component_breakdown.append({
             "component_id": component_id,
             "technical_quantity": pricing_quantity_info.get("pricing_quantity"),
@@ -4887,10 +4947,18 @@ def calculate_final_choke_costing_from_saved_outputs(
             "base_unit_cost": delivered_result.get("base_unit_cost"),
             "unit_material_or_delivered_cost": price_info.get("unit_price"),
             "material_cost_per_piece": line_material_cost,
+            "material_cost_per_piece_exact": (
+                format(line_material_decimal, "f")
+                if line_material_decimal is not None else None
+            ),
             "delivered_cost_per_pricing_unit": delivered_result.get(
                 "delivered_cost_per_pricing_unit"
             ),
             "delivered_material_cost_per_piece": line_delivered_cost,
+            "delivered_material_cost_per_piece_exact": (
+                format(line_delivered_decimal, "f")
+                if delivered_basis_compatible else None
+            ),
             "transport_cost_per_piece": line_transport,
             "delivered_cost_source": delivered_result.get("calculation_source"),
             "included_adders": delivered_result.get("included_adders") or [],
@@ -4920,39 +4988,41 @@ def calculate_final_choke_costing_from_saved_outputs(
             "rounding_policy": delivered_result.get("rounding_policy"),
             "logistics_source": logistics_source,
             "source_currency": currency,
-            "currency": (
-                delivered_result.get("delivered_cost_currency")
-                if delivered_basis_compatible else material_result.get("currency")
-            ),
+            "currency": canonical_currency,
             "normalized_offer": price_info.get("normalized_offer"),
             "fx": price_info.get("fx") or material_result.get("fx"),
             "warnings": pricing_quantity_info.get("warnings") or [],
             "classification": "External",
             "source": "saved_component_json",
-            "status": (
-                "resolved"
-                if material_result["status"] == "calculated"
-                and line_delivered_cost is not None
-                else "blocked"
-            ),
-            "blocking_reason": (
-                material_result.get("reason")
-                if material_result["status"] == "blocked" else None
-            ) or (
-                delivered_result.get("reason")
-                if delivered_result.get("status") != "calculated" else None
-            ),
+            "status": component_status,
+            "blocking_reason": component_blocking_reason,
         })
+        included_adders_per_product = []
+        if pricing_quantity is not None:
+            for adder in delivered_result.get("included_adders") or []:
+                converted_value = adder.get("converted_value")
+                included_adders_per_product.append({
+                    **adder,
+                    "cost_per_product": (
+                        float(
+                            Decimal(str(pricing_quantity))
+                            * Decimal(str(converted_value))
+                        )
+                        if converted_value is not None else None
+                    ),
+                })
         transport_breakdown.append({
             "component_id": component_id,
             "pricing_quantity": pricing_quantity_info.get("pricing_quantity"),
             "pricing_unit": pricing_quantity_info.get("pricing_unit"),
-            "logistics_breakdown": transport_result.get("logistics_breakdown"),
+            "included_adders": included_adders_per_product,
             "transport_cost_per_piece": line_transport,
             "currency": project_currency,
-            "status": transport_result["status"],
+            "status": (
+                "calculated" if component_status == "resolved" else "blocked"
+            ),
             "calculation_source": logistics_source,
-            "excluded_adders": transport_result.get("excluded_adders") or [],
+            "excluded_adders": delivered_result.get("excluded_adders") or [],
         })
 
     for component_id in dimensional_by_component:
@@ -5068,6 +5138,9 @@ def calculate_final_choke_costing_from_saved_outputs(
             None if not component_outputs else format(material_cost_per_piece, "f")
         ),
         "calculated_delivered_material_cost_for_resolved_components": (
+            None if not component_outputs else float(delivered_material_cost_per_piece)
+        ),
+        "delivered_material_cost_per_piece": (
             None if not component_outputs else float(delivered_material_cost_per_piece)
         ),
         "calculated_delivered_material_cost_exact": (

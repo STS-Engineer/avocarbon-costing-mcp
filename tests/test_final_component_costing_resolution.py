@@ -59,6 +59,7 @@ def _offer(
     customs=0,
     forwarder=0,
     capital=0,
+    unit_price_basis=None,
 ):
     audit_currency = converted_currency or currency
     return {
@@ -71,7 +72,9 @@ def _offer(
             "unit_price_currency": currency,
             "currency": currency,
             "pricing_unit": pricing_unit,
-            "unit_price_basis": f"{currency}/{pricing_unit}",
+            "unit_price_basis": (
+                unit_price_basis or f"{currency}/{pricing_unit}"
+            ),
             "converted_unit_price": converted_unit_price,
             "converted_currency": converted_currency,
             "original_currency": original_currency,
@@ -127,6 +130,10 @@ def _live_outputs():
                 transport=18,
                 forwarder=5,
                 capital=9.17,
+                unit_price_basis=(
+                    "INR per kg of raw enameled wire, excluding winding and "
+                    "internal added value"
+                ),
                 technical_specification={
                     "estimated_mass_per_piece_g": 0.779,
                     "estimated_engaged_length_mm": 196.824,
@@ -324,6 +331,75 @@ def test_preliminary_result_calculates_resolved_subtotal_and_labels_incomplete(m
     assert result["fee_cost_per_piece"] is not None
     assert result["commercially_usable"] is False
     assert any("not quotation-ready" in item for item in result["warnings"])
+    assert result["material_completeness"]["resolved_component_count"] == 3
+    assert result["material_completeness"]["unresolved_component_count"] == 1
+    assert result["material_completeness"]["percentage"] == 75.0
+    assert result["unresolved_material_components"] == [{
+        "component_id": "glue",
+        "reason": "technical_quantity_unit_unknown",
+        "message": "Glue consumption per product required.",
+    }]
+
+
+def test_descriptive_wire_basis_uses_canonical_normalized_pricing_unit(monkeypatch):
+    result = _run_final(monkeypatch, "preliminary")
+    wire = next(
+        item for item in result["component_breakdown"]
+        if item["component_id"] == "magnet_wire"
+    )
+    assert wire["pricing_unit"] == "kg"
+    assert wire["status"] == "resolved"
+    assert wire["blocking_reason"] is None
+    assert wire["material_cost_per_piece"] == 1.33988
+    assert wire["delivered_material_cost_per_piece"] == 1.36494043
+    assert wire["warnings"] == [
+        "Final wire cut length and mass remain unconfirmed."
+    ]
+
+
+def test_subtotals_and_logistics_use_exactly_the_resolved_component_set(monkeypatch):
+    result = _run_final(monkeypatch, "preliminary")
+    resolved = [
+        item for item in result["component_breakdown"]
+        if item["status"] == "resolved"
+    ]
+    assert {item["component_id"] for item in resolved} == {
+        "ferrite_core", "magnet_wire", "lead_tinning",
+    }
+    base = sum(
+        Decimal(item["material_cost_per_piece_exact"]) for item in resolved
+    )
+    delivered = sum(
+        Decimal(item["delivered_material_cost_per_piece_exact"])
+        for item in resolved
+    )
+    assert Decimal(result["calculated_material_cost_exact"]) == base
+    assert Decimal(result["calculated_delivered_material_cost_exact"]) == delivered
+    assert Decimal(result["transport_cost_per_piece_exact"]) == delivered - base
+    assert result["material_cost_per_piece"] == float(base)
+    assert result["delivered_material_cost_per_piece"] == float(delivered)
+    assert result["transport_cost_per_piece"] == float(delivered - base)
+    for item in result["transport_breakdown_by_component"]:
+        if item["component_id"] != "glue":
+            assert item["status"] == "calculated"
+            assert item["excluded_adders"] == []
+
+
+def test_firm_mode_is_blocked_only_by_glue_and_has_no_final_foh_fee(monkeypatch):
+    result = _run_final(monkeypatch, "firm")
+    component_missing = [
+        item for item in result["missing_inputs"]
+        if item.startswith("component_outputs:")
+    ]
+    assert component_missing == [
+        "component_outputs:glue:technical_quantity_unit_unknown"
+    ]
+    assert result["status"] == "blocked"
+    assert result["commercially_usable"] is False
+    assert result["direct_cost_per_piece"] is None
+    assert result["foh_cost_per_piece"] is None
+    assert result["fee_cost_per_piece"] is None
+    assert result["manufacturing_cost_per_piece"] is None
 
 
 def test_all_live_delivered_costs_have_traceable_decimal_formulas():
@@ -448,6 +524,6 @@ def test_external_material_classification_is_not_changed_by_most_participation()
     )
     report = workflow._most_eligibility_report(normalized, process)
     rows = {item["component_id"]: item for item in report["components"]}
-    assert rows["ferrite_core"]["external_or_internal"] == "External"
-    assert rows["magnet_wire"]["external_or_internal"] == "External"
-    assert rows["lead_tinning"]["external_or_internal"] == "External"
+    assert rows["ferrite_core"]["external_or_internal"] == "external"
+    assert rows["magnet_wire"]["external_or_internal"] == "external"
+    assert rows["lead_tinning"]["external_or_internal"] == "external"

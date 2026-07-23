@@ -689,7 +689,10 @@ def resolve_unit_price(
     return {
         "unit_price": unit_price,
         "unit_price_currency": currency,
-        "unit_price_basis": offer.get("pricing_basis") or offer.get("pricing_unit"),
+        # Cost arithmetic consumes the canonical unit. Keep the descriptive
+        # supplier basis separately so prose can never overwrite "kg"/"pc".
+        "unit_price_basis": offer.get("pricing_unit") or offer.get("pricing_basis"),
+        "pricing_basis_description": offer.get("pricing_basis"),
         "normalized_offer": offer,
         "fx": fx,
         "calculation_source": (
