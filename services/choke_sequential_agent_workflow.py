@@ -83,7 +83,9 @@ MOST_WRITEBACK_INSTRUCTION = (
 COMPONENT_COSTING_INSTRUCTION = (
     "Cost only this component. Return one complete JSON and call save_component_output. "
     "A usable recommended_offer must contain unit_price as a JSON number, currency, "
-    "pricing_unit (pc, kg, g, or m), payment_days as a JSON number, incoterm, "
+    "pricing_unit (pc, kg, g, or m), supplier_name, payment_days as a JSON number, "
+    "incoterm, origin, origin_zone, and ap_value_basis explicitly set to "
+    "base_purchase_value or delivered_purchase_value, "
     "transport_cost with transport_basis, customs_cost with customs_basis, and "
     "forwarder_fee with forwarder_basis. Currency and every basis must be explicit. "
     "For legacy compatibility, unit_price_currency must equal currency and "
@@ -4711,7 +4713,40 @@ def calculate_final_choke_costing_from_saved_outputs(
     if raw_bom is None:
         missing_inputs.append("bom")
         raw_bom = {}
+    normalized_bom = _read_json(_bom_normalized_path(project_code, product_id), {}) or {}
     dimensional_by_component = _saved_bom_dimensional_map(raw_bom)
+    ferrite_fields = dimensional_by_component.get("ferrite_core") or {}
+    ferrite_length_resolution = component_costing.resolve_ferrite_length_mm(
+        normalized_bom, raw_bom
+    )
+    if ferrite_length_resolution.get("status") == "resolved":
+        ferrite_fields["ferrite_length_mm"] = (
+            ferrite_length_resolution["ferrite_length_mm"]
+        )
+    glue_fields = dimensional_by_component.get("glue")
+    provisional_glue = None
+    if glue_fields is not None and not any(
+        glue_fields.get(field) not in (None, "")
+        for field in ("weight_kg_per_product", "physical_mass_g_per_product")
+    ):
+        provisional_glue = component_costing.calculate_provisional_glue_consumption(
+            ferrite_fields.get("ferrite_length_mm"),
+            approved=bool(
+                glue_fields.get("assumption_approved")
+                or customer_input.get("glue_consumption_approved") is True
+            ),
+            source_field_path=ferrite_length_resolution.get(
+                "source_field_path"
+            ),
+            source_evidence=ferrite_length_resolution.get("source_evidence"),
+        )
+        if provisional_glue.get("status") in {
+            "resolved", "resolved_assumption"
+        }:
+            glue_fields["physical_mass_g_per_product"] = (
+                provisional_glue["glue_mass_g_per_product"]
+            )
+            glue_fields["provisional_glue_consumption"] = provisional_glue
 
     component_outputs = _load_saved_component_outputs(project_code, product_id)
     if not component_outputs:
@@ -4883,6 +4918,12 @@ def calculate_final_choke_costing_from_saved_outputs(
             and abs(Decimal(str(reconciliation_difference)))
             <= component_costing.DELIVERED_COST_RECONCILIATION_TOLERANCE
         )
+        uses_provisional_glue = (
+            component_id == "glue"
+            and isinstance(
+                bom_fields.get("provisional_glue_consumption"), dict
+            )
+        )
         component_status = (
             "resolved"
             if not missing_canonical_fields
@@ -4891,6 +4932,17 @@ def calculate_final_choke_costing_from_saved_outputs(
             and reconciliation_valid
             else "blocked"
         )
+        if component_status == "resolved" and uses_provisional_glue:
+            component_status = (
+                "resolved"
+                if bom_fields["provisional_glue_consumption"].get("approved")
+                else "resolved_assumption"
+            )
+            provisional_warning = (
+                bom_fields["provisional_glue_consumption"].get("warning")
+            )
+            if provisional_warning:
+                warnings.append(provisional_warning)
         component_blocking_reason = None
         if component_status == "blocked":
             component_blocking_reason = (
@@ -4990,8 +5042,13 @@ def calculate_final_choke_costing_from_saved_outputs(
             "source_currency": currency,
             "currency": canonical_currency,
             "normalized_offer": price_info.get("normalized_offer"),
+            "ap_terms": component_costing.resolve_component_ap_terms(raw),
             "fx": price_info.get("fx") or material_result.get("fx"),
             "warnings": pricing_quantity_info.get("warnings") or [],
+            "assumption_details": (
+                bom_fields.get("provisional_glue_consumption")
+                if uses_provisional_glue else None
+            ),
             "classification": "External",
             "source": "saved_component_json",
             "status": component_status,
@@ -5019,7 +5076,9 @@ def calculate_final_choke_costing_from_saved_outputs(
             "transport_cost_per_piece": line_transport,
             "currency": project_currency,
             "status": (
-                "calculated" if component_status == "resolved" else "blocked"
+                "calculated"
+                if component_status in {"resolved", "resolved_assumption"}
+                else "blocked"
             ),
             "calculation_source": logistics_source,
             "excluded_adders": delivered_result.get("excluded_adders") or [],
@@ -5058,7 +5117,8 @@ def calculate_final_choke_costing_from_saved_outputs(
     unique_missing = list(dict.fromkeys(missing_inputs))
     material_component_count = len(component_outputs)
     resolved_component_count = sum(
-        1 for item in component_breakdown if item.get("status") == "resolved"
+        1 for item in component_breakdown
+        if item.get("status") in {"resolved", "resolved_assumption"}
     )
     completeness = {
         "resolved_component_count": resolved_component_count,
@@ -5111,6 +5171,38 @@ def calculate_final_choke_costing_from_saved_outputs(
     else:
         result_status = "calculated"
 
+    assumption_components = [
+        item["component_id"] for item in component_breakdown
+        if item.get("status") == "resolved_assumption"
+    ]
+    technical_preliminary_status = (
+        "blocked" if core_blockers else
+        "resolved_assumption" if assumption_components else
+        "calculated"
+    )
+    technical_firm_blockers = [
+        *unique_missing,
+        *(
+            [f"component_outputs:{item}:assumption_approval_required"
+             for item in assumption_components]
+        ),
+    ]
+    technical_firm_status = (
+        "blocked" if technical_firm_blockers else "calculated"
+    )
+    if result_mode == "firm" and assumption_components:
+        result_status = "blocked"
+    result_missing_inputs = list(dict.fromkeys([
+        *unique_missing,
+        *(
+            [
+                f"component_outputs:{item}:assumption_approval_required"
+                for item in assumption_components
+            ]
+            if result_mode == "firm" else []
+        ),
+    ]))
+
     result = {
         "project_code": project_code,
         "product_id": product_id,
@@ -5118,6 +5210,11 @@ def calculate_final_choke_costing_from_saved_outputs(
         "process_decomposition": state.get("process_decomposition") or {},
         "status": result_status,
         "result_mode": result_mode,
+        "technical_preliminary_status": technical_preliminary_status,
+        "technical_firm_status": technical_firm_status,
+        "technical_firm_blockers": list(dict.fromkeys(technical_firm_blockers)),
+        "ferrite_length_resolution": ferrite_length_resolution,
+        "provisional_glue_consumption": provisional_glue,
         "commercially_usable": (
             result_status == "calculated"
             and all(
@@ -5183,7 +5280,7 @@ def calculate_final_choke_costing_from_saved_outputs(
         "blocking_unresolved_logistics_adders": blocking_logistics,
         "material_completeness": completeness,
         "most_breakdown_by_scope": dl_voh.get("work_package_calculation") or [],
-        "missing_inputs": unique_missing,
+        "missing_inputs": result_missing_inputs,
         "warnings": list(dict.fromkeys([
             *warnings,
             *(

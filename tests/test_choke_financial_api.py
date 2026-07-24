@@ -87,3 +87,27 @@ def test_invalid_financial_mode_is_rejected():
         json={"project_code": "P", "product_id": "X", "mode": "quotation"},
     )
     assert response.status_code == 422
+
+
+def test_historical_comparison_endpoint_never_feeds_calculation(monkeypatch):
+    monkeypatch.setattr(
+        choke_workflow_router,
+        "save_financial_reference_comparison",
+        lambda project_code, product_id, historical, explanations, acceptance, owner: {
+            "project_code": project_code,
+            "product_id": product_id,
+            "historical_values_used_in_calculation": False,
+            "validation_owner": owner,
+        },
+    )
+    response = client().post(
+        "/api/choke-workflow/compare-financial-reference",
+        json={
+            "project_code": "24018-CHO-00",
+            "product_id": "300440157",
+            "historical_values": {"Y0.selling_price": 20},
+            "validation_owner": "Olivier",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["historical_values_used_in_calculation"] is False

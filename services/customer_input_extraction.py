@@ -53,6 +53,25 @@ FIELD_ALIASES = {
     "quotation_currency": ["quotation currency", "quote currency", "selling currency"],
     "purchasing_currency": ["purchasing currency", "purchase currency"],
     "drawing_reference": ["drawing reference", "drawing filename", "drawing file"],
+    "customer_payment_days": [
+        "payment terms", "customer payment terms", "payment conditions",
+    ],
+    "customer_incoterm": ["incoterm", "delivery conditions", "delivery condition"],
+    "customer_delivery_frequency_days": [
+        "delivery frequency", "delivery frequency days",
+    ],
+    "platform": ["platform", "delivery platform"],
+    "customer_productivity_percentage": [
+        "customer productivity", "productivity percentage", "productivity",
+    ],
+    "productivity_basis": ["productivity basis"],
+    "capex_tooling_treatment": [
+        "capex treatment", "tooling treatment", "capex tooling treatment",
+    ],
+    "profitability_target": [
+        "profitability target", "target roce", "roce target", "npv target",
+    ],
+    "indexation": ["indexation", "material indexation", "price indexation"],
 }
 
 STRUCTURED_ALIASES = {
@@ -183,6 +202,76 @@ def _candidate(
         "source_type": source_type,
         **extra,
     }
+
+
+def _fill_color(cell: Any) -> Optional[str]:
+    fill = getattr(cell, "fill", None)
+    color = getattr(fill, "fgColor", None)
+    if fill is None or getattr(fill, "fill_type", None) not in {"solid", "pattern"}:
+        return None
+    color_type = getattr(color, "type", None)
+    value = getattr(color, "rgb", None)
+    if color_type == "indexed":
+        value = f"indexed:{getattr(color, 'indexed', None)}"
+    elif color_type == "theme":
+        value = f"theme:{getattr(color, 'theme', None)}:{getattr(color, 'tint', 0)}"
+    return str(value) if value not in (None, "") else None
+
+
+def _is_green_fill(cell: Any) -> bool:
+    color = _fill_color(cell)
+    if not color:
+        return False
+    if color.startswith("indexed:"):
+        return color in {"indexed:17", "indexed:42", "indexed:43"}
+    if color.startswith("theme:"):
+        return False
+    rgb = color[-6:]
+    try:
+        red, green, blue = (
+            int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16)
+        )
+    except (ValueError, IndexError):
+        return False
+    return green >= 96 and green > red * 1.15 and green > blue * 1.10
+
+
+def _green_cell_label(sheet: Any, cell: Any) -> tuple[Optional[str], Optional[str]]:
+    candidates = []
+    for row_offset, column_offset in ((0, -1), (0, -2), (-1, 0), (-2, 0)):
+        row = cell.row + row_offset
+        column = cell.column + column_offset
+        if row < 1 or column < 1:
+            continue
+        label_cell = sheet.cell(row, column)
+        if _has_value(label_cell.value):
+            candidates.append((str(label_cell.value), label_cell.coordinate))
+    return candidates[0] if candidates else (None, None)
+
+
+def _normalize_green_value(field: str, value: Any) -> Any:
+    if field in {
+        "annual_quantity", "target_price", "customer_delivery_frequency_days",
+        "customer_productivity_percentage", "profitability_target",
+    }:
+        return _number(value)
+    if field == "customer_payment_days":
+        numeric = _number(value)
+        if numeric is not None:
+            return numeric
+        match = re.search(r"\d+(?:[.,]\d+)?", str(value or ""))
+        return _number(match.group(0)) if match else None
+    if field in {
+        "quotation_currency", "target_price_currency", "purchasing_currency",
+    }:
+        return normalize_currency_code(value)
+    if field == "platform":
+        key = _text(value)
+        if key in {"yes", "y", "true", "1", "oui"}:
+            return True
+        if key in {"no", "n", "false", "0", "non"}:
+            return False
+    return _json_value(value)
 
 
 def _resolve_stored_path(value: Any) -> Optional[Path]:
@@ -379,6 +468,8 @@ def _extract_excel_fields_from_workbooks(
     candidates: List[Dict[str, Any]] = []
     warnings: List[str] = []
     sheet_inventory = []
+    green_commercial_inputs: List[Dict[str, Any]] = []
+    unmapped_green_inputs: List[Dict[str, Any]] = []
 
     external_links = len(getattr(formulas, "_external_links", []) or [])
     if external_links:
@@ -450,6 +541,61 @@ def _extract_excel_fields_from_workbooks(
         value_sheet = values[sheet.title]
         for row in sheet.iter_rows():
             for cell in row:
+                if not _is_green_fill(cell):
+                    continue
+                value, is_formula, formula = _cell_value(
+                    sheet, value_sheet, cell
+                )
+                if not _has_value(value):
+                    continue
+                displayed_label, label_cell = _green_cell_label(sheet, cell)
+                field = _field_from_label(displayed_label)
+                record = {
+                    "workbook_filename": workbook_path.name,
+                    "sheet": sheet.title,
+                    "cell_address": cell.coordinate,
+                    "displayed_label": displayed_label,
+                    "label_cell": label_cell,
+                    "value": _json_value(value),
+                    "number_format": cell.number_format,
+                    "fill_color": _fill_color(cell),
+                    "is_formula": is_formula,
+                    "formula": formula,
+                    "extraction_confidence": "high" if field else "unmapped",
+                    "normalized_destination_field": field,
+                }
+                if not field:
+                    unmapped_green_inputs.append(record)
+                    continue
+                normalized_value = _normalize_green_value(field, value)
+                if not _has_value(normalized_value):
+                    record["extraction_confidence"] = "low"
+                    record["mapping_warning"] = (
+                        "Recognized label, but the value could not be normalized."
+                    )
+                    unmapped_green_inputs.append(record)
+                    continue
+                record["normalized_value"] = normalized_value
+                green_commercial_inputs.append(record)
+                candidates.append(_candidate(
+                    field,
+                    normalized_value,
+                    source_file=workbook_path.name,
+                    source_sheet=sheet.title,
+                    source_cell=cell.coordinate,
+                    raw_label=displayed_label,
+                    raw_value=value,
+                    confidence="high",
+                    priority=3,
+                    is_formula=is_formula,
+                    formula=formula,
+                    source_type="green_commercial_workbook_input",
+                    number_format=cell.number_format,
+                    fill_color=_fill_color(cell),
+                    label_cell=label_cell,
+                ))
+        for row in sheet.iter_rows():
+            for cell in row:
                 field = _field_from_label(cell.value)
                 if not field:
                     continue
@@ -505,6 +651,8 @@ def _extract_excel_fields_from_workbooks(
         "candidates": candidates,
         "warnings": list(dict.fromkeys(warnings)),
         "sheets": sheet_inventory,
+        "green_commercial_inputs": green_commercial_inputs,
+        "unmapped_green_inputs": unmapped_green_inputs,
         "macros_executed": False,
     }
     return result
@@ -781,6 +929,8 @@ def extract_customer_input_package(
     candidates = []
     warnings = []
     source_reports = []
+    green_commercial_inputs = []
+    unmapped_green_inputs = []
     structured = extract_structured_request_fields(structured_payload)
     candidates.extend(structured["candidates"])
     source_reports.append(structured)
@@ -798,6 +948,8 @@ def extract_customer_input_package(
         candidates.extend(report.get("candidates") or [])
         warnings.extend(report.get("warnings") or [])
         source_reports.append(report)
+        green_commercial_inputs.extend(report.get("green_commercial_inputs") or [])
+        unmapped_green_inputs.extend(report.get("unmapped_green_inputs") or [])
     merged = merge_customer_input_candidates(candidates, warnings)
     validation = validate_resolved_customer_input(merged)
     return {
@@ -808,6 +960,8 @@ def extract_customer_input_package(
             for item in discovered
         ],
         "source_reports": source_reports,
+        "green_commercial_inputs": green_commercial_inputs,
+        "unmapped_green_inputs": unmapped_green_inputs,
     }
 
 
@@ -834,6 +988,10 @@ def apply_resolution_to_customer_input(payload: Dict[str, Any], resolution: Dict
         "quotation_currency": "quotation_currency",
         "purchasing_currency": "purchasing_currency",
         "drawing_reference": "drawing_reference",
+        "customer_payment_days": "customer_payment_days",
+        "customer_incoterm": "customer_incoterm",
+        "customer_delivery_frequency_days": "customer_delivery_frequency_days",
+        "platform": "platform",
     }
     for source, destination in mapping.items():
         if _has_value(values.get(source)):
@@ -847,4 +1005,27 @@ def apply_resolution_to_customer_input(payload: Dict[str, Any], resolution: Dict
         result["quantity_by_year"] = annual["quantity_by_year"]
         result["qmax"] = annual.get("qmax")
         result["annual_quantity_derivation"] = annual.get("derivation_method")
+    productivity_percentage = values.get("customer_productivity_percentage")
+    productivity_basis = values.get("productivity_basis")
+    if _has_value(productivity_percentage) or _has_value(productivity_basis):
+        result["customer_productivity"] = {
+            **dict(result.get("customer_productivity") or {}),
+            **(
+                {"percentage": productivity_percentage}
+                if _has_value(productivity_percentage) else {}
+            ),
+            **(
+                {"basis": productivity_basis}
+                if _has_value(productivity_basis) else {}
+            ),
+        }
+    for field in ("capex_tooling_treatment", "profitability_target", "indexation"):
+        if _has_value(values.get(field)):
+            result[f"workbook_{field}"] = values[field]
+    result["green_commercial_inputs"] = (
+        resolution.get("green_commercial_inputs") or []
+    )
+    result["unmapped_green_inputs"] = (
+        resolution.get("unmapped_green_inputs") or []
+    )
     return result

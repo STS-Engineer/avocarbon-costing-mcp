@@ -34,6 +34,9 @@ output_contract:
     - pricing_unit
     - payment_days
     - incoterm
+    - supplier_name
+    - origin_zone
+    - ap_value_basis
     - transport_cost
     - transport_basis
     - customs_cost
@@ -41,6 +44,10 @@ output_contract:
     - forwarder_fee
     - forwarder_basis
   priced_value_rule: A numerical price without currency or pricing_unit is incomplete.
+  ap_value_basis_rule: >
+    ap_value_basis must be base_purchase_value or delivered_purchase_value.
+    If it cannot be determined, return status blocked with ap_value_basis as
+    the explicit missing field.
   incomplete_offer_rule: >
     If currency or pricing_unit cannot be determined, return status blocked with
     exactly one explicit missing field and do not return a usable recommended offer.

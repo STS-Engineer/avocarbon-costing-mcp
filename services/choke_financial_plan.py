@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -160,7 +159,7 @@ def _component_rows(
     rows = []
     for item in technical.get("component_breakdown") or []:
         component_id = str(item.get("component_id") or "").strip()
-        if not component_id or item.get("status") != "resolved":
+        if not component_id or item.get("status") not in {"resolved", "resolved_assumption"}:
             continue
         override = overrides.get(component_id) if isinstance(overrides, Mapping) else {}
         override = override if isinstance(override, Mapping) else {}
@@ -176,6 +175,9 @@ def _component_rows(
             "payment_days": _d(override.get("payment_days"), _d(offer.get("payment_days"))),
             "incoterm": str(override.get("incoterm") or offer.get("incoterm") or "").upper(),
             "zone_relation": str(override.get("zone_relation") or "").lower(),
+            "origin_zone": override.get("origin_zone") or offer.get("origin_zone"),
+            "ap_value_basis": override.get("ap_value_basis") or offer.get("ap_value_basis"),
+            "source_paths": dict(override.get("source_paths") or {}),
             "source": override.get("source") or "component_output",
         })
     return rows
@@ -190,6 +192,7 @@ def financial_readiness(
 ) -> Dict[str, Any]:
     mode = str(commercial.get("mode") or "firm").lower()
     missing: List[str] = []
+    firm_only_missing: List[str] = []
     warnings: List[str] = []
     unit_data = unit_data or {}
     components = list(component_rows or _component_rows(technical_result, commercial))
@@ -221,13 +224,21 @@ def financial_readiness(
         "customer_delivery_frequency_days",
         "platform",
         "discount_rate",
-        "profitability_target",
         "capex_tooling_treatment",
-        "ap_value_basis",
-        "wip_value_basis",
     ):
         if field not in commercial or commercial.get(field) in (None, ""):
             missing.append(field)
+    if (
+        commercial.get("solve_selling_price") is True
+        and commercial.get("scenario_solver") is not True
+    ):
+        target = commercial.get("product_profitability_target")
+        if not isinstance(target, Mapping):
+            missing.append("product_profitability_target")
+        elif not target.get("source_field"):
+            missing.append("product_profitability_target.source_field")
+        elif target.get("target_interpretation") not in {"npv_zero", "npv_amount"}:
+            missing.append("product_profitability_target.target_interpretation")
     for explicit_zero_map in (
         "material_indexation_rates",
         "plant_indexation_rates",
@@ -241,15 +252,49 @@ def financial_readiness(
     tax_rate = commercial.get("tax_rate", unit_data.get("company_tax_rate"))
     if tax_rate in (None, ""):
         missing.append("tax_rate")
+    wip_material_basis = commercial.get("wip_material_basis")
+    if wip_material_basis not in {"base_material", "delivered_material"}:
+        if mode == "firm":
+            missing.append("wip_material_basis")
+            firm_only_missing.append("wip_material_basis")
+        else:
+            warnings.append(
+                "WIP material basis is not approved; preliminary mode uses "
+                "base_material as a visible assumption."
+            )
+    financing_interest_basis = commercial.get("financing_interest_basis")
+    if financing_interest_basis not in {
+        "closing_balance", "opening_balance", "average_balance",
+    }:
+        warnings.append(
+            "Financing interest basis is not approved; closing_balance is "
+            "used provisionally."
+        )
 
     for component in components:
         cid = component.get("component_id")
+        component_missing = []
         if component.get("payment_days") is None:
-            missing.append(f"supplier_payment_days.{cid}")
+            component_missing.append("payment_days")
         if not component.get("incoterm"):
-            missing.append(f"supplier_incoterm.{cid}")
+            component_missing.append("incoterm")
         if component.get("zone_relation") not in {"same", "different"}:
-            missing.append(f"supplier_zone_relation.{cid}")
+            component_missing.append("zone_relation")
+        if component.get("ap_value_basis") not in {
+            "base_purchase_value", "delivered_purchase_value"
+        }:
+            component_missing.append("ap_value_basis")
+        if component_missing:
+            firm_only_missing.extend(
+                f"component_ap.{cid}.{field}" for field in component_missing
+            )
+            if mode == "firm":
+                missing.extend(f"component_ap.{cid}.{field}" for field in component_missing)
+            else:
+                warnings.append(
+                    f"Preliminary AP excludes {cid}; unresolved fields: "
+                    + ", ".join(component_missing)
+                )
 
     treatment = commercial.get("capex_tooling_treatment")
     if isinstance(treatment, Mapping):
@@ -267,6 +312,9 @@ def financial_readiness(
     unresolved = technical_result.get("unresolved_material_components") or []
     if unresolved:
         labels = [str(item.get("component_id") or item) for item in unresolved]
+        firm_only_missing.extend(
+            f"unresolved_component.{item}" for item in labels
+        )
         if mode == "firm":
             missing.extend(f"unresolved_component.{item}" for item in labels)
         else:
@@ -274,20 +322,50 @@ def financial_readiness(
                 "Preliminary financial model - unresolved component costs excluded: "
                 + ", ".join(labels)
             )
+    if technical_result.get("technical_preliminary_status") == "resolved_assumption":
+        warnings.append(
+            "Technical preliminary result contains approved calculation rules "
+            "that remain assumption-driven and are not firm-commercial inputs."
+        )
 
+    technical_firm_status = technical_result.get("technical_firm_status")
+    if technical_firm_status == "blocked":
+        firm_only_missing.extend(
+            technical_result.get("technical_firm_blockers")
+            or ["technical_firm_status"]
+        )
     missing = _unique(missing)
+    firm_only_missing = _unique(firm_only_missing)
     structural = [item for item in missing if not item.startswith("unresolved_component.")]
     if structural or (mode == "firm" and unresolved):
         status = "blocked"
-    elif unresolved:
+    elif unresolved or (mode == "preliminary" and warnings):
         status = "preliminary_incomplete"
     else:
         status = "ready"
+    preliminary_structural = [
+        item for item in structural
+        if item not in firm_only_missing
+    ]
+    preliminary_status = (
+        "blocked" if preliminary_structural else
+        "preliminary_assumption" if warnings or unresolved else
+        "ready"
+    )
+    firm_status = (
+        "blocked" if structural or firm_only_missing else "ready"
+    )
     return {
         "financial_status": status,
+        "financial_preliminary_status": preliminary_status,
+        "financial_firm_status": firm_status,
+        "financial_firm_blockers": _unique([*structural, *firm_only_missing]),
         "mode": mode,
         "missing_inputs": missing,
         "warnings": warnings,
+        "product_profitability_target": commercial.get(
+            "product_profitability_target"
+        ),
         "commercially_usable": status == "ready" and mode == "firm",
     }
 
@@ -371,6 +449,12 @@ def _investment_schedule(
     converted = _convert_assets(assets, commercial, reporting_currency)
     treatment = commercial.get("capex_tooling_treatment") or {}
     depreciation_years = int(_d(commercial.get("depreciation_years"), Decimal("5")) or 5)
+    depreciation_start_period = str(
+        commercial.get("depreciation_start_period") or "Y1"
+    )
+    if depreciation_start_period not in PERIODS:
+        depreciation_start_period = "Y1"
+    depreciation_start_index = PERIODS.index(depreciation_start_period)
     schedule = {
         period: {
             "generic_capex": ZERO,
@@ -392,6 +476,25 @@ def _investment_schedule(
             configured = {"type": configured}
         configured = configured if isinstance(configured, Mapping) else {}
         treatment_type = str(configured.get("type") or "").lower()
+        included = asset.get("included", True) is not False
+        if not included:
+            details.append({
+                "source_id": asset["source_id"],
+                "category": category,
+                "included": False,
+                "exclusion_reason": asset.get("exclusion_reason") or "excluded_by_source",
+                "estimated": asset.get("estimated", True),
+                "confidence": asset.get("confidence"),
+                "source_currency": asset["currency"],
+                "source_amount": _number(asset["amount_decimal"]),
+                "fx_rate": _number(asset["fx_rate"], PER_UNIT_QUANTUM),
+                "converted_amount": _number(amount),
+                "reporting_currency": reporting_currency,
+                "treatment": treatment_type or None,
+                "depreciable_basis": 0.0,
+                "validation_questions": asset.get("validation_questions") or [],
+            })
+            continue
         if category == "generic_capex":
             schedule["Y-1"]["generic_capex"] += amount
         elif category == "specific_capex":
@@ -412,11 +515,32 @@ def _investment_schedule(
         depreciable_basis = amount * depreciable_percent
         if depreciable_basis:
             annual = depreciable_basis / Decimal(depreciation_years)
-            for period in PERIODS[1:1 + depreciation_years]:
+            depreciation_periods = PERIODS[
+                depreciation_start_index:depreciation_start_index + depreciation_years
+            ]
+            for period in depreciation_periods:
                 schedule[period]["depreciation"] += annual
+        else:
+            annual = ZERO
+            depreciation_periods = []
+        asset_book_value = ZERO
+        asset_schedule = []
+        for period in PERIODS:
+            opening_book_value = asset_book_value
+            if period == "Y-1":
+                asset_book_value = depreciable_basis
+            charge = annual if period in depreciation_periods else ZERO
+            asset_book_value = max(ZERO, asset_book_value - charge)
+            asset_schedule.append({
+                "period": period,
+                "opening_book_value": _number(opening_book_value),
+                "charge": _number(charge),
+                "closing_book_value": _number(asset_book_value),
+            })
         details.append({
             "source_id": asset["source_id"],
             "category": category,
+            "included": True,
             "estimated": asset.get("estimated", True),
             "confidence": asset.get("confidence"),
             "source_currency": asset["currency"],
@@ -426,8 +550,29 @@ def _investment_schedule(
             "reporting_currency": reporting_currency,
             "treatment": treatment_type or "generic_capex_default_depreciation",
             "depreciable_basis": _number(depreciable_basis),
+            "depreciation_start_period": (
+                depreciation_periods[0] if depreciation_periods else None
+            ),
+            "depreciation_end_period": (
+                depreciation_periods[-1] if depreciation_periods else None
+            ),
+            "annual_charge": _number(annual),
+            "depreciation_schedule": asset_schedule,
+            "validation_questions": asset.get("validation_questions") or [],
         })
-    return {"schedule": schedule, "assets": details, "depreciation_years": depreciation_years}
+    return {
+        "schedule": schedule,
+        "assets": details,
+        "depreciation_years": depreciation_years,
+        "depreciation_start_period": depreciation_start_period,
+        "total_depreciable_basis": sum(
+            [
+                _d(item.get("depreciable_basis"), ZERO) or ZERO
+                for item in details if item.get("included")
+            ],
+            ZERO,
+        ),
+    }
 
 
 def calculate_financial_plan(
@@ -452,7 +597,6 @@ def calculate_financial_plan(
             "component_rows": components,
             "investment_assets": assets,
         }),
-        "calculated_at": datetime.now(timezone.utc).isoformat(),
         **readiness,
     }
     if readiness["financial_status"] == "blocked":
@@ -485,11 +629,23 @@ def calculate_financial_plan(
     platform_safety = _d(commercial.get("platform_safety_stock_days"), ZERO) or ZERO
     customer_transit = _d(commercial.get("customer_transit_days"), ZERO) or ZERO
     wip_days = _d(commercial.get("wip_days"), Decimal("5")) or Decimal("5")
-    ap_basis = str(commercial.get("ap_value_basis"))
-    wip_basis = str(commercial.get("wip_value_basis"))
+    configured_wip_basis = commercial.get("wip_material_basis")
+    wip_material_basis = (
+        configured_wip_basis
+        if configured_wip_basis in {"base_material", "delivered_material"}
+        else "base_material"
+    )
     customer_incoterm = str(commercial.get("customer_incoterm") or "").upper()
     discount_rate = _rate(commercial.get("discount_rate")) or ZERO
     financing_rate = _rate(commercial.get("financing_rate"), Decimal("0.08")) or Decimal("0.08")
+    configured_financing_basis = commercial.get("financing_interest_basis")
+    financing_interest_basis = (
+        configured_financing_basis
+        if configured_financing_basis in {
+            "closing_balance", "opening_balance", "average_balance",
+        }
+        else "closing_balance"
+    )
     tax_rate = _rate(commercial.get("tax_rate", unit_data.get("company_tax_rate"))) or ZERO
     business_links = commercial.get("business_link_values") or {}
 
@@ -501,6 +657,8 @@ def calculate_financial_plan(
     cumulative_plant_factor = ONE
     cumulative_logistics_factor = ONE
     cumulative_discounted = ZERO
+    ending_book_value = ZERO
+    closing_financing_balance = ZERO
 
     for index, year_info in enumerate(build_year_structure(sop_year)):
         period = year_info["period"]
@@ -560,9 +718,29 @@ def calculate_financial_plan(
         rm_transit = ZERO
         rm_in_house = ZERO
         for component in components:
+            component_ap_basis = str(component.get("ap_value_basis") or "")
+            ap_missing = []
+            if component_ap_basis not in {
+                "base_purchase_value", "delivered_purchase_value"
+            }:
+                ap_missing.append("ap_value_basis")
+            if _d(component.get("payment_days")) is None:
+                ap_missing.append("payment_days")
+            if not component.get("incoterm"):
+                ap_missing.append("incoterm")
+            if component.get("zone_relation") not in {"same", "different"}:
+                ap_missing.append("zone_relation")
+            if ap_missing:
+                component_trace.append({
+                    "component_id": component.get("component_id"),
+                    "status": "excluded_preliminary",
+                    "excluded_fields": ap_missing,
+                    "source_paths": component.get("source_paths") or {},
+                })
+                continue
             per_product = (
                 component.get("base_cost_per_product")
-                if ap_basis == "base_purchase_value"
+                if component_ap_basis == "base_purchase_value"
                 else component.get("delivered_cost_per_product")
             )
             per_product = _d(per_product, ZERO) or ZERO
@@ -580,22 +758,31 @@ def calculate_financial_plan(
                 "supplier": component.get("supplier"),
                 "payment_days": _number(payment_days),
                 "annual_purchase_value": _number(annual_purchase),
+                "ap_value_basis": component_ap_basis,
                 "ap_value": _number(component_ap),
                 "currency": component.get("currency") or reporting_currency,
                 "incoterm": component.get("incoterm"),
                 "zone_relation": component.get("zone_relation"),
+                "origin_zone": component.get("origin_zone"),
+                "source_paths": component.get("source_paths") or {},
                 "rm_transit_days": _number(days["rm_transit"]),
                 "rm_in_house_days": _number(days["rm_in_house"]),
                 "source": component.get("source"),
             })
 
-        if wip_basis == "delivered_material_plus_conversion":
-            wip_annual_basis = material + transport + dl + voh
-        elif wip_basis == "material_only":
-            wip_annual_basis = material
-        else:
-            wip_annual_basis = material + transport + dl + voh + foh + fee
-        wip = wip_annual_basis / DAYS_PER_YEAR * wip_days
+        half_conversion_per_product = (
+            annual_dl_pp + annual_voh_pp + annual_foh_pp
+        ) / Decimal("2")
+        wip_material_per_product = (
+            annual_base_material_pp
+            if wip_material_basis == "base_material"
+            else annual_base_material_pp + annual_logistics_pp
+        )
+        wip_basis_per_product = (
+            wip_material_per_product + half_conversion_per_product
+        )
+        wip_annual_basis = quantity * wip_basis_per_product
+        wip = quantity / DAYS_PER_YEAR * wip_days * wip_basis_per_product
         fg_in_house_days = (
             Decimal("2") / Decimal("3") * delivery_frequency
             if platform
@@ -622,15 +809,75 @@ def calculate_financial_plan(
         tooling_expenditure = inv["tooling_expenditure"]
         collections = inv["customer_collections"]
         depreciation = inv["depreciation"]
+        beginning_book_value = ending_book_value
+        if period == "Y-1":
+            ending_book_value = investment["total_depreciable_basis"]
+        else:
+            ending_book_value = max(ZERO, beginning_book_value - depreciation)
         investment_cash = generic_capex + specific_capex + tooling_expenditure
-        cash_evaluation = ebitda - delta_twc - investment_cash + collections
-        financed_basis = abs(cash_evaluation) if cash_evaluation < ZERO else ZERO
-        financial_charge = financed_basis * financing_rate
+        business_link = _d(_period_value(business_links, period, ZERO), ZERO) or ZERO
+        opening_financing_balance = closing_financing_balance
+
+        # Taxes depend on the financing charge, while the financing requirement
+        # includes taxes. Solve that small fixed point without rounding.
+        financial_charge = ZERO
+        for _ in range(100):
+            operating_result = ebitda - depreciation - financial_charge
+            taxable_result = max(ZERO, operating_result)
+            taxes = taxable_result * tax_rate
+            cash_before_financing = (
+                ebitda - delta_twc - investment_cash + collections
+                - taxes - business_link
+            )
+            applicable_balance = max(
+                ZERO, opening_financing_balance - cash_before_financing
+            )
+            if financing_interest_basis == "opening_balance":
+                interest_basis = opening_financing_balance
+            elif financing_interest_basis == "average_balance":
+                interest_basis = (
+                    opening_financing_balance + applicable_balance
+                ) / Decimal("2")
+            else:
+                interest_basis = applicable_balance
+            next_charge = interest_basis * financing_rate
+            if abs(next_charge - financial_charge) <= Decimal("1E-20"):
+                financial_charge = next_charge
+                break
+            financial_charge = next_charge
+
+        operating_result = ebitda - depreciation - financial_charge
+        taxable_result = max(ZERO, operating_result)
+        taxes = taxable_result * tax_rate
+        cash_before_financing = (
+            ebitda - delta_twc - investment_cash + collections
+            - taxes - business_link
+        )
+        financing_requirement = (
+            opening_financing_balance - cash_before_financing
+        )
+        drawdown = max(ZERO, -cash_before_financing)
+        repayment = (
+            min(opening_financing_balance, cash_before_financing)
+            if cash_before_financing > ZERO else ZERO
+        )
+        applicable_balance = (
+            opening_financing_balance + drawdown - repayment
+        )
+        if financing_interest_basis == "opening_balance":
+            interest_basis = opening_financing_balance
+        elif financing_interest_basis == "average_balance":
+            interest_basis = (
+                opening_financing_balance + applicable_balance
+            ) / Decimal("2")
+        else:
+            interest_basis = applicable_balance
+        financial_charge = interest_basis * financing_rate
+        closing_financing_balance = applicable_balance + financial_charge
         operating_result = ebitda - depreciation - financial_charge
         taxable_result = max(ZERO, operating_result)
         taxes = taxable_result * tax_rate
         net_result = operating_result - taxes
-        business_link = _d(_period_value(business_links, period, ZERO), ZERO) or ZERO
         annual_cash_flow = (
             ebitda
             - financial_charge
@@ -657,12 +904,23 @@ def calculate_financial_plan(
                 "formula": "opening - productivity + material_indexation + plant_indexation + fx_adjustment",
             },
             "per_product": {
+                "selling_price": _number(final_price, PER_UNIT_QUANTUM),
                 "base_material": _number(annual_base_material_pp, PER_UNIT_QUANTUM),
                 "transport": _number(annual_logistics_pp, PER_UNIT_QUANTUM),
                 "dl": _number(annual_dl_pp, PER_UNIT_QUANTUM),
                 "voh": _number(annual_voh_pp, PER_UNIT_QUANTUM),
                 "foh": _number(annual_foh_pp, PER_UNIT_QUANTUM),
                 "fee": _number(annual_fee_pp, PER_UNIT_QUANTUM),
+                "gmdc": _number(
+                    final_price - annual_base_material_pp - annual_logistics_pp
+                    - annual_dl_pp - annual_voh_pp,
+                    PER_UNIT_QUANTUM,
+                ),
+                "ebitda": _number(
+                    final_price - annual_base_material_pp - annual_logistics_pp
+                    - annual_dl_pp - annual_voh_pp - annual_foh_pp - annual_fee_pp,
+                    PER_UNIT_QUANTUM,
+                ),
             },
             "sales": _number(sales),
             "material": _number(material),
@@ -674,6 +932,14 @@ def calculate_financial_plan(
             "fee": _number(fee),
             "ebitda": _number(ebitda),
             "ar": _number(ar),
+            "ar_trace": {
+                "source_payment_term": commercial.get("customer_payment_term"),
+                "normalized_payment_days": _number(customer_days),
+                "normalization_source": commercial.get("customer_payment_days_source")
+                or "explicit_numeric_input",
+                "formula": "annual sales / 365 * customer payment days",
+                "value": _number(ar),
+            },
             "ap": _number(ap),
             "ap_component_breakdown": component_trace,
             "rm_transit": _number(rm_transit),
@@ -688,6 +954,76 @@ def calculate_financial_plan(
                 "fg_transit": _number(fg_transit_days),
                 "fg_platform": _number(fg_platform_days),
             },
+            "inventory_trace": {
+                "rm_transit": {
+                    "days": "component-specific",
+                    "value_basis": "component-specific",
+                    "formula": "sum(component annual purchase / 365 * ownership transit days)",
+                    "source": "supplier Incoterm and same/different-zone rule",
+                    "value": _number(rm_transit),
+                },
+                "rm_in_house": {
+                    "days": "component-specific safety plus cycle stock",
+                    "value_basis": "component-specific",
+                    "formula": "sum(component annual purchase / 365 * in-house days)",
+                    "source": "Olivier default or supplier_stock_overrides",
+                    "value": _number(rm_in_house),
+                },
+                "wip": {
+                    "days": _number(wip_days),
+                    "value_basis": (
+                        f"{wip_material_basis}_plus_half_conversion"
+                    ),
+                    "selected_material_basis": wip_material_basis,
+                    "selected_material_basis_status": (
+                        "approved"
+                        if configured_wip_basis == wip_material_basis
+                        else "provisional_default"
+                    ),
+                    "material_per_product": _number(
+                        wip_material_per_product, PER_UNIT_QUANTUM
+                    ),
+                    "dl_per_product": _number(annual_dl_pp, PER_UNIT_QUANTUM),
+                    "voh_per_product": _number(annual_voh_pp, PER_UNIT_QUANTUM),
+                    "foh_per_product": _number(annual_foh_pp, PER_UNIT_QUANTUM),
+                    "fee_per_product_excluded": _number(
+                        annual_fee_pp, PER_UNIT_QUANTUM
+                    ),
+                    "half_conversion_per_product": _number(
+                        half_conversion_per_product, PER_UNIT_QUANTUM
+                    ),
+                    "basis_per_product": _number(
+                        wip_basis_per_product, PER_UNIT_QUANTUM
+                    ),
+                    "formula": (
+                        "annual quantity / 365 * WIP days * "
+                        "(Material + (DL + VOH + FOH) / 2)"
+                    ),
+                    "source": "Olivier Spicker confirmed Choke WIP rule",
+                    "value": _number(wip),
+                },
+                "fg_in_house": {
+                    "days": _number(fg_in_house_days),
+                    "value_basis": "full_manufacturing_cost",
+                    "formula": "annual finished cost / 365 * FG in-house days",
+                    "source": "platform and delivery-frequency rule",
+                    "value": _number(fg_in_house),
+                },
+                "fg_transit": {
+                    "days": _number(fg_transit_days),
+                    "value_basis": "full_manufacturing_cost",
+                    "formula": "annual finished cost / 365 * seller-owned transit days",
+                    "source": "customer Incoterm/platform rule",
+                    "value": _number(fg_transit),
+                },
+                "fg_platform": {
+                    "days": _number(fg_platform_days),
+                    "value_basis": "full_manufacturing_cost",
+                    "formula": "annual finished cost / 365 * platform days",
+                    "source": "platform safety and delivery-frequency rule",
+                    "value": _number(fg_platform),
+                },
+            },
             "total_inventory": _number(total_inventory),
             "twc": _number(twc),
             "delta_twc": _number(delta_twc),
@@ -696,9 +1032,45 @@ def calculate_financial_plan(
             "tooling_expenditure": _number(tooling_expenditure),
             "customer_collections": _number(collections),
             "depreciation": _number(depreciation),
-            "cash_evaluation": _number(cash_evaluation),
-            "financed_cash_basis": _number(financed_basis),
+            "depreciation_trace": {
+                "method": "straight_line",
+                "period_years": investment["depreciation_years"],
+                "beginning_book_value": _number(beginning_book_value),
+                "charge": _number(depreciation),
+                "ending_book_value": _number(ending_book_value),
+            },
+            "cash_evaluation": _number(cash_before_financing),
+            "cash_before_financing": _number(cash_before_financing),
+            "financing_requirement": _number(financing_requirement),
+            "opening_financing_balance": _number(opening_financing_balance),
+            "financing_drawdown": _number(drawdown),
+            "financing_repayment": _number(repayment),
+            "applicable_financing_balance": _number(applicable_balance),
+            "financing_interest_basis": financing_interest_basis,
+            "financing_interest_basis_value": _number(interest_basis),
+            "financed_cash_basis": _number(applicable_balance),
             "financial_charge": _number(financial_charge),
+            "closing_financing_balance": _number(closing_financing_balance),
+            "financing_trace": {
+                "sign_convention": (
+                    "Balances, drawdowns and charges are positive amounts owed. "
+                    "Positive cash repays opening debt before interest."
+                ),
+                "opening_balance": _number(opening_financing_balance),
+                "cash_before_financing": _number(cash_before_financing),
+                "drawdown": _number(drawdown),
+                "repayment": _number(repayment),
+                "applicable_balance": _number(applicable_balance),
+                "interest_basis_policy": financing_interest_basis,
+                "interest_basis_value": _number(interest_basis),
+                "financial_charge": _number(financial_charge),
+                "closing_balance": _number(closing_financing_balance),
+                "formula": (
+                    "applicable = opening + drawdown - repayment; "
+                    "charge = selected interest basis * financing rate; "
+                    "closing = applicable + charge"
+                ),
+            },
             "operating_result": _number(operating_result),
             "taxable_result": _number(taxable_result),
             "taxes": _number(taxes),
@@ -725,22 +1097,37 @@ def calculate_financial_plan(
         "npv_time_convention": "Y-1 is period 0; Y0 is period 1; Y6 is period 7.",
         "discount_rate": _number(discount_rate),
         "financing_rate": _number(financing_rate),
+        "financing_interest_basis": financing_interest_basis,
+        "financing_interest_basis_status": (
+            "approved"
+            if configured_financing_basis == financing_interest_basis
+            else "provisional_default"
+        ),
         "tax_rate": _number(tax_rate),
         "cost_structure": {
             key: _number(value, PER_UNIT_QUANTUM) for key, value in costs.items()
         },
         "foh_basis": technical_result.get("foh_basis") or "added_value_direct_cost",
         "fee_basis": technical_result.get("fee_basis") or "added_value_direct_cost",
-        "ap_value_basis": ap_basis,
-        "wip_value_basis": wip_basis,
+        "ap_value_basis": "component_specific",
+        "wip_material_basis": wip_material_basis,
+        "wip_material_basis_status": (
+            "approved"
+            if configured_wip_basis == wip_material_basis
+            else "provisional_default"
+        ),
+        "wip_value_basis": (
+            f"{wip_material_basis} + (DL + VOH + FOH) / 2"
+        ),
         "investment_schedule": investment,
         "assumptions": _unique([
             *quantity_assumptions,
             "Default Choke WIP is 5 days." if "wip_days" not in commercial else "",
             "Default finished-goods safety stock is 10 days."
             if "fg_safety_stock_days" not in commercial else "",
-            "Generic CAPEX depreciation defaults to five straight-line charges from Y0 through Y4."
-            if "depreciation_years" not in commercial else "",
+            "Depreciation uses five straight-line charges from Y1 through Y5."
+            if "depreciation_years" not in commercial
+            and "depreciation_start_period" not in commercial else "",
         ]),
         "rounding_policy": {
             "calculation_precision": "Decimal, 28 significant digits",
@@ -748,6 +1135,46 @@ def calculate_financial_plan(
             "per_product_output": "0.000000001 reporting-currency unit",
             "intermediate_rounding": "none",
         },
+    }
+
+
+def build_historical_comparison(
+    system_values: Mapping[str, Any],
+    historical_values: Mapping[str, Any],
+    explanations: Optional[Mapping[str, str]] = None,
+    acceptance: Optional[Mapping[str, bool]] = None,
+    validation_owner: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build an independent validation report; historical values never feed costing."""
+    explanations = explanations or {}
+    acceptance = acceptance or {}
+    rows = []
+    for metric in sorted(set(system_values) | set(historical_values)):
+        system = _d(system_values.get(metric))
+        historical = _d(historical_values.get(metric))
+        difference = (
+            system - historical if system is not None and historical is not None else None
+        )
+        percentage = (
+            difference / abs(historical) * Decimal("100")
+            if difference is not None and historical not in (None, ZERO)
+            else None
+        )
+        rows.append({
+            "metric": metric,
+            "system_value": _number(system, PER_UNIT_QUANTUM),
+            "historical_file_value": _number(historical, PER_UNIT_QUANTUM),
+            "absolute_difference": _number(abs(difference) if difference is not None else None, PER_UNIT_QUANTUM),
+            "percentage_difference": _number(percentage, PER_UNIT_QUANTUM),
+            "explanation": explanations.get(metric),
+            "accepted": acceptance.get(metric),
+            "validation_owner": validation_owner,
+        })
+    return {
+        "status": "comparison_only",
+        "historical_values_used_in_calculation": False,
+        "validation_owner": validation_owner,
+        "rows": rows,
     }
 
 
@@ -761,19 +1188,52 @@ def solve_selling_price(
     """Solve Y0 price with deterministic bracketed bisection."""
     commercial = dict(commercial_inputs)
     commercial["solve_selling_price"] = True
-    target_config = commercial.get("profitability_target") or {}
+    target_config = commercial.get("product_profitability_target") or {}
+    scenario_solver = commercial.get("scenario_solver") is True
     if not isinstance(target_config, Mapping):
-        return {"convergence_status": "blocked", "missing_inputs": ["profitability_target"]}
-    target_type = str(target_config.get("type") or "")
-    if target_type not in {"npv_zero", "npv_amount"}:
         return {
             "convergence_status": "blocked",
-            "missing_inputs": ["profitability_target.type"],
-            "message": "Supported V1 targets are npv_zero and npv_amount.",
+            "missing_inputs": ["product_profitability_target"],
+        }
+    source_field = target_config.get("source_field")
+    if not source_field:
+        return {
+            "convergence_status": "blocked",
+            "missing_inputs": ["product_profitability_target.source_field"],
+        }
+    target_type = (
+        "npv_zero"
+        if scenario_solver
+        else str(target_config.get("target_interpretation") or "")
+    )
+    if target_type not in {"npv_zero", "npv_amount"}:
+        blocker = {
+            "code": "roce_to_npv_semantics_unconfirmed",
+            "source_field": source_field,
+            "source_value": target_config.get("value"),
+            "discount_rate_percent": 12,
+        }
+        return {
+            "convergence_status": "blocked",
+            "missing_inputs": [
+                "product_profitability_target.target_interpretation"
+            ],
+            "source_product_target_field": source_field,
+            "product_target": dict(target_config),
+            "business_blocker": blocker,
+            "message": (
+                target_config.get("blocking_business_decision")
+                or "Confirm how the product-specific profitability field maps "
+                "to the NPV solver residual."
+            ),
         }
     target = ZERO if target_type == "npv_zero" else _d(target_config.get("value"))
     if target is None:
-        return {"convergence_status": "blocked", "missing_inputs": ["profitability_target.value"]}
+        return {
+            "convergence_status": "blocked",
+            "missing_inputs": ["product_profitability_target.value"],
+        }
+    commercial["discount_rate"] = Decimal("12")
 
     lower = _d(commercial.get("solver_lower_bound"), Decimal("0.000001")) or Decimal("0.000001")
     upper = _d(commercial.get("solver_upper_bound"), Decimal("1000000")) or Decimal("1000000")
@@ -815,6 +1275,7 @@ def solve_selling_price(
         return {
             "convergence_status": "no_solution_in_bounds",
             "target": {"type": target_type, "value": _number(target)},
+            "source_product_target_field": source_field,
             "bounds": {
                 "lower": _number(lower, PER_UNIT_QUANTUM),
                 "upper": _number(upper, PER_UNIT_QUANTUM),
@@ -844,19 +1305,25 @@ def solve_selling_price(
                 low_delta = mid_delta
 
     achieved = _d(result.get("npv_exact"), _d(result.get("npv")))
+    residual = achieved - target if achieved is not None else None
     converged = achieved is not None and (
         abs(achieved - target) <= tolerance or abs(upper - lower) <= price_tolerance
     )
     return {
         "convergence_status": "converged" if converged else "max_iterations_reached",
         "commercially_usable": (
-            converged
-            and result.get("financial_status") == "ready"
-            and commercial.get("mode") == "firm"
+            False
         ),
+        "solver_type": "scenario_solver",
+        "solver_label": "Scenario-only NPV=0 solver at 12%",
         "solved_y0_selling_price": _number(midpoint, PER_UNIT_QUANTUM),
         "target": {"type": target_type, "value": _number(target)},
+        "source_product_target_field": source_field,
+        "target_interpretation": target_type,
+        "product_target": dict(target_config),
+        "discount_rate": 0.12,
         "achieved_npv": _number(achieved),
+        "residual": _number(residual, PER_UNIT_QUANTUM),
         "iterations": iterations,
         "bounds": {
             "lower": _number(lower, PER_UNIT_QUANTUM),
@@ -866,7 +1333,7 @@ def solve_selling_price(
         "annual_financial_table": result.get("annual_table") or [],
         "financial_result": result,
         "warning": (
-            "Preliminary solved price is assumption-driven and is not commercially usable."
-            if commercial.get("mode") != "firm" else None
+            "Scenario-only price is not the approved product selling-price "
+            "solver and is not commercially usable."
         ),
     }

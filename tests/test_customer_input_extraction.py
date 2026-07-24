@@ -1,5 +1,6 @@
 from pathlib import Path
 from io import BytesIO
+import os
 
 import openpyxl
 import pytest
@@ -17,6 +18,15 @@ from services.customer_input_extraction import (
     normalize_delivery_location,
 )
 from services.customer_input_schema import normalize_customer_input
+
+
+ACTUAL_OLIVIER_WORKBOOK = Path(os.getenv(
+    "OLIVIER_GREEN_WORKBOOK_PATH",
+    (
+        r"C:\Users\youssef.benamor\Downloads\OneDrive_2026-07-22"
+        r"\01- Customer Input\Choke2024-06-22T06_54_40.0797274Z.xlsm"
+    ),
+))
 
 
 def _workbook(path: Path, *, hidden_currency=None, layout="rows") -> Path:
@@ -59,6 +69,31 @@ def _workbook(path: Path, *, hidden_currency=None, layout="rows") -> Path:
     finally:
         workbook.close()
     return path
+
+
+@pytest.mark.skipif(
+    not ACTUAL_OLIVIER_WORKBOOK.exists(),
+    reason="Actual Olivier RFQ workbook is not available on this machine.",
+)
+def test_actual_olivier_workbook_extraction_has_cell_provenance():
+    report = extract_excel_fields(ACTUAL_OLIVIER_WORKBOOK)
+    by_field = {}
+    for candidate in report["candidates"]:
+        by_field.setdefault(candidate["field"], []).append(candidate)
+    assert any(
+        item["value"] == "Rod Choke" and item["source_cell"] == "K4"
+        for item in by_field["product_name"]
+    )
+    assert any(
+        str(item["value"]) == "300440157" and item["source_cell"] == "N4"
+        for item in by_field["part_number"]
+    )
+    assert any(
+        item["value"] == "INR" and item["source_cell"] == "R14"
+        for item in by_field["quotation_currency"]
+    )
+    assert report["green_commercial_inputs"] == []
+    assert report["unmapped_green_inputs"] == []
 
 
 def _pdf(path: Path) -> Path:
@@ -244,6 +279,65 @@ def test_excel_reader_closes_formula_value_and_vba_archives(monkeypatch, tmp_pat
         "formulas.workbook.close",
         "formulas.vba.close",
     ]
+
+
+def test_green_commercial_cells_are_mapped_with_full_provenance(tmp_path):
+    workbook = openpyxl.Workbook()
+    path = tmp_path / "green-inputs.xlsx"
+    try:
+        sheet = workbook.active
+        sheet.title = "Commercial"
+        green = openpyxl.styles.PatternFill(
+            fill_type="solid", fgColor="00B050"
+        )
+        sheet["A1"] = "Payment terms"
+        sheet["B1"] = 60
+        sheet["B1"].fill = green
+        sheet["B1"].number_format = "0"
+        sheet["A2"] = "Incoterm"
+        sheet["B2"] = "FCA"
+        sheet["B2"].fill = green
+        sheet["A3"] = "Unmapped commercial note"
+        sheet["B3"] = "Special review"
+        sheet["B3"].fill = green
+        workbook.save(path)
+    finally:
+        workbook.close()
+
+    report = extract_excel_fields(path)
+    mapped = {
+        item["normalized_destination_field"]: item
+        for item in report["green_commercial_inputs"]
+    }
+    assert mapped["customer_payment_days"]["value"] == 60
+    assert mapped["customer_payment_days"]["cell_address"] == "B1"
+    assert mapped["customer_payment_days"]["displayed_label"] == "Payment terms"
+    assert mapped["customer_payment_days"]["number_format"] == "0"
+    assert mapped["customer_payment_days"]["fill_color"]
+    assert mapped["customer_incoterm"]["normalized_value"] == "FCA"
+    assert report["unmapped_green_inputs"][0]["value"] == "Special review"
+    assert report["unmapped_green_inputs"][0][
+        "normalized_destination_field"
+    ] is None
+
+
+def test_green_inputs_are_exposed_at_package_level(tmp_path):
+    workbook = openpyxl.Workbook()
+    path = tmp_path / "commercial.xlsx"
+    try:
+        sheet = workbook.active
+        sheet["A1"] = "Target price"
+        sheet["B1"] = 12.5
+        sheet["B1"].fill = openpyxl.styles.PatternFill(
+            fill_type="solid", fgColor="92D050"
+        )
+        workbook.save(path)
+    finally:
+        workbook.close()
+    result = extract_customer_input_package({}, [path])
+    assert result["green_commercial_inputs"][0][
+        "normalized_destination_field"
+    ] == "target_price"
 
 
 def _client_with_temp_inputs(monkeypatch, tmp_path):

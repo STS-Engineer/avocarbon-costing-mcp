@@ -191,9 +191,12 @@ Classification field in output must always be: External
 Actual sourcing origin must only be placed in recommended_offer.origin.
 For every numerical offer, recommended_offer must contain unit_price as a JSON
 number, currency, pricing_unit (pc, kg, g, or m), payment_days as a JSON number,
-incoterm, transport_cost, transport_basis, customs_cost, customs_basis,
+incoterm, supplier_name, origin_zone, and ap_value_basis set to either
+base_purchase_value or delivered_purchase_value, plus transport_cost,
+transport_basis, customs_cost, customs_basis,
 forwarder_fee, and forwarder_basis. A price without currency or pricing_unit is
-incomplete. If either cannot be determined, return status blocked with exactly
+incomplete. If currency, pricing_unit, payment_days, or ap_value_basis cannot
+be determined, return status blocked with exactly
 one explicit missing field and no usable recommended_offer. If you convert a supplier price, also include
 original_unit_price, original_currency, conversion_rate, conversion_rate_date,
 converted_unit_price, and converted_currency. Never inherit supplier-offer
@@ -262,3 +265,26 @@ def run_external_component_agent(component_payload, dry_run=True):
             "status": "blocked",
             "reason": f"Failed to prepare API call: {exc}",
         }
+
+
+def audit_external_agent_contract_deployment():
+    """Describe the real runtime boundary without claiming remote synchronization."""
+    return {
+        "yaml_path": str(AGENT_CONFIG_PATH),
+        "yaml_exists": AGENT_CONFIG_PATH.exists(),
+        "yaml_loaded_by_local_prompt_builder": False,
+        "production_invocation": (
+            "services.choke_sequential_agent_workflow uses "
+            "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID and an inline runtime payload"
+        ),
+        "workspace_agent_id_configured": bool(
+            str(os.getenv("CHATGPT_EXTERNAL_COMPONENT_AGENT_ID") or "").strip()
+        ),
+        "deployment_status": "manual_workspace_agent_sync_required",
+        "required_action": (
+            "Update the External Component Costing Workspace Agent's permanent "
+            "instructions/output contract in ChatGPT, save the draft, and publish "
+            "it. The local YAML is documentation/local configuration and is not "
+            "automatically loaded by the deployed Workspace Agent."
+        ),
+    }

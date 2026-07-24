@@ -40,6 +40,7 @@ from services.choke_financial_workflow import (
     get_financial_model_audit,
     get_financial_readiness,
     get_saved_financial_result,
+    save_financial_reference_comparison,
     solve_saved_selling_price,
 )
 
@@ -160,6 +161,15 @@ class FinancialPlanRequest(BaseModel):
         if normalized not in {"firm", "preliminary"}:
             raise ValueError("mode must be 'firm' or 'preliminary'")
         return normalized
+
+
+class FinancialReferenceComparisonRequest(BaseModel):
+    project_code: str
+    product_id: str
+    historical_values: Dict[str, Any] = Field(default_factory=dict)
+    explanations: Dict[str, str] = Field(default_factory=dict)
+    acceptance: Dict[str, bool] = Field(default_factory=dict)
+    validation_owner: str | None = None
 
 
 def _financial_inputs(request: FinancialPlanRequest) -> Dict[str, Any]:
@@ -406,3 +416,17 @@ def solve_workflow_selling_price(request: FinancialPlanRequest):
 @router.get("/financial-result/{project_code}/{product_id}")
 def workflow_financial_result(project_code: str, product_id: str):
     return _handle(lambda: get_saved_financial_result(project_code, product_id))
+
+
+@router.post("/compare-financial-reference")
+def compare_workflow_financial_reference(
+    request: FinancialReferenceComparisonRequest,
+):
+    return _handle(lambda: save_financial_reference_comparison(
+        request.project_code,
+        request.product_id,
+        request.historical_values,
+        request.explanations,
+        request.acceptance,
+        request.validation_owner,
+    ))

@@ -41,16 +41,45 @@ component AP = annual component purchase value / 365 * supplier payment days
 TWC = AR + total inventory - AP
 Delta TWC = current TWC - previous TWC
 cash evaluation = EBITDA - Delta TWC - investment expenditure + collections
-financial charge = max(0, -cash evaluation) * financing rate
+financial charge = selected financing balance * financing rate
 operating result = EBITDA - depreciation - financial charge
 taxes = max(0, operating result) * plant tax rate
 annual cash flow = EBITDA - financial charge - investment expenditure
                    + collections - taxes - Delta TWC - business link
 NPV = sum(annual cash flow * discount factor)
+
+The scenario selling-price solver fixes the discount rate at 12% and targets
+NPV = 0. It is always labelled `scenario_solver` and is never commercially
+usable. The existing product master field is
+`products.roce_target_percent`; it is reported with provenance, but the
+approved product-price solver remains blocked until the business maps ROCE to
+an NPV residual.
+
+## Confirmed Olivier Spicker rules
+
+- Accounts payable is calculated component by component. Each component output
+  supplies its own payment days and `ap_value_basis`
+  (`base_purchase_value` or `delivered_purchase_value`). Preliminary mode may
+  exclude an incomplete AP line with a warning; firm mode blocks.
+- Choke WIP uses
+  `annual quantity / 365 * WIP days * (Material + (DL + VOH + FOH) / 2)`.
+  `Material` must be explicitly selected as `base_material` or
+  `delivered_material`. Delivered material already contains logistics, so
+  transport is not added again. Preliminary mode visibly defaults to base
+  material; firm mode blocks without an approved selection.
+- Financing is accumulated. Positive cash first repays opening debt; the 8%
+  charge supports `closing_balance`, `opening_balance`, or `average_balance`.
+  The current closing-balance policy is provisional when no approved setting
+  is supplied, and the closing balance carries to the following year.
+- Straight-line depreciation starts in Y1 and has exactly five charges,
+  ending in Y5.
+- Provisional glue consumption uses 80% of confirmed ferrite length, a 1 mm
+  cylindrical strip, and density 1.5 g/cm3. It is preliminary only until
+  explicitly approved.
 ```
 
 Straight-line generic CAPEX depreciation defaults to exactly five charges,
-Y0 through Y4. Tooling and specific CAPEX follow their explicit treatment.
+Y1 through Y5. Tooling and specific CAPEX follow their explicit treatment.
 
 ## Existing model audit
 

@@ -525,3 +525,28 @@ been saved.
 `GET /api/choke-workflow/financial-model-audit`
 
 Returns the existing-model reuse and durable-schema gap assessment.
+
+### Compare with a historical reference
+
+`POST /api/choke-workflow/compare-financial-reference`
+
+```json
+{
+  "project_code": "24018-CHO-00",
+  "product_id": "300440157",
+  "historical_values": {
+    "Y0.selling_price": 20.5,
+    "Y0.ebitda": 1400000
+  },
+  "explanations": {
+    "Y0.ebitda": "Historical workbook used a different volume assumption."
+  },
+  "acceptance": {
+    "Y0.selling_price": false
+  },
+  "validation_owner": "Coster name"
+}
+```
+
+The historical values are comparison evidence only and are never imported into
+the production calculation.

@@ -21,8 +21,9 @@ Never silently multiplies incompatible units.
 """
 
 import re
+from math import pi
 from decimal import Decimal, InvalidOperation, getcontext
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from services.material_properties import derive_mass_g_from_cylindrical_wire
 from services.currency_service import convert_currency, normalize_currency_code
@@ -80,6 +81,39 @@ def _first_value(data: Any, paths: List[List[str]]) -> Any:
         value = _get_path(data, path)
         if value not in (None, ""):
             return value
+    return None
+
+
+def _first_value_with_path(
+    data: Any, paths: List[List[str]]
+) -> Tuple[Any, Optional[str]]:
+    for path in paths:
+        value = _get_path(data, path)
+        if value not in (None, ""):
+            return value, ".".join(path)
+    return None, None
+
+
+APPROVED_ORIGIN_ZONE_BY_COUNTRY = {
+    "china": "China South Pacific",
+    "india": "India",
+    "france": "Europe",
+    "germany": "Europe",
+    "italy": "Europe",
+    "spain": "Europe",
+    "poland": "Europe",
+    "tunisia": "Africa",
+    "morocco": "Africa",
+    "mexico": "North America",
+    "united states": "North America",
+    "usa": "North America",
+}
+
+
+def _payment_days(value: Any) -> Optional[float]:
+    number = _coerce_number(value)
+    if number is not None:
+        return number
     return None
 
 
@@ -205,11 +239,20 @@ def extract_bom_dimensional_fields(component_id: str, component: Dict[str, Any])
         if match:
             diameter = _coerce_number(match.group(1).replace(",", "."))
 
+    ferrite_length_mm = _coerce_number(value(
+        "ferrite_length_mm", "core_length_mm", "length_mm", "longueur_mm",
+    ))
+    approved = value(
+        "approved", "consumption_approved", "glue_consumption_approved",
+    ) is True
+
     normalized = {
         "weight_kg_per_product": weight_kg,
         "physical_mass_g_per_product": mass_g,
         "physical_length_mm_per_product": length_mm,
         "diameter_mm": diameter,
+        "ferrite_length_mm": ferrite_length_mm,
+        "assumption_approved": approved,
         "bom_count_per_product": bom_count,
         "quantity_per_product": quantity,
         "quantity_unit": normalized_quantity_unit,
@@ -223,6 +266,190 @@ def extract_bom_dimensional_fields(component_id: str, component: Dict[str, Any])
         ),
     }
     return normalized
+
+
+def _bom_lines(payload: Any) -> List[Dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return []
+    for key in ("components", "bom", "line_items", "bill_of_material"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [dict(item) for item in value if isinstance(item, Mapping)]
+    nested = payload.get("normalized_bom")
+    return _bom_lines(nested) if isinstance(nested, Mapping) else []
+
+
+def _is_ferrite_line(line: Mapping[str, Any]) -> bool:
+    text = " ".join(
+        str(line.get(key) or "")
+        for key in (
+            "component_id", "component", "component_name", "component_family",
+            "category", "designation", "product_designation",
+        )
+    ).lower()
+    return any(token in text for token in ("ferrite", "core", "barre"))
+
+
+def resolve_ferrite_length_mm(
+    normalized_bom: Optional[Mapping[str, Any]],
+    raw_bom: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve ferrite length with deterministic evidence priority."""
+    candidates: List[Dict[str, Any]] = []
+
+    def add_candidate(
+        value: Any, priority: int, source_path: str, evidence: Any
+    ) -> None:
+        number = _coerce_number(value)
+        if number is not None and number > 0:
+            candidates.append({
+                "value_mm": number,
+                "priority": priority,
+                "source_field_path": source_path,
+                "source_evidence": evidence,
+            })
+
+    for index, line in enumerate(_bom_lines(normalized_bom)):
+        if not _is_ferrite_line(line):
+            continue
+        for key in ("ferrite_length_mm", "core_length_mm", "length_mm"):
+            add_candidate(
+                line.get(key), 1, f"normalized_bom.components[{index}].{key}",
+                line.get(key),
+            )
+
+    for index, line in enumerate(_bom_lines(raw_bom)):
+        if not _is_ferrite_line(line):
+            continue
+        for container_name in (
+            "technical_inputs", "technical_specification", "specification",
+            "component_definition", "dimensions",
+        ):
+            container = line.get(container_name)
+            if not isinstance(container, Mapping):
+                continue
+            for key in ("ferrite_length_mm", "core_length_mm", "length_mm"):
+                add_candidate(
+                    container.get(key), 2,
+                    f"raw_bom.bom[{index}].{container_name}.{key}",
+                    container.get(key),
+                )
+
+    drawing_texts: List[Tuple[str, str]] = []
+    for root_name, payload in (("normalized_bom", normalized_bom), ("raw_bom", raw_bom)):
+        if not isinstance(payload, Mapping):
+            continue
+        for path in (
+            ("source", "drawing_specification"),
+            ("source", "drawing_title"),
+            ("drawing_specification",),
+            ("specification",),
+            ("technical_specification", "raw_costing_data"),
+        ):
+            value = _get_path(payload, list(path))
+            if value not in (None, ""):
+                drawing_texts.append((f"{root_name}." + ".".join(path), str(value)))
+    for index, line in enumerate(_bom_lines(raw_bom)):
+        if not _is_ferrite_line(line):
+            continue
+        for key in ("specification", "description", "product_designation", "designation"):
+            value = line.get(key)
+            if value not in (None, ""):
+                drawing_texts.append((f"raw_bom.bom[{index}].{key}", str(value)))
+
+    for path, text in drawing_texts:
+        patterns = (
+            r"(?:ferrite|core|barre)[^;\n]{0,80}?(?:length|longueur|l)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*mm",
+            r"(?:length|longueur)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*mm",
+            r"(?:[Øø]\s*\d+(?:[.,]\d+)?\s*[xX×]\s*)(\d+(?:[.,]\d+)?)\s*mm",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                add_candidate(
+                    match.group(1).replace(",", "."), 3, path, match.group(0)
+                )
+                break
+
+    candidates.sort(key=lambda item: item["priority"])
+    if not candidates:
+        return {
+            "status": "unresolved",
+            "ferrite_length_mm": None,
+            "source_field_path": None,
+            "source_evidence": None,
+            "source_priority": None,
+            "candidates": [],
+        }
+    selected = candidates[0]
+    return {
+        "status": "resolved",
+        "ferrite_length_mm": selected["value_mm"],
+        "source_field_path": selected["source_field_path"],
+        "source_evidence": selected["source_evidence"],
+        "source_priority": selected["priority"],
+        "candidates": candidates,
+    }
+
+
+def calculate_provisional_glue_consumption(
+    ferrite_length_mm: Any,
+    *,
+    approved: bool = False,
+    source_field_path: Optional[str] = None,
+    source_evidence: Any = None,
+) -> Dict[str, Any]:
+    """Apply Olivier Spicker's explicit provisional cylindrical-strip rule."""
+    length = _decimal(ferrite_length_mm)
+    if length is None or length <= 0:
+        return {
+            "status": "blocked",
+            "missing_inputs": ["confirmed_ferrite_length_mm"],
+        }
+    length_factor = Decimal("0.80")
+    strip_diameter_mm = Decimal("1")
+    radius_mm = strip_diameter_mm / Decimal("2")
+    density_g_cm3 = Decimal("1.5")
+    pi_decimal = Decimal(str(pi))
+    glue_length_mm = length * length_factor
+    volume_mm3 = pi_decimal * radius_mm * radius_mm * glue_length_mm
+    volume_cm3 = volume_mm3 / Decimal("1000")
+    mass_g = volume_cm3 * density_g_cm3
+    mass_kg = mass_g / Decimal("1000")
+    return {
+        "status": "resolved" if approved else "resolved_assumption",
+        "assumption_status": "approved" if approved else "provisional",
+        "approved": approved,
+        "source": "Olivier Spicker provisional rule",
+        "source_field_path": source_field_path,
+        "source_evidence": source_evidence,
+        "ferrite_length_mm": _decimal_float(length),
+        "length_factor": 0.8,
+        "glue_length_mm": _decimal_float(glue_length_mm),
+        "strip_diameter_mm": 1.0,
+        "density_g_cm3": 1.5,
+        "volume_mm3": _decimal_float(volume_mm3),
+        "volume_mm3_exact": _decimal_text(volume_mm3),
+        "volume_cm3": _decimal_float(volume_cm3),
+        "volume_cm3_exact": _decimal_text(volume_cm3),
+        "glue_mass_g_per_product": _decimal_float(mass_g),
+        "glue_mass_g_per_product_exact": _decimal_text(mass_g),
+        "glue_mass_kg_per_product": _decimal_float(mass_kg),
+        "glue_mass_kg_per_product_exact": _decimal_text(mass_kg),
+        "application_count": 1,
+        "application_count_status": "provisional_one_strip",
+        "formula": (
+            "length=ferrite_length*0.80; radius=1mm/2; "
+            "volume_mm3=pi*radius^2*length; volume_cm3=volume_mm3/1000; "
+            "mass_g=volume_cm3*1.5; mass_kg=mass_g/1000"
+        ),
+        "warning": (
+            None if approved else
+            "Provisional consumption calculated from 80% of ferrite length, "
+            "1 mm strip diameter and 1.5 g/cm3 density. "
+            "Technical validation required."
+        ),
+    }
 
 
 def resolve_annual_purchasing_quantity(
@@ -606,6 +833,13 @@ def resolve_component_offer(agent_raw: Optional[Dict[str, Any]]) -> Dict[str, An
         "pricing_basis": pricing_basis,
         "incoterm": offer_value("incoterm"),
         "origin": offer_value("origin"),
+        "origin_zone": offer_value("origin_zone", "supplier_country", "origin"),
+        "payment_days": _coerce_number(offer_value(
+            "payment_days", "payment_conditions_days",
+        )),
+        "ap_value_basis": offer_value(
+            "ap_value_basis", "accounts_payable_value_basis",
+        ),
         "source_path": source_path,
         "converted_to_project_currency": False,
         "original_unit_price": _coerce_number(offer_value("original_unit_price")),
@@ -650,7 +884,123 @@ def resolve_component_offer(agent_raw: Optional[Dict[str, Any]]) -> Dict[str, An
     normalized["transport"] = resolve_logistics_value(agent_raw, _LOGISTICS_FIELD_NAMES["transport"])
     normalized["customs"] = resolve_logistics_value(agent_raw, _LOGISTICS_FIELD_NAMES["customs"])
     normalized["forwarder_fee"] = resolve_logistics_value(agent_raw, _LOGISTICS_FIELD_NAMES["forwarder"])
+    normalized["ap_terms"] = resolve_component_ap_terms(agent_raw)
+    for field in (
+        "supplier", "payment_days", "incoterm", "origin", "origin_zone",
+        "ap_value_basis",
+    ):
+        value = normalized["ap_terms"].get(field)
+        if value not in (None, ""):
+            normalized[field] = value
     return normalized
+
+
+def resolve_component_ap_terms(
+    agent_raw: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Normalize supplier/AP terms without inferring purchasing-value basis."""
+    raw = agent_raw or {}
+    paths = {
+        "supplier": [
+            ["recommended_offer", "supplier_name"],
+            ["recommended_offer", "supplier"],
+            ["selected_offer", "supplier_name"],
+            ["offer", "supplier_name"],
+            ["supplier_name"],
+            ["supplier"],
+        ],
+        "payment_term": [
+            ["recommended_offer", "payment_days"],
+            ["recommended_offer", "payment_terms"],
+            ["recommended_offer", "supplier_payment_terms"],
+            ["recommended_offer", "payment_term_days"],
+            ["commercial_terms", "payment_terms"],
+            ["commercial_terms", "payment_days"],
+            ["supply_chain", "payment_terms"],
+            ["supply_chain", "payment_days"],
+            ["selected_offer", "payment_terms"],
+            ["offer", "payment_terms"],
+            ["supplier_payment_terms"],
+            ["payment_terms"],
+            ["payment_days"],
+            ["payment_term_days"],
+            ["payment_conditions_days"],
+        ],
+        "ap_value_basis": [
+            ["recommended_offer", "ap_value_basis"],
+            ["recommended_offer", "accounts_payable_value_basis"],
+            ["commercial_terms", "ap_value_basis"],
+            ["supply_chain", "ap_value_basis"],
+            ["selected_offer", "ap_value_basis"],
+            ["offer", "ap_value_basis"],
+            ["ap_value_basis"],
+            ["accounts_payable_value_basis"],
+        ],
+        "incoterm": [
+            ["recommended_offer", "incoterm"],
+            ["commercial_terms", "incoterm"],
+            ["supply_chain", "incoterm"],
+            ["selected_offer", "incoterm"],
+            ["offer", "incoterm"],
+            ["incoterm"],
+        ],
+        "origin": [
+            ["recommended_offer", "origin"],
+            ["recommended_offer", "country_of_origin"],
+            ["recommended_offer", "supplier_country"],
+            ["supply_chain", "origin"],
+            ["supply_chain", "country_of_origin"],
+            ["country_of_origin"],
+            ["supplier_country"],
+            ["origin"],
+        ],
+        "origin_zone": [
+            ["recommended_offer", "origin_zone"],
+            ["supply_chain", "origin_zone"],
+            ["origin_zone"],
+        ],
+    }
+    values: Dict[str, Any] = {}
+    provenance: Dict[str, Optional[str]] = {}
+    for field, candidate_paths in paths.items():
+        values[field], provenance[field] = _first_value_with_path(
+            raw, candidate_paths
+        )
+    values["payment_days"] = _payment_days(values.get("payment_term"))
+    provenance["payment_days"] = provenance.get("payment_term")
+    values["incoterm"] = (
+        str(values["incoterm"]).strip().upper()
+        if values.get("incoterm") not in (None, "") else None
+    )
+    values["ap_value_basis"] = (
+        str(values["ap_value_basis"]).strip().lower()
+        if values.get("ap_value_basis") not in (None, "") else None
+    )
+    if values["ap_value_basis"] not in {
+        "base_purchase_value", "delivered_purchase_value",
+    }:
+        values["ap_value_basis"] = None
+    if not values.get("origin_zone") and values.get("origin"):
+        country_key = str(values["origin"]).strip().lower()
+        mapped_zone = APPROVED_ORIGIN_ZONE_BY_COUNTRY.get(country_key)
+        if mapped_zone:
+            values["origin_zone"] = mapped_zone
+            provenance["origin_zone"] = (
+                f"approved_country_to_zone_mapping[{values['origin']}]"
+            )
+    missing = [
+        field for field in (
+            "supplier", "payment_days", "ap_value_basis", "incoterm",
+            "origin", "origin_zone",
+        )
+        if values.get(field) in (None, "")
+    ]
+    return {
+        **values,
+        "source_paths": provenance,
+        "status": "ready" if not missing else "incomplete",
+        "missing_fields": missing,
+    }
 
 
 def resolve_unit_price(
