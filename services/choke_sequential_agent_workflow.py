@@ -47,7 +47,11 @@ from services.project_data_paths import (
     workflow_path_diagnostics,
 )
 from services.public_url_service import get_public_rest_base_url
-from services.workspace_agent_client import clean_agent_id, trigger_workspace_agent
+from services.workspace_agent_client import (
+    clean_agent_id,
+    trigger_workspace_agent,
+    workspace_agent_configuration,
+)
 
 
 BASE_DIR = BACKEND_ROOT
@@ -107,6 +111,20 @@ COMPONENT_COSTING_INSTRUCTION = (
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _log_bom_lifecycle(event: str, **fields: Any) -> None:
+    safe = {
+        key: value
+        for key, value in fields.items()
+        if key not in {
+            "access_token", "authorization", "input_text", "raw_json",
+        }
+    }
+    logger.info(
+        "bom_agent_lifecycle %s",
+        json.dumps({"event": event, **safe}, default=str),
+    )
 
 
 def _id_timestamp() -> str:
@@ -511,6 +529,7 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
     if state.get("status") not in advanced_statuses:
         state["status"] = "bom_received"
         state["current_step"] = "Step 2 External Component Costing Agent"
+    state["bom_status"] = "received"
     state["retry_available"] = False
     state["retryable"] = False
     state["errors"] = remaining_errors
@@ -518,6 +537,7 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
     state["bom"] = {
         **existing_bom,
         "status": "received",
+        "display_status": "received",
         "retryable": False,
         "retry_available": False,
         **({"trigger_result": trigger_result} if trigger_result else {}),
@@ -789,6 +809,66 @@ def _bom_callback_timeout_seconds() -> int:
     return _positive_int_env("BOM_CALLBACK_TIMEOUT_SECONDS", 900)
 
 
+def get_bom_agent_configuration_health() -> Dict[str, Any]:
+    _load_env()
+    diagnostic = workspace_agent_configuration(
+        agent_id=os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID"),
+        access_token=os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN"),
+    )
+    return {
+        "service": "choke-bom-workspace-agent",
+        **diagnostic,
+        "environment_variables": {
+            "agent_id": "CHATGPT_CHOKE_BOM_AGENT_ID",
+            "access_token": "CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN",
+            "invocation_timeout": "WORKSPACE_AGENT_TRIGGER_TIMEOUT_SECONDS",
+            "callback_timeout": "BOM_CALLBACK_TIMEOUT_SECONDS",
+        },
+        "callback_timeout_seconds": _bom_callback_timeout_seconds(),
+        "execution_mode": "synchronous_request_path",
+    }
+
+
+def _safe_trigger_failure(trigger_result: Dict[str, Any]) -> Dict[str, Any]:
+    error_type = str(trigger_result.get("error_type") or "")
+    http_status = trigger_result.get("http_status")
+    missing = trigger_result.get("missing_inputs") or []
+    if missing:
+        code = "bom_agent_configuration_missing"
+        message = (
+            "BOM Workspace Agent configuration is incomplete: "
+            + ", ".join(str(item) for item in missing)
+        )
+    elif http_status in {401, 403}:
+        code = f"workspace_agent_http_{http_status}"
+        message = (
+            "BOM Workspace Agent authorization was rejected."
+            if http_status == 401
+            else "BOM Workspace Agent access is forbidden."
+        )
+    elif error_type == "timeout":
+        code = "workspace_agent_timeout"
+        message = "BOM Workspace Agent invocation timed out."
+    elif error_type == "invalid_trigger_url":
+        code = "workspace_agent_invalid_endpoint"
+        message = str(trigger_result.get("message") or "Invalid trigger endpoint.")
+    elif error_type:
+        code = f"workspace_agent_{error_type}"
+        message = str(
+            trigger_result.get("note")
+            or "BOM Workspace Agent invocation failed."
+        )
+    else:
+        code = "workspace_agent_trigger_failed"
+        message = "BOM Workspace Agent invocation failed."
+    return {
+        "code": code,
+        "message": message,
+        "http_status": http_status,
+        "retryable": _is_retryable_trigger_result(trigger_result),
+    }
+
+
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
     if not value:
         return None
@@ -841,6 +921,8 @@ def _apply_bom_callback_waiting_state(
     state["status"] = (
         "bom_callback_timeout" if timed_out else "awaiting_bom_callback"
     )
+    state["bom_status"] = "failed" if timed_out else "triggered"
+    bom["display_status"] = "failed" if timed_out else "triggered"
     state["current_step"] = "Step 1 BOM Agent"
     state["retryable"] = timed_out
     state["retry_available"] = timed_out
@@ -897,6 +979,26 @@ def _trigger_bom_agent_with_retries(
     status_before: Optional[str],
 ) -> Dict[str, Any]:
     _load_env()
+    config = get_bom_agent_configuration_health()
+    if not dry_run and config["status"] != "configured":
+        result = {
+            "status": "failed",
+            "error_type": "configuration_error",
+            "missing_inputs": config["missing_configuration"],
+            "message": "BOM Workspace Agent configuration is incomplete.",
+            "http_status": None,
+            "retryable": False,
+            "attempts": [],
+            "configuration": config,
+        }
+        _log_bom_lifecycle(
+            "agent_invocation_failed",
+            project_code=project_code,
+            product_id=product_id,
+            error_code="bom_agent_configuration_missing",
+            missing_configuration=config["missing_configuration"],
+        )
+        return result
     # One user action creates one Workspace Agent request. A later retry is an
     # explicit workflow action with a fresh drawing URL.
     max_attempts = 1
@@ -906,15 +1008,52 @@ def _trigger_bom_agent_with_retries(
     idempotency_key = f"{project_code}:{product_id}:sequential:bom:{uuid.uuid4()}"
 
     for attempt_number in range(1, max_attempts + 1):
-        result = _trigger(
-            "CHATGPT_CHOKE_BOM_AGENT_ID",
-            "Choke BOM Analyzer",
-            input_text,
-            f"{project_code}:{product_id}:sequential:bom",
-            idempotency_key,
-            dry_run=dry_run,
+        _log_bom_lifecycle(
+            "before_agent_invocation",
+            project_code=project_code,
+            product_id=product_id,
+            attempt_number=attempt_number,
+            agent_id_masked=config.get("agent_id_masked"),
+            token_present=config.get("token_present"),
+            endpoint=config.get("endpoint"),
+            timeout_seconds=config.get("invocation_timeout_seconds"),
+            payload_bytes=len(input_text.encode("utf-8")),
         )
+        try:
+            result = _trigger(
+                "CHATGPT_CHOKE_BOM_AGENT_ID",
+                "",
+                input_text,
+                f"{project_code}:{product_id}:sequential:bom",
+                idempotency_key,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Unexpected BOM Workspace Agent invocation exception "
+                "for %s/%s",
+                project_code,
+                product_id,
+            )
+            result = {
+                "status": "failed",
+                "http_status": None,
+                "error_type": "execution_exception",
+                "note": "BOM Workspace Agent invocation raised an exception.",
+                "error": type(exc).__name__,
+            }
         last_result = result or {}
+        _log_bom_lifecycle(
+            "agent_response_received",
+            project_code=project_code,
+            product_id=product_id,
+            attempt_number=attempt_number,
+            result_status=last_result.get("status"),
+            http_status=last_result.get("http_status"),
+            error_type=last_result.get("error_type"),
+            elapsed_seconds=last_result.get("elapsed_seconds"),
+            request_correlation_id=last_result.get("request_correlation_id"),
+        )
         accepted = last_result.get("status") in {"accepted", "dry_run"}
         retryable = not accepted and _is_retryable_trigger_result(last_result)
         has_next_attempt = retryable and attempt_number < max_attempts
@@ -1188,7 +1327,15 @@ def start_real_choke_workflow(
     input_file: str,
     dry_run: bool = False,
     request_base_url: Optional[str] = None,
+    workflow_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    _log_bom_lifecycle(
+        "trigger_execution_entered",
+        input_file=input_file,
+        workflow_request_id=workflow_request_id,
+        execution_mode="synchronous_request_path",
+        dry_run=dry_run,
+    )
     ensure_workflow_storage_ready()
     customer_input = _load_customer_input(input_file)
     input_reference = customer_input.get("_input_file")
@@ -1248,6 +1395,7 @@ def start_real_choke_workflow(
     }
     state = existing_state
     state.update({
+        "workflow_request_id": workflow_request_id,
         "input_file": customer_input["_input_file"],
         "drawing_file_path": normalized_input.get("drawing_file_path"),
         "drawing_file_url": bom_trigger.get("drawing_file_url"),
@@ -1257,6 +1405,7 @@ def start_real_choke_workflow(
         "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
         "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
         "status": "validating_drawing_access",
+        "bom_status": "triggering",
         "current_step": "Step 1 BOM Agent",
         "manufacturing_strategy": manufacturing_strategy,
         "choke_classification": choke_classification,
@@ -1292,6 +1441,14 @@ def start_real_choke_workflow(
         "stale_previous_output": stale_previous_output or None,
     }
     _save_state(state)
+    _log_bom_lifecycle(
+        "workflow_created",
+        project_code=project_code,
+        product_id=product_id,
+        workflow_request_id=workflow_request_id,
+        workflow_state_path=str(_state_path(project_code, product_id).resolve()),
+        status="validating_drawing_access",
+    )
     persisted_state, persisted_path = _existing_state(project_code, product_id)
     if persisted_state is None or persisted_path is None or not persisted_path.exists():
         raise RuntimeError(
@@ -1327,11 +1484,13 @@ def start_real_choke_workflow(
         persisted_state["bom"]["pdf_url_check"] = pdf_url_check
         if not pdf_url_check.get("success"):
             persisted_state["status"] = "bom_trigger_failed"
+            persisted_state["bom_status"] = "failed"
             persisted_state["current_step"] = "Step 1 BOM Agent"
             persisted_state["missing_outputs"] = ["bom"]
             persisted_state["bom"] = {
                 **dict(persisted_state.get("bom") or {}),
                 "status": "bom_trigger_failed",
+                "display_status": "failed",
                 "retryable": True,
                 "pdf_url_check": pdf_url_check,
             }
@@ -1341,6 +1500,13 @@ def start_real_choke_workflow(
                 "details": pdf_url_check,
             })
             _save_state(persisted_state)
+            _log_bom_lifecycle(
+                "agent_invocation_failed",
+                project_code=project_code,
+                product_id=product_id,
+                error_code="drawing_access_validation_failed",
+                status_after="bom_trigger_failed",
+            )
             return {
                 "message": "Drawing access validation failed; retry will generate fresh URLs.",
                 "status": "bom_trigger_failed",
@@ -1355,6 +1521,7 @@ def start_real_choke_workflow(
             "drawing_file_url": bom_trigger.get("drawing_file_url"),
             "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
             "status": "trigger_request_sending",
+            "bom_status": "triggering",
         })
         persisted_state["bom"] = {
             **dict(persisted_state.get("bom") or {}),
@@ -1389,11 +1556,13 @@ def start_real_choke_workflow(
     state = latest_state or persisted_state
     if (state.get("bom") or {}).get("status") != "received":
         state["status"] = workflow_status
+        state["bom_status"] = "triggered" if accepted else "failed"
         state["current_step"] = "Step 1 BOM Agent"
         combined_attempts = [validation_attempt, *(trigger_result.get("attempts") or [])]
         state["bom"] = {
             **dict(state.get("bom") or {}),
             "status": bom_status,
+            "display_status": "triggered" if accepted else "failed",
             "lifecycle_status": "awaiting_bom_callback" if accepted else bom_status,
             "trigger_request_status": (
                 "trigger_request_accepted" if accepted else "trigger_request_failed"
@@ -1407,7 +1576,23 @@ def start_real_choke_workflow(
             "pdf_url_check": pdf_url_check,
         }
         if not accepted:
-            state.setdefault("errors", []).append({"stage": "bom", "trigger_result": trigger_result})
+            safe_failure = _safe_trigger_failure(trigger_result)
+            state["bom"]["safe_error"] = safe_failure
+            state.setdefault("errors", []).append({
+                "stage": "bom",
+                "error_code": safe_failure["code"],
+                "message": safe_failure["message"],
+                "trigger_result": trigger_result,
+            })
+            _log_bom_lifecycle(
+                "agent_invocation_failed",
+                project_code=project_code,
+                product_id=product_id,
+                error_code=safe_failure["code"],
+                http_status=safe_failure["http_status"],
+                retryable=safe_failure["retryable"],
+                status_after="trigger_request_failed",
+            )
     else:
         _apply_bom_received_precedence(state)
     _save_state(state)
@@ -1448,6 +1633,11 @@ def start_real_choke_workflow(
 
 
 def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
+    _log_bom_lifecycle(
+        "retry_request_received",
+        project_code=project_code,
+        product_id=product_id,
+    )
     state, _ = _existing_state(project_code, product_id)
     if state is None:
         raise FileNotFoundError("Workflow state not found. Start the workflow before retrying the BOM Agent.")
@@ -1519,6 +1709,7 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
         "method": "GET",
     }
     state["status"] = "validating_drawing_access"
+    state["bom_status"] = "triggering"
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
     state["bom"] = {
@@ -1544,9 +1735,11 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     })
     if not pdf_url_check.get("success"):
         state["status"] = "bom_trigger_failed"
+        state["bom_status"] = "failed"
         state["bom"] = {
             **dict(state.get("bom") or {}),
             "status": "bom_trigger_failed",
+            "display_status": "failed",
             "retryable": True,
             "pdf_url_check": pdf_url_check,
             "trigger_attempts": [validation_attempt],
@@ -1568,6 +1761,7 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
         }
 
     state["status"] = "trigger_request_sending"
+    state["bom_status"] = "triggering"
     state["bom"] = {
         **dict(state.get("bom") or {}),
         "status": "trigger_request_sending",
@@ -1587,6 +1781,7 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     accepted = trigger_result.get("status") == "accepted"
     retryable_failure = not accepted and trigger_result.get("retryable") is True
     state["status"] = "awaiting_bom_callback" if accepted else "trigger_request_failed"
+    state["bom_status"] = "triggered" if accepted else "failed"
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
     state["bom"] = {
@@ -1596,6 +1791,7 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
             if accepted
             else "trigger_request_failed"
         ),
+        "display_status": "triggered" if accepted else "failed",
         "trigger_request_status": (
             "trigger_request_accepted" if accepted else "trigger_request_failed"
         ),
@@ -1610,8 +1806,36 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
         "drawing_file_url": bom_trigger.get("drawing_file_url"),
         "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
         "pdf_url_check": pdf_url_check,
-        "lifecycle_status": "awaiting_bom_callback" if accepted else None,
+        "lifecycle_status": (
+            "awaiting_bom_callback" if accepted else "trigger_request_failed"
+        ),
     }
+    if not accepted:
+        safe_failure = _safe_trigger_failure(trigger_result)
+        state["bom"]["safe_error"] = safe_failure
+        state.setdefault("errors", []).append({
+            "stage": "bom",
+            "error_code": safe_failure["code"],
+            "message": safe_failure["message"],
+            "trigger_result": trigger_result,
+        })
+        _log_bom_lifecycle(
+            "agent_invocation_failed",
+            project_code=project_code,
+            product_id=product_id,
+            error_code=safe_failure["code"],
+            http_status=safe_failure["http_status"],
+            retryable=safe_failure["retryable"],
+            status_after="trigger_request_failed",
+        )
+    else:
+        _log_bom_lifecycle(
+            "agent_response_received",
+            project_code=project_code,
+            product_id=product_id,
+            http_status=trigger_result.get("http_status"),
+            status_after="awaiting_bom_callback",
+        )
     _save_state(state)
     return {
         "status": state["status"],
@@ -2337,6 +2561,13 @@ def save_bom_output(
     trigger_run_id: Optional[str] = None,
     allow_create_without_start: bool = False,
 ) -> Dict[str, Any]:
+    _log_bom_lifecycle(
+        "callback_received",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_present=bool(trigger_run_id),
+        raw_json_type=type(raw_json).__name__,
+    )
     raw_keys = list(raw_json.keys()) if isinstance(raw_json, dict) else []
     correlation_id = None
     if isinstance(raw_json, dict):

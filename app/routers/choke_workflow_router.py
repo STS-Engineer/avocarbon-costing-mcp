@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -7,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from services.choke_sequential_agent_workflow import (
     calculate_final_choke_costing_from_saved_outputs,
     calculate_from_real_outputs,
+    get_bom_agent_configuration_health,
     get_bom_output,
     get_component_output,
     get_component_outputs,
@@ -46,11 +48,13 @@ from services.choke_financial_workflow import (
 
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
+logger = logging.getLogger(__name__)
 
 
 class StartWorkflowRequest(BaseModel):
     input_file: str
     dry_run: bool = False
+    workflow_request_id: str | None = None
 
 
 class SaveBomOutputRequest(BaseModel):
@@ -190,13 +194,70 @@ def _handle(callback):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _trigger_failure_http_status(result: Dict[str, Any]) -> int | None:
+    state = result.get("state") or {}
+    if result.get("status") not in {
+        "trigger_request_failed",
+        "bom_trigger_failed",
+    } and state.get("status") not in {
+        "trigger_request_failed",
+        "bom_trigger_failed",
+    }:
+        return None
+    safe_error = ((state.get("bom") or {}).get("safe_error") or {})
+    code = str(safe_error.get("code") or "")
+    if code == "bom_agent_configuration_missing":
+        return 503
+    if code == "workspace_agent_timeout":
+        return 504
+    return 502
+
+
+def _raise_trigger_failure(result: Dict[str, Any]) -> None:
+    status_code = _trigger_failure_http_status(result)
+    if status_code is None:
+        return
+    state = result.get("state") or {}
+    safe_error = ((state.get("bom") or {}).get("safe_error") or {})
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "code": safe_error.get("code") or "bom_agent_trigger_failed",
+            "message": (
+                safe_error.get("message")
+                or result.get("message")
+                or "BOM Workspace Agent trigger failed."
+            ),
+            "retryable": bool(safe_error.get("retryable")),
+            "state": state,
+        },
+    )
+
+
 @router.post("/start")
 def start_workflow(request: Request, payload: StartWorkflowRequest):
-    return _handle(lambda: start_real_choke_workflow(
+    logger.info(
+        "BOM workflow request received: %s",
+        json.dumps({
+            "event": "request_received",
+            "input_file": payload.input_file,
+            "dry_run": payload.dry_run,
+            "workflow_request_id": payload.workflow_request_id,
+        }),
+    )
+    result = _handle(lambda: start_real_choke_workflow(
         input_file=payload.input_file,
         dry_run=payload.dry_run,
         request_base_url=str(request.base_url),
+        workflow_request_id=payload.workflow_request_id,
     ))
+    _raise_trigger_failure(result)
+    return result
+
+
+@router.get("/bom-agent-health")
+def bom_agent_health():
+    return _handle(get_bom_agent_configuration_health)
 
 
 @router.post("/storage-self-test")
@@ -257,10 +318,12 @@ def save_bom(request: SaveBomOutputRequest):
 
 @router.post("/retry-bom")
 def retry_bom(request: RetryBomRequest):
-    return _handle(lambda: retry_bom_agent(
+    result = _handle(lambda: retry_bom_agent(
         project_code=request.project_code,
         product_id=request.product_id,
     ))
+    _raise_trigger_failure(result)
+    return result
 
 
 @router.post("/test-bom-agent-trigger")

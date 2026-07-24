@@ -57,6 +57,66 @@ def _correlation_id(headers):
     return None
 
 
+def workspace_agent_configuration(
+    agent_id=None,
+    access_token=None,
+    timeout_seconds=None,
+):
+    """Return a secret-safe trigger configuration diagnostic."""
+    cleaned_agent_id = clean_agent_id(
+        agent_id
+        if agent_id is not None
+        else os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID")
+    )
+    token = str(
+        access_token
+        if access_token is not None
+        else os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN") or ""
+    ).strip()
+    try:
+        endpoint = f"{_trigger_base_url()}/{{agent_id}}/trigger"
+        endpoint_error = None
+    except ValueError as exc:
+        endpoint = None
+        endpoint_error = str(exc)
+    try:
+        timeout = float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else os.getenv("WORKSPACE_AGENT_TRIGGER_TIMEOUT_SECONDS", "60")
+        )
+    except (TypeError, ValueError):
+        timeout = 60.0
+    missing = []
+    if not cleaned_agent_id:
+        missing.append("CHATGPT_CHOKE_BOM_AGENT_ID")
+    elif not cleaned_agent_id.startswith("agtch_"):
+        missing.append("CHATGPT_CHOKE_BOM_AGENT_ID(valid agtch_ trigger ID)")
+    if not token:
+        missing.append("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN")
+    if endpoint_error:
+        missing.append("CHATGPT_WORKSPACE_AGENT_TRIGGER_BASE_URL")
+    return {
+        "status": "configured" if not missing else "misconfigured",
+        "agent_id_present": bool(cleaned_agent_id),
+        "agent_id_valid": cleaned_agent_id.startswith("agtch_"),
+        "agent_id_masked": (
+            f"{cleaned_agent_id[:10]}...{cleaned_agent_id[-4:]}"
+            if len(cleaned_agent_id) > 14 else cleaned_agent_id or None
+        ),
+        "token_present": bool(token),
+        "token_length": len(token),
+        "endpoint": endpoint,
+        "endpoint_error": endpoint_error,
+        "invocation_timeout_seconds": timeout,
+        "missing_configuration": missing,
+        "connectivity_checked": False,
+        "note": (
+            "Configuration-only health check; no Workspace Agent run was created."
+        ),
+    }
+
+
 def trigger_workspace_agent(
     agent_id,
     access_token,
