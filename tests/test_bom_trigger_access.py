@@ -229,7 +229,11 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
         "product_id": "10",
         "status": "bom_trigger_failed",
         "customer_input": _trigger_input("P", "10"),
-        "bom": {"status": "bom_trigger_failed", "save_path": "bom.json"},
+        "bom": {
+            "status": "bom_trigger_failed",
+            "save_path": "bom.json",
+            "trigger_run_id": "old-run",
+        },
         "missing_outputs": ["bom"],
     }
     trigger_calls = []
@@ -242,6 +246,7 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
         lambda *args, **kwargs: {
             "input_text": "fresh",
             "save_address": "bom.json",
+            "trigger_run_id": kwargs["trigger_run_id"],
             "drawing_file_url": "https://fresh",
             "drawing_agent_proxy_url": "https://fresh",
             "drawing_sas_url": None,
@@ -270,6 +275,8 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
     result = workflow.retry_bom_agent("P", "10")
 
     assert len(trigger_calls) == 1
+    assert trigger_calls[0]["trigger_run_id"] == state["bom"]["trigger_run_id"]
+    assert state["bom"]["trigger_run_id"] != "old-run"
     assert result["status"] == "awaiting_bom_callback"
     assert result["state"]["missing_outputs"] == ["bom"]
     assert [item["stage"] for item in result["trigger_attempts"]] == [

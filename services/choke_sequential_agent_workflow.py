@@ -7,6 +7,7 @@ import shutil
 import time
 import unicodedata
 import uuid
+from contextlib import contextmanager
 from decimal import Decimal
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
@@ -250,6 +251,62 @@ def _state_path(project_code: str, product_id: str) -> Path:
 
 def _events_path(project_code: str, product_id: str) -> Path:
     return get_workflow_run_paths(project_code, product_id)["workflow_events_path"]
+
+
+def _bom_run_lock_path(project_code: str, product_id: str) -> Path:
+    return _run_dir(project_code, product_id) / ".bom_active_run.lock"
+
+
+@contextmanager
+def _bom_run_lock(project_code: str, product_id: str):
+    """Serialize BOM start/retry correlation for one project and product."""
+    lock_path = _bom_run_lock_path(project_code, product_id)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    timeout_seconds = _positive_int_env("BOM_RUN_LOCK_TIMEOUT_SECONDS", 75)
+    stale_seconds = _positive_int_env("BOM_RUN_LOCK_STALE_SECONDS", 180)
+    deadline = time.monotonic() + timeout_seconds
+    descriptor = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(
+                str(lock_path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+            os.write(
+                descriptor,
+                json.dumps({
+                    "pid": os.getpid(),
+                    "created_at": _now_iso(),
+                    "project_code": project_code,
+                    "product_id": product_id,
+                }).encode("utf-8"),
+            )
+        except FileExistsError:
+            try:
+                age_seconds = time.time() - lock_path.stat().st_mtime
+                if age_seconds >= stale_seconds:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Timed out waiting for the active BOM run lock."
+                )
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning(
+                "Could not remove BOM run lock for %s/%s",
+                project_code,
+                product_id,
+            )
 
 
 def _state_path_candidates(project_code: str, product_id: str) -> List[Path]:
@@ -977,6 +1034,7 @@ def _trigger_bom_agent_with_retries(
     input_text: str,
     dry_run: bool,
     status_before: Optional[str],
+    trigger_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     _load_env()
     config = get_bom_agent_configuration_health()
@@ -1018,6 +1076,7 @@ def _trigger_bom_agent_with_retries(
             endpoint=config.get("endpoint"),
             timeout_seconds=config.get("invocation_timeout_seconds"),
             payload_bytes=len(input_text.encode("utf-8")),
+            trigger_run_id_sent=trigger_run_id,
         )
         try:
             result = _trigger(
@@ -1329,6 +1388,66 @@ def start_real_choke_workflow(
     request_base_url: Optional[str] = None,
     workflow_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    customer_input = _load_customer_input(input_file)
+    customer_input = _resolve_customer_input_context(customer_input)
+    project = _project_from_input(customer_input)
+    project_code = project["project_code"]
+    product_id = project["product_id"]
+    with _bom_run_lock(project_code, product_id):
+        existing_state, _ = _existing_state(project_code, product_id)
+        if existing_state is not None:
+            _apply_bom_callback_waiting_state(existing_state)
+            bom = dict(existing_state.get("bom") or {})
+            active_statuses = {
+                "validating_drawing_access",
+                "trigger_request_sending",
+                "trigger_request_accepted",
+                "awaiting_bom_callback",
+            }
+            same_request = bool(
+                workflow_request_id
+                and existing_state.get("workflow_request_id") == workflow_request_id
+            )
+            if same_request or (
+                bom.get("status") in active_statuses
+                or bom.get("lifecycle_status") in active_statuses
+            ):
+                _save_state(existing_state)
+                _log_bom_lifecycle(
+                    "duplicate_start_blocked",
+                    project_code=project_code,
+                    product_id=product_id,
+                    workflow_request_id=workflow_request_id,
+                    trigger_run_id_expected=bom.get("trigger_run_id"),
+                    status=existing_state.get("status"),
+                )
+                return {
+                    "status": existing_state.get("status"),
+                    "message": (
+                        "A BOM Agent run is already active for this project and product."
+                    ),
+                    "duplicate_start": True,
+                    "reason": "bom_active_run_exists",
+                    "state": existing_state,
+                }
+        return _start_real_choke_workflow_locked(
+            input_file=input_file,
+            dry_run=dry_run,
+            request_base_url=request_base_url,
+            workflow_request_id=workflow_request_id,
+            prepared_customer_input=customer_input,
+            prepared_project=project,
+        )
+
+
+def _start_real_choke_workflow_locked(
+    input_file: str,
+    dry_run: bool = False,
+    request_base_url: Optional[str] = None,
+    workflow_request_id: Optional[str] = None,
+    prepared_customer_input: Optional[Dict[str, Any]] = None,
+    prepared_project: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     _log_bom_lifecycle(
         "trigger_execution_entered",
         input_file=input_file,
@@ -1337,14 +1456,19 @@ def start_real_choke_workflow(
         dry_run=dry_run,
     )
     ensure_workflow_storage_ready()
-    customer_input = _load_customer_input(input_file)
+    customer_input = (
+        dict(prepared_customer_input)
+        if prepared_customer_input is not None
+        else _load_customer_input(input_file)
+    )
     input_reference = customer_input.get("_input_file")
-    customer_input = _resolve_customer_input_context(customer_input)
+    if prepared_customer_input is None:
+        customer_input = _resolve_customer_input_context(customer_input)
     customer_input["_input_file"] = input_reference
     _write_json(resolve_customer_input_path(input_reference), {
         key: value for key, value in customer_input.items() if key != "_input_file"
     })
-    project = _project_from_input(customer_input)
+    project = prepared_project or _project_from_input(customer_input)
     normalized_input = project["normalized_input"]
     project_code = project["project_code"]
     product_id = project["product_id"]
@@ -1374,17 +1498,75 @@ def start_real_choke_workflow(
 
     trigger_run_id = str(uuid.uuid4())
     trigger_requested_at = _now_iso()
+    existing_state = _load_state(project_code, product_id)
+    status_before = existing_state.get("status")
+    existing_state.update({
+        "workflow_request_id": workflow_request_id,
+        "input_file": customer_input["_input_file"],
+        "status": "validating_drawing_access",
+        "bom_status": "triggering",
+        "current_step": "Step 1 BOM Agent",
+        "customer_input": normalized_input,
+        "missing_outputs": ["bom"],
+    })
+    existing_state["bom"] = {
+        **dict(existing_state.get("bom") or {}),
+        "status": "validating_drawing_access",
+        "trigger_run_id": trigger_run_id,
+        "trigger_requested_at": trigger_requested_at,
+        "trigger_result": None,
+        "retryable": False,
+    }
+    _log_bom_lifecycle(
+        "trigger_run_id_created",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_created=trigger_run_id,
+        workflow_request_id=workflow_request_id,
+    )
+    _save_state(existing_state)
+    persisted_before_payload, persisted_before_payload_path = _existing_state(
+        project_code,
+        product_id,
+    )
+    persisted_trigger_run_id = str(
+        ((persisted_before_payload or {}).get("bom") or {}).get("trigger_run_id")
+        or ""
+    ).strip()
+    if persisted_trigger_run_id != trigger_run_id:
+        raise RuntimeError(
+            "Persisted BOM trigger_run_id does not match the created run ID."
+        )
+    _log_bom_lifecycle(
+        "trigger_run_id_persisted",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_created=trigger_run_id,
+        trigger_run_id_persisted=persisted_trigger_run_id,
+        workflow_state_path=str(persisted_before_payload_path),
+    )
     bom_trigger = _build_bom_trigger_payload(
         project_code,
         product_id,
         normalized_input,
         request_base_url=request_base_url,
-        trigger_run_id=trigger_run_id,
+        trigger_run_id=persisted_trigger_run_id,
+    )
+    sent_trigger_run_id = str(bom_trigger.get("trigger_run_id") or "").strip()
+    if sent_trigger_run_id != persisted_trigger_run_id:
+        raise RuntimeError(
+            "Outbound BOM payload trigger_run_id does not match persisted state."
+        )
+    _log_bom_lifecycle(
+        "trigger_run_id_payload_built",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_created=trigger_run_id,
+        trigger_run_id_persisted=persisted_trigger_run_id,
+        trigger_run_id_sent=sent_trigger_run_id,
     )
     input_text = bom_trigger["input_text"]
     save_address = bom_trigger["save_address"]
-    existing_state = _load_state(project_code, product_id)
-    status_before = existing_state.get("status")
     stale_previous_output = _existing_bom_output_evidence(project_code, product_id)
     validation_attempt = {
         "attempt_id": str(uuid.uuid4()),
@@ -1539,6 +1721,7 @@ def start_real_choke_workflow(
         input_text=input_text,
         dry_run=dry_run,
         status_before=status_before,
+        trigger_run_id=persisted_trigger_run_id,
     )
     accepted = trigger_result.get("status") in {"accepted", "dry_run"}
     retryable_failure = not accepted and trigger_result.get("retryable") is True
@@ -1633,6 +1816,11 @@ def start_real_choke_workflow(
 
 
 def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
+    with _bom_run_lock(project_code, product_id):
+        return _retry_bom_agent_locked(project_code, product_id)
+
+
+def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any]:
     _log_bom_lifecycle(
         "retry_request_received",
         project_code=project_code,
@@ -1692,11 +1880,61 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
     customer_input.setdefault("product_id", product_id)
     trigger_run_id = str(uuid.uuid4())
     trigger_requested_at = _now_iso()
+    state["status"] = "validating_drawing_access"
+    state["bom_status"] = "triggering"
+    state["current_step"] = "Step 1 BOM Agent"
+    state["missing_outputs"] = ["bom"]
+    state["bom"] = {
+        **existing_bom,
+        "status": "validating_drawing_access",
+        "trigger_run_id": trigger_run_id,
+        "trigger_requested_at": trigger_requested_at,
+        "trigger_result": None,
+        "retryable": False,
+    }
+    _log_bom_lifecycle(
+        "trigger_run_id_created",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_created=trigger_run_id,
+        retry=True,
+    )
+    _save_state(state)
+    persisted_state, _ = _existing_state(project_code, product_id)
+    persisted_trigger_run_id = str(
+        ((persisted_state or {}).get("bom") or {}).get("trigger_run_id") or ""
+    ).strip()
+    if persisted_trigger_run_id != trigger_run_id:
+        raise RuntimeError(
+            "Persisted retry trigger_run_id does not match the created run ID."
+        )
+    _log_bom_lifecycle(
+        "trigger_run_id_persisted",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_created=trigger_run_id,
+        trigger_run_id_persisted=persisted_trigger_run_id,
+        retry=True,
+    )
     bom_trigger = _build_bom_trigger_payload(
         project_code,
         product_id,
         customer_input,
-        trigger_run_id=trigger_run_id,
+        trigger_run_id=persisted_trigger_run_id,
+    )
+    sent_trigger_run_id = str(bom_trigger.get("trigger_run_id") or "").strip()
+    if sent_trigger_run_id != persisted_trigger_run_id:
+        raise RuntimeError(
+            "Outbound retry payload trigger_run_id does not match persisted state."
+        )
+    _log_bom_lifecycle(
+        "trigger_run_id_payload_built",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id_created=trigger_run_id,
+        trigger_run_id_persisted=persisted_trigger_run_id,
+        trigger_run_id_sent=sent_trigger_run_id,
+        retry=True,
     )
     if not bom_trigger.get("drawing_file_url"):
         raise ValueError("BOM Agent retry requires drawing_file_url in workflow state or customer_input.")
@@ -1708,18 +1946,10 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
         "timestamp": _now_iso(),
         "method": "GET",
     }
-    state["status"] = "validating_drawing_access"
-    state["bom_status"] = "triggering"
-    state["current_step"] = "Step 1 BOM Agent"
-    state["missing_outputs"] = ["bom"]
     state["bom"] = {
-        **existing_bom,
+        **dict(state.get("bom") or {}),
         "status": "validating_drawing_access",
-        "trigger_run_id": trigger_run_id,
-        "trigger_requested_at": trigger_requested_at,
-        "trigger_result": None,
         "trigger_attempts": [validation_attempt],
-        "retryable": False,
         "drawing_agent_proxy_url": bom_trigger.get("drawing_agent_proxy_url"),
         "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
     }
@@ -1777,6 +2007,7 @@ def retry_bom_agent(project_code: str, product_id: str) -> Dict[str, Any]:
         input_text=input_text,
         dry_run=False,
         status_before=status_before,
+        trigger_run_id=persisted_trigger_run_id,
     )
     accepted = trigger_result.get("status") == "accepted"
     retryable_failure = not accepted and trigger_result.get("retryable") is True
@@ -2566,6 +2797,7 @@ def save_bom_output(
         project_code=project_code,
         product_id=product_id,
         trigger_run_id_present=bool(trigger_run_id),
+        trigger_run_id_received=trigger_run_id,
         raw_json_type=type(raw_json).__name__,
     )
     raw_keys = list(raw_json.keys()) if isinstance(raw_json, dict) else []
@@ -2657,6 +2889,13 @@ def save_bom_output(
             ((existing_state or {}).get("bom") or {}).get("trigger_run_id") or ""
         ).strip()
         received_trigger_run_id = str(trigger_run_id or "").strip()
+        _log_bom_lifecycle(
+            "callback_correlation_checked",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id_received=received_trigger_run_id,
+            trigger_run_id_expected=expected_trigger_run_id,
+        )
         if expected_trigger_run_id and not received_trigger_run_id:
             response = {
                 "success": False,
