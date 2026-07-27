@@ -848,6 +848,7 @@ def _trigger(agent_id_env: str, fallback_agent_name: str, input_text: str, conve
         conversation_key=conversation_key,
         idempotency_key=idempotency_key,
         dry_run=dry_run,
+        conversation_mode="new",
     )
 
 
@@ -1723,6 +1724,13 @@ def _start_real_choke_workflow_locked(
         status_before=status_before,
         trigger_run_id=persisted_trigger_run_id,
     )
+    trigger_result["invocation_audit"] = {
+        **(trigger_result.get("invocation_audit") or {}),
+        "trigger_run_id": persisted_trigger_run_id,
+        "agent_type": "bom",
+        "project_code": project_code,
+        "product_id": product_id,
+    }
     accepted = trigger_result.get("status") in {"accepted", "dry_run"}
     retryable_failure = not accepted and trigger_result.get("retryable") is True
     workflow_status = (
@@ -2009,6 +2017,13 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         status_before=status_before,
         trigger_run_id=persisted_trigger_run_id,
     )
+    trigger_result["invocation_audit"] = {
+        **(trigger_result.get("invocation_audit") or {}),
+        "trigger_run_id": persisted_trigger_run_id,
+        "agent_type": "bom",
+        "project_code": project_code,
+        "product_id": product_id,
+    }
     accepted = trigger_result.get("status") == "accepted"
     retryable_failure = not accepted and trigger_result.get("retryable") is True
     state["status"] = "awaiting_bom_callback" if accepted else "trigger_request_failed"
@@ -3843,6 +3858,7 @@ def trigger_next_component_costing(
             continue
         correlation_id = str(uuid.uuid4())
         payload = _component_trigger_payload(state, component)
+        payload["trigger_run_id"] = correlation_id
         conversation_key = f"{project_code}:{product_id}:component:{component_id}:v1"
         append_workflow_event(
             project_code, product_id, "component_trigger_requested",
@@ -3859,6 +3875,9 @@ def trigger_next_component_costing(
             correlation_id,
             dry_run=dry_run,
         )
+        conversation_key = (
+            trigger_result.get("conversation_key") or conversation_key
+        )
         accepted = trigger_result.get("status") in {"accepted", "dry_run"}
         entry = {
             **previous,
@@ -3869,6 +3888,15 @@ def trigger_next_component_costing(
             "trigger_payload": payload,
             "conversation_key": conversation_key,
             "correlation_id": correlation_id,
+            "trigger_run_id": correlation_id,
+            "invocation_audit": {
+                **(trigger_result.get("invocation_audit") or {}),
+                "trigger_run_id": correlation_id,
+                "agent_type": "external_component_costing",
+                "project_code": project_code,
+                "product_id": product_id,
+                "component_id": component_id,
+            },
             "trigger_result": trigger_result,
             "save_path": payload["save_address"],
             "normalized_path": _relative(_normalized_component_output_path(project_code, product_id, component_id)),
@@ -4429,7 +4457,6 @@ def trigger_most_operations(
             raise ValueError(
                 f"work_package_id {only_work_package_id} does not exist in process decomposition."
             )
-    trigger_run_id = str(active_trigger_run_id or uuid.uuid4())
     for work_package in work_packages:
         work_package_id = work_package["work_package_id"]
         previous = state["most"].get(work_package_id) or {}
@@ -4450,6 +4477,7 @@ def trigger_most_operations(
         }:
             skipped.append({"work_package_id": work_package_id, "status": previous.get("status"), "reason": "already_processed"})
             continue
+        trigger_run_id = str(active_trigger_run_id or uuid.uuid4())
         correlation_id = str(uuid.uuid4())
         payload = _most_trigger_payload(state, work_package, trigger_run_id)
         conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
@@ -4498,6 +4526,9 @@ def trigger_most_operations(
             correlation_id,
             dry_run=dry_run,
         )
+        conversation_key = (
+            trigger_result.get("conversation_key") or conversation_key
+        )
         accepted = trigger_result.get("status") in {"accepted", "dry_run"}
         completed_attempt = {
             "status": "trigger_request_accepted" if accepted else "trigger_request_failed",
@@ -4514,6 +4545,14 @@ def trigger_most_operations(
             "trigger_run_id": trigger_run_id,
             "conversation_key": conversation_key,
             "correlation_id": correlation_id,
+            "invocation_audit": {
+                **(trigger_result.get("invocation_audit") or {}),
+                "trigger_run_id": trigger_run_id,
+                "agent_type": "most",
+                "project_code": project_code,
+                "product_id": product_id,
+                "work_package_id": work_package_id,
+            },
             "trigger_payload": payload,
             "trigger_result": trigger_result,
             "trigger_attempts": [

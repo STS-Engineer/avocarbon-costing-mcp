@@ -1,14 +1,30 @@
 import json
+import hashlib
 import logging
 import os
 import socket
 import time
 import urllib.error
 import urllib.request
+import uuid
+from datetime import datetime, timezone
 
 
 WORKSPACE_AGENT_API_BASE_URL = "https://api.chatgpt.com/v1/workspace_agents"
 logger = logging.getLogger(__name__)
+FRESH_CONVERSATION_MODE = "new"
+CONTINUATION_FIELDS = {
+    "conversation_id",
+    "conversation",
+    "thread_id",
+    "thread",
+    "session_id",
+    "chat_id",
+    "previous_response_id",
+    "run_context_id",
+    "parent_conversation",
+    "continuation",
+}
 
 
 def clean_agent_id(agent_id):
@@ -55,6 +71,45 @@ def _correlation_id(headers):
         if value:
             return value
     return None
+
+
+def _safe_identifier(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    return {
+        "sha256_prefix": digest,
+        "safe_suffix": text[-8:],
+    }
+
+
+def _returned_conversation_identifier(response_payload):
+    if not isinstance(response_payload, dict):
+        return None
+    candidates = [
+        response_payload.get("conversation_id"),
+        response_payload.get("conversation"),
+        (response_payload.get("data") or {}).get("conversation_id")
+        if isinstance(response_payload.get("data"), dict)
+        else None,
+    ]
+    return next((value for value in candidates if isinstance(value, str) and value), None)
+
+
+def _fresh_invocation_values(conversation_key, idempotency_key):
+    invocation_id = str(uuid.uuid4())
+    base_conversation_key = str(conversation_key or "workspace-agent").strip()
+    base_idempotency_key = str(idempotency_key or base_conversation_key).strip()
+    return {
+        "invocation_id": invocation_id,
+        "conversation_key": (
+            f"{base_conversation_key}:invocation:{invocation_id}"
+        ),
+        "idempotency_key": (
+            f"{base_idempotency_key}:invocation:{invocation_id}"
+        ),
+    }
 
 
 def workspace_agent_configuration(
@@ -125,7 +180,15 @@ def trigger_workspace_agent(
     idempotency_key=None,
     dry_run=True,
     timeout_seconds=None,
+    conversation_mode=FRESH_CONVERSATION_MODE,
 ):
+    if conversation_mode != FRESH_CONVERSATION_MODE:
+        raise ValueError("Only conversation_mode='new' is supported.")
+    invocation = _fresh_invocation_values(conversation_key, idempotency_key)
+    conversation_key = invocation["conversation_key"]
+    idempotency_key = invocation["idempotency_key"]
+    invocation_id = invocation["invocation_id"]
+    created_at = datetime.now(timezone.utc).isoformat()
     cleaned_agent_id = clean_agent_id(agent_id)
     access_token = str(
         access_token
@@ -153,6 +216,9 @@ def trigger_workspace_agent(
             "agent_id": cleaned_agent_id,
             "conversation_key": conversation_key,
             "idempotency_key": idempotency_key,
+            "conversation_mode": conversation_mode,
+            "invocation_id": invocation_id,
+            "created_at": created_at,
             "input_text": input_text,
             "endpoint": safe_endpoint,
             "agent_id_prefix": _safe_agent_id_prefix(cleaned_agent_id),
@@ -181,9 +247,13 @@ def trigger_workspace_agent(
             "payload_size": 0,
         }
 
+    # The trigger API uses a unique conversation_key to request an independent
+    # conversation. Continuation identifiers are deliberately never accepted
+    # or copied into this freshly constructed request object.
     body = {"input": str(input_text).strip()}
     if conversation_key:
         body["conversation_key"] = str(conversation_key).strip()
+    assert not CONTINUATION_FIELDS.intersection(body)
     request_data = json.dumps(body, ensure_ascii=False).encode("utf-8")
 
     headers = {
@@ -214,6 +284,10 @@ def trigger_workspace_agent(
         "agent_id_prefix": _safe_agent_id_prefix(cleaned_agent_id),
         "token_present": bool(access_token),
         "payload_size": len(request_data),
+        "conversation_mode": conversation_mode,
+        "invocation_id": invocation_id,
+        "conversation_key_audit": _safe_identifier(conversation_key),
+        "created_at": created_at,
     }
     logger.info("Workspace Agent trigger request: %s", json.dumps(diagnostic))
     started_at = time.perf_counter()
@@ -278,7 +352,22 @@ def trigger_workspace_agent(
             "error": str(exc),
             "error_type": "unexpected_error",
         }
+    returned_conversation_id = _returned_conversation_identifier(
+        result.get("response")
+    )
     result.update(diagnostic)
+    result["conversation_key"] = conversation_key
+    result["idempotency_key"] = idempotency_key
+    result["returned_conversation_id_audit"] = _safe_identifier(
+        returned_conversation_id
+    )
+    result["invocation_audit"] = {
+        "invocation_id": invocation_id,
+        "conversation_mode": conversation_mode,
+        "conversation_key": _safe_identifier(conversation_key),
+        "returned_conversation_id": _safe_identifier(returned_conversation_id),
+        "created_at": created_at,
+    }
     result["elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
     logger.info(
         "Workspace Agent trigger response: %s",
@@ -286,7 +375,11 @@ def trigger_workspace_agent(
             **diagnostic,
             "elapsed_seconds": result["elapsed_seconds"],
             "http_status": result.get("http_status"),
-            "response": result.get("response") or result.get("error"),
+            "response_type": type(result.get("response")).__name__,
+            "response_keys": sorted(result["response"])
+            if isinstance(result.get("response"), dict)
+            else [],
+            "error_type": result.get("error_type"),
             "request_correlation_id": result.get("request_correlation_id"),
         }, default=str),
     )

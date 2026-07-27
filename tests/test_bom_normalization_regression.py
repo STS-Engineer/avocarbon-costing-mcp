@@ -309,7 +309,7 @@ def test_trigger_most_triggers_pending_packages_and_moves_state(monkeypatch):
         state["most"][item]["trigger_payload"]["trigger_run_id"]
         for item in triggered_ids
     }
-    assert len(trigger_run_ids) == 1
+    assert len(trigger_run_ids) == len(triggered_ids)
 
 
 def test_trigger_most_skips_already_received_work_packages_idempotently(monkeypatch):

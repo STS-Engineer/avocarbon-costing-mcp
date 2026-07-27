@@ -53,10 +53,14 @@ def main():
     assert request.method == "POST"
     assert request.headers["Authorization"] == "Bearer test-token"
     assert request.headers["Content-type"] == "application/json"
-    assert request.headers["Idempotency-key"] == "test-idempotency"
+    assert request.headers["Idempotency-key"].startswith(
+        "test-idempotency:invocation:"
+    )
     assert set(body) == {"input", "conversation_key"}
     assert body["input"] == '{"project_code":"TEST"}'
-    assert body["conversation_key"] == "test-conversation"
+    assert body["conversation_key"].startswith(
+        "test-conversation:invocation:"
+    )
     assert result["http_status"] == 202
     assert result["request_correlation_id"] == "request-test-123"
     print("PASS trigger request matches the known working URL, headers and JSON schema")
