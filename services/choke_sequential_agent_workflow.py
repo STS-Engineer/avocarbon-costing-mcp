@@ -898,6 +898,7 @@ def _safe_trigger_failure(trigger_result: Dict[str, Any]) -> Dict[str, Any]:
     error_type = str(trigger_result.get("error_type") or "")
     http_status = trigger_result.get("http_status")
     missing = trigger_result.get("missing_inputs") or []
+    retryable = _is_retryable_trigger_result(trigger_result)
     if missing:
         code = "bom_agent_configuration_missing"
         message = (
@@ -914,6 +915,9 @@ def _safe_trigger_failure(trigger_result: Dict[str, Any]) -> Dict[str, Any]:
     elif error_type == "timeout":
         code = "workspace_agent_timeout"
         message = "BOM Workspace Agent invocation timed out."
+    elif retryable:
+        code = _trigger_failure_code(trigger_result)
+        message = "Workspace Agent trigger temporarily unavailable. Retrying is safe."
     elif error_type == "invalid_trigger_url":
         code = "workspace_agent_invalid_endpoint"
         message = str(trigger_result.get("message") or "Invalid trigger endpoint.")
@@ -930,7 +934,9 @@ def _safe_trigger_failure(trigger_result: Dict[str, Any]) -> Dict[str, Any]:
         "code": code,
         "message": message,
         "http_status": http_status,
-        "retryable": _is_retryable_trigger_result(trigger_result),
+        "request_id": trigger_result.get("request_correlation_id"),
+        "retry_after_seconds": trigger_result.get("retry_after_seconds"),
+        "retryable": retryable,
     }
 
 
@@ -1020,15 +1026,29 @@ def _apply_bom_callback_waiting_state(
     return state
 
 
-def _trigger_backoff_seconds() -> List[float]:
-    configured = os.getenv("WORKSPACE_AGENT_TRIGGER_BACKOFF_SECONDS", "5,15,30")
-    values = []
-    for item in configured.split(","):
-        try:
-            values.append(max(0.0, float(item.strip())))
-        except ValueError:
-            continue
-    return values or [5.0, 15.0, 30.0]
+def _trigger_backoff_seconds(attempt_number: int) -> float:
+    try:
+        initial = max(
+            0.0,
+            float(os.getenv("WORKSPACE_AGENT_TRIGGER_INITIAL_BACKOFF_SECONDS", "2")),
+        )
+    except (TypeError, ValueError):
+        initial = 2.0
+    try:
+        maximum = max(
+            initial,
+            float(os.getenv("WORKSPACE_AGENT_TRIGGER_MAX_BACKOFF_SECONDS", "30")),
+        )
+    except (TypeError, ValueError):
+        maximum = 30.0
+    return min(maximum, initial * (2 ** max(0, attempt_number - 1)))
+
+
+def _bom_trigger_max_attempts() -> int:
+    return min(
+        3,
+        _positive_int_env("WORKSPACE_AGENT_TRIGGER_MAX_ATTEMPTS", 3),
+    )
 
 
 def _is_retryable_trigger_result(result: Dict[str, Any]) -> bool:
@@ -1036,6 +1056,137 @@ def _is_retryable_trigger_result(result: Dict[str, Any]) -> bool:
         result.get("http_status") in RETRYABLE_TRIGGER_HTTP_STATUSES
         or result.get("error_type") in RETRYABLE_TRIGGER_ERROR_TYPES
     )
+
+
+def _trigger_failure_code(result: Dict[str, Any]) -> str:
+    status = result.get("http_status")
+    error_type = str(result.get("error_type") or "")
+    if status == 429:
+        return "workspace_agent_rate_limited"
+    if status in {409, 500, 502, 503, 504}:
+        return "workspace_agent_temporarily_unavailable"
+    if status == 401:
+        return "workspace_agent_unauthorized"
+    if status == 403:
+        return "workspace_agent_forbidden"
+    if error_type == "timeout":
+        return "workspace_agent_timeout"
+    if error_type in {"connection_error", "execution_exception"}:
+        return "workspace_agent_network_error"
+    if error_type == "configuration_error":
+        return "bom_agent_configuration_missing"
+    return "workspace_agent_trigger_failed"
+
+
+def _safe_trigger_attempt(
+    result: Dict[str, Any],
+    attempt_number: int,
+    trigger_run_id: Optional[str],
+    retryable: bool,
+    next_retry_seconds: Optional[float],
+) -> Dict[str, Any]:
+    return {
+        "attempt_number": attempt_number,
+        "timestamp": _now_iso(),
+        "trigger_run_id": trigger_run_id,
+        "http_status": result.get("http_status"),
+        "request_id": result.get("request_correlation_id"),
+        "retry_after_seconds": result.get("retry_after_seconds"),
+        "result_status": result.get("status"),
+        "error_type": result.get("error_type"),
+        "error_code": _trigger_failure_code(result) if result.get("status") == "failed" else None,
+        "safe_message": str(
+            result.get("note")
+            or result.get("message")
+            or "Workspace Agent trigger request failed."
+        ),
+        "retryable": retryable,
+        "next_retry_seconds": next_retry_seconds,
+        "failure_timestamp": _now_iso() if result.get("status") == "failed" else None,
+    }
+
+
+def _prepare_automatic_bom_retry(
+    project_code: str,
+    product_id: str,
+    normalized_input: Dict[str, Any],
+    request_base_url: Optional[str],
+    attempt_number: int,
+) -> Dict[str, Any]:
+    trigger_run_id = str(uuid.uuid4())
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        return {
+            "status": "failed",
+            "error_type": "configuration_error",
+            "note": "Workflow state disappeared before automatic retry.",
+            "retryable": False,
+        }
+    state["status"] = "retrying_trigger"
+    state["bom_status"] = "retrying_trigger"
+    state["current_step"] = "Step 1 BOM Agent"
+    state["bom"] = {
+        **dict(state.get("bom") or {}),
+        "status": "retrying_trigger",
+        "display_status": "retrying_trigger",
+        "lifecycle_status": "retrying_trigger",
+        "trigger_run_id": trigger_run_id,
+        "trigger_requested_at": _now_iso(),
+        "trigger_attempt_number": attempt_number,
+        "retryable": False,
+        "retry_available": False,
+        "accepted_at": None,
+    }
+    _save_state(state)
+    persisted, _ = _existing_state(project_code, product_id)
+    persisted_id = str(((persisted or {}).get("bom") or {}).get("trigger_run_id") or "")
+    if persisted_id != trigger_run_id:
+        raise RuntimeError("Automatic retry trigger_run_id was not persisted.")
+
+    trigger = _build_bom_trigger_payload(
+        project_code,
+        product_id,
+        normalized_input,
+        request_base_url=request_base_url,
+        trigger_run_id=persisted_id,
+    )
+    trigger = _refresh_bom_trigger_signed_url(trigger, request_base_url)
+    preflight = _validate_and_select_drawing_url(trigger)
+    if not preflight.get("success"):
+        return {
+            "status": "failed",
+            "http_status": None,
+            "error_type": "drawing_preflight_failed",
+            "note": "Drawing PDF preflight failed during automatic retry.",
+            "retryable": False,
+            "trigger_run_id": persisted_id,
+            "pdf_url_check": preflight,
+        }
+    state, _ = _existing_state(project_code, product_id)
+    state = state or {}
+    state.update({
+        "drawing_file_url": trigger.get("drawing_file_url"),
+        "drawing_access_mode": trigger.get("drawing_access_mode"),
+        "status": "retrying_trigger",
+        "bom_status": "retrying_trigger",
+    })
+    state["bom"] = {
+        **dict(state.get("bom") or {}),
+        "status": "retrying_trigger",
+        "lifecycle_status": "retrying_trigger",
+        "trigger_run_id": persisted_id,
+        "input_text": trigger.get("input_text"),
+        "drawing_file_url": trigger.get("drawing_file_url"),
+        "drawing_access_mode": trigger.get("drawing_access_mode"),
+        "pdf_url_check": preflight,
+    }
+    _save_state(state)
+    return {
+        "status": "ready",
+        "trigger_run_id": persisted_id,
+        "input_text": trigger["input_text"],
+        "pdf_url_check": preflight,
+    }
 
 
 def _trigger_response_body(result: Dict[str, Any]) -> Any:
@@ -1060,6 +1211,7 @@ def _trigger_bom_agent_with_retries(
     dry_run: bool,
     status_before: Optional[str],
     trigger_run_id: Optional[str] = None,
+    retry_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     _load_env()
     config = get_bom_agent_configuration_health()
@@ -1082,15 +1234,43 @@ def _trigger_bom_agent_with_retries(
             missing_configuration=config["missing_configuration"],
         )
         return result
-    # One user action creates one Workspace Agent request. A later retry is an
-    # explicit workflow action with a fresh drawing URL.
-    max_attempts = 1
-    backoffs = _trigger_backoff_seconds()
+    max_attempts = 1 if dry_run else _bom_trigger_max_attempts()
     attempts = []
     last_result: Dict[str, Any] = {}
-    idempotency_key = f"{project_code}:{product_id}:sequential:bom:{uuid.uuid4()}"
+    current_input_text = input_text
+    current_trigger_run_id = trigger_run_id
+    current_pdf_url_check = None
 
     for attempt_number in range(1, max_attempts + 1):
+        if attempt_number > 1:
+            prepared = _prepare_automatic_bom_retry(
+                project_code,
+                product_id,
+                dict((retry_context or {}).get("normalized_input") or {}),
+                (retry_context or {}).get("request_base_url"),
+                attempt_number,
+            )
+            if prepared.get("status") != "ready":
+                last_result = prepared
+                retryable = False
+                attempts.append(
+                    _safe_trigger_attempt(
+                        last_result,
+                        attempt_number,
+                        prepared.get("trigger_run_id"),
+                        retryable,
+                        None,
+                    )
+                )
+                break
+            current_input_text = prepared["input_text"]
+            current_trigger_run_id = prepared["trigger_run_id"]
+            current_pdf_url_check = prepared.get("pdf_url_check")
+
+        idempotency_key = (
+            f"{project_code}:{product_id}:sequential:bom:"
+            f"{current_trigger_run_id or uuid.uuid4()}"
+        )
         _log_bom_lifecycle(
             "before_agent_invocation",
             project_code=project_code,
@@ -1100,14 +1280,14 @@ def _trigger_bom_agent_with_retries(
             token_present=config.get("token_present"),
             endpoint=config.get("endpoint"),
             timeout_seconds=config.get("invocation_timeout_seconds"),
-            payload_bytes=len(input_text.encode("utf-8")),
-            trigger_run_id_sent=trigger_run_id,
+            payload_bytes=len(current_input_text.encode("utf-8")),
+            trigger_run_id_sent=current_trigger_run_id,
         )
         try:
             result = _trigger(
                 "CHATGPT_CHOKE_BOM_AGENT_ID",
                 "",
-                input_text,
+                current_input_text,
                 f"{project_code}:{product_id}:sequential:bom",
                 idempotency_key,
                 dry_run=dry_run,
@@ -1141,21 +1321,20 @@ def _trigger_bom_agent_with_retries(
         accepted = last_result.get("status") in {"accepted", "dry_run"}
         retryable = not accepted and _is_retryable_trigger_result(last_result)
         has_next_attempt = retryable and attempt_number < max_attempts
+        backoff_seconds = _trigger_backoff_seconds(attempt_number)
+        retry_after_seconds = last_result.get("retry_after_seconds")
         next_retry_seconds = (
-            backoffs[min(attempt_number - 1, len(backoffs) - 1)]
+            max(backoff_seconds, float(retry_after_seconds or 0))
             if has_next_attempt
             else None
         )
-        attempt = {
-            "attempt_number": attempt_number,
-            "timestamp": _now_iso(),
-            "http_status": last_result.get("http_status"),
-            "response_body": _trigger_response_body(last_result),
-            "result_status": last_result.get("status"),
-            "error_type": last_result.get("error_type"),
-            "retryable": retryable,
-            "next_retry_seconds": next_retry_seconds,
-        }
+        attempt = _safe_trigger_attempt(
+            last_result,
+            attempt_number,
+            current_trigger_run_id,
+            retryable,
+            next_retry_seconds,
+        )
         attempts.append(attempt)
         append_workflow_event(
             project_code,
@@ -1167,7 +1346,36 @@ def _trigger_bom_agent_with_retries(
             next_retry_seconds=next_retry_seconds,
             status_before=status_before,
             result_status=attempt.get("result_status"),
+            trigger_run_id=current_trigger_run_id,
+            request_id=attempt.get("request_id"),
         )
+        state, _ = _existing_state(project_code, product_id)
+        if state is not None and not accepted:
+            lifecycle = "retrying_trigger" if has_next_attempt else (
+                "failed_retryable" if retryable else "failed_non_retryable"
+            )
+            state["status"] = lifecycle
+            state["bom_status"] = lifecycle
+            state["retryable"] = retryable and not has_next_attempt
+            state["retry_available"] = retryable and not has_next_attempt
+            state["bom"] = {
+                **dict(state.get("bom") or {}),
+                "status": lifecycle,
+                "display_status": lifecycle,
+                "lifecycle_status": lifecycle,
+                "trigger_run_id": current_trigger_run_id,
+                "trigger_attempt_number": attempt_number,
+                "trigger_attempts": attempts,
+                "retryable": retryable and not has_next_attempt,
+                "retry_available": retryable and not has_next_attempt,
+                "failure_code": attempt.get("error_code"),
+                "failure_timestamp": attempt.get("failure_timestamp"),
+                "upstream_http_status": attempt.get("http_status"),
+                "openai_request_id": attempt.get("request_id"),
+                "retry_after_seconds": attempt.get("retry_after_seconds"),
+                "accepted_at": None,
+            }
+            _save_state(state)
         if accepted:
             append_workflow_event(
                 project_code,
@@ -1201,6 +1409,9 @@ def _trigger_bom_agent_with_retries(
         "attempts": attempts,
         "retryable": final_retryable,
         "max_attempts": max_attempts,
+        "trigger_run_id": current_trigger_run_id,
+        "input_text": current_input_text,
+        "pdf_url_check": current_pdf_url_check,
     }
 
 
@@ -1465,6 +1676,8 @@ def start_real_choke_workflow(
                 "agent_triggered",
                 "awaiting_writeback",
                 "trigger_request_sending",
+                "triggering",
+                "retrying_trigger",
                 "trigger_request_accepted",
                 "awaiting_bom_callback",
             }
@@ -1854,38 +2067,40 @@ def _start_real_choke_workflow_locked(
         dry_run=dry_run,
         status_before=status_before,
         trigger_run_id=persisted_trigger_run_id,
+        retry_context={
+            "normalized_input": normalized_input,
+            "request_base_url": request_base_url,
+        },
+    )
+    effective_trigger_run_id = str(
+        trigger_result.get("trigger_run_id") or persisted_trigger_run_id
     )
     trigger_result["invocation_audit"] = {
         **(trigger_result.get("invocation_audit") or {}),
-        "trigger_run_id": persisted_trigger_run_id,
+        "trigger_run_id": effective_trigger_run_id,
         "agent_type": "bom",
         "project_code": project_code,
         "product_id": product_id,
     }
     accepted = trigger_result.get("status") in {"accepted", "dry_run"}
     retryable_failure = not accepted and trigger_result.get("retryable") is True
-    workflow_status = (
-        "awaiting_writeback"
-        if accepted
-        else "failed"
-    )
-    bom_status = (
-        "awaiting_writeback"
-        if accepted
-        else "failed"
-    )
+    failed_status = "failed_retryable" if retryable_failure else "failed_non_retryable"
+    workflow_status = "awaiting_writeback" if accepted else failed_status
+    bom_status = "awaiting_writeback" if accepted else failed_status
     latest_state, _ = _existing_state(project_code, product_id)
     state = latest_state or persisted_state
     if (state.get("bom") or {}).get("status") != "received":
         state["status"] = workflow_status
-        state["bom_status"] = "triggered" if accepted else "failed"
+        state["bom_status"] = "triggered" if accepted else failed_status
         state["current_step"] = "Step 1 BOM Agent"
         combined_attempts = [validation_attempt, *(trigger_result.get("attempts") or [])]
+        final_attempt = (trigger_result.get("attempts") or [{}])[-1]
         state["bom"] = {
             **dict(state.get("bom") or {}),
             "status": bom_status,
-            "display_status": "triggered" if accepted else "failed",
-            "lifecycle_status": "awaiting_writeback" if accepted else "failed",
+            "display_status": "triggered" if accepted else failed_status,
+            "lifecycle_status": "awaiting_writeback" if accepted else failed_status,
+            "trigger_run_id": effective_trigger_run_id,
             "trigger_request_status": (
                 "trigger_request_accepted" if accepted else "trigger_request_failed"
             ),
@@ -1895,12 +2110,16 @@ def _start_real_choke_workflow_locked(
             "trigger_attempts": combined_attempts,
             "retryable": False if accepted else retryable_failure,
             "retry_available": False if accepted else retryable_failure,
-            "failure_code": None if accepted else "agent_trigger_failed",
+            "failure_code": None if accepted else _trigger_failure_code(trigger_result),
+            "failure_timestamp": None if accepted else final_attempt.get("failure_timestamp"),
+            "upstream_http_status": None if accepted else final_attempt.get("http_status"),
+            "openai_request_id": None if accepted else final_attempt.get("request_id"),
+            "retry_after_seconds": None if accepted else final_attempt.get("retry_after_seconds"),
+            "trigger_attempt_number": final_attempt.get("attempt_number"),
             "pdf_url_check": pdf_url_check,
         }
         if not accepted:
             safe_failure = _safe_trigger_failure(trigger_result)
-            safe_failure["code"] = "agent_trigger_failed"
             state["bom"]["safe_error"] = safe_failure
             state.setdefault("errors", []).append({
                 "stage": "bom",
@@ -1915,21 +2134,21 @@ def _start_real_choke_workflow_locked(
                 error_code=safe_failure["code"],
                 http_status=safe_failure["http_status"],
                 retryable=safe_failure["retryable"],
-                status_after="failed",
+                status_after=failed_status,
             )
         else:
             _log_bom_lifecycle(
                 "agent_triggered",
                 project_code=project_code,
                 product_id=product_id,
-                trigger_run_id=persisted_trigger_run_id,
+                trigger_run_id=effective_trigger_run_id,
                 http_status=trigger_result.get("http_status"),
             )
             _log_bom_lifecycle(
                 "awaiting_writeback",
                 project_code=project_code,
                 product_id=product_id,
-                trigger_run_id=persisted_trigger_run_id,
+                trigger_run_id=effective_trigger_run_id,
             )
     else:
         _apply_bom_received_precedence(state)
@@ -1986,6 +2205,21 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         raise FileNotFoundError("Workflow state not found. Start the workflow before retrying the BOM Agent.")
     status_before = state.get("status")
     existing_bom = dict(state.get("bom") or {})
+    if existing_bom.get("lifecycle_status") in {
+        "trigger_request_sending",
+        "triggering",
+        "retrying_trigger",
+    }:
+        return {
+            "status": existing_bom.get("lifecycle_status"),
+            "project_code": project_code,
+            "product_id": product_id,
+            "skipped": True,
+            "reason": "bom_trigger_request_in_progress",
+            "message": "A BOM-only trigger or retry is already in progress.",
+            "retry_available": False,
+            "state": state,
+        }
     if existing_bom.get("status") == "received":
         return {
             "status": "bom_received",
@@ -2215,28 +2449,39 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         dry_run=False,
         status_before=status_before,
         trigger_run_id=persisted_trigger_run_id,
+        retry_context={
+            "normalized_input": customer_input,
+            "request_base_url": None,
+        },
+    )
+    effective_trigger_run_id = str(
+        trigger_result.get("trigger_run_id") or persisted_trigger_run_id
     )
     trigger_result["invocation_audit"] = {
         **(trigger_result.get("invocation_audit") or {}),
-        "trigger_run_id": persisted_trigger_run_id,
+        "trigger_run_id": effective_trigger_run_id,
         "agent_type": "bom",
         "project_code": project_code,
         "product_id": product_id,
     }
     accepted = trigger_result.get("status") == "accepted"
     retryable_failure = not accepted and trigger_result.get("retryable") is True
-    state["status"] = "awaiting_writeback" if accepted else "failed"
-    state["bom_status"] = "triggered" if accepted else "failed"
+    failed_status = "failed_retryable" if retryable_failure else "failed_non_retryable"
+    latest_state, _ = _existing_state(project_code, product_id)
+    state = latest_state or state
+    state["status"] = "awaiting_writeback" if accepted else failed_status
+    state["bom_status"] = "triggered" if accepted else failed_status
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
+    final_attempt = (trigger_result.get("attempts") or [{}])[-1]
     state["bom"] = {
         **dict(state.get("bom") or {}),
         "status": (
             "awaiting_writeback"
             if accepted
-            else "failed"
+            else failed_status
         ),
-        "display_status": "triggered" if accepted else "failed",
+        "display_status": "triggered" if accepted else failed_status,
         "trigger_request_status": (
             "trigger_request_accepted" if accepted else "trigger_request_failed"
         ),
@@ -2244,21 +2489,34 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "callback_timeout_seconds": _bom_callback_timeout_seconds(),
         "retryable": False if accepted else retryable_failure,
         "retry_available": False if accepted else retryable_failure,
-        "failure_code": None if accepted else "agent_trigger_failed",
+        "failure_code": None if accepted else _trigger_failure_code(trigger_result),
+        "failure_timestamp": None if accepted else final_attempt.get("failure_timestamp"),
+        "upstream_http_status": None if accepted else final_attempt.get("http_status"),
+        "openai_request_id": None if accepted else final_attempt.get("request_id"),
+        "retry_after_seconds": None if accepted else final_attempt.get("retry_after_seconds"),
+        "trigger_attempt_number": final_attempt.get("attempt_number"),
+        "trigger_run_id": effective_trigger_run_id,
         "trigger_result": trigger_result,
         "trigger_attempts": [validation_attempt, *(trigger_result.get("attempts") or [])],
-        "input_text": input_text,
+        "input_text": trigger_result.get("input_text") or input_text,
         "save_path": existing_bom.get("save_path") or bom_trigger.get("save_address"),
-        "drawing_file_url": bom_trigger.get("drawing_file_url"),
-        "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
-        "pdf_url_check": pdf_url_check,
-        "lifecycle_status": (
-            "awaiting_writeback" if accepted else "failed"
+        "drawing_file_url": (
+            (state.get("bom") or {}).get("drawing_file_url")
+            or bom_trigger.get("drawing_file_url")
         ),
+        "drawing_access_mode": (
+            (state.get("bom") or {}).get("drawing_access_mode")
+            or bom_trigger.get("drawing_access_mode")
+        ),
+        "pdf_url_check": (
+            trigger_result.get("pdf_url_check")
+            or (state.get("bom") or {}).get("pdf_url_check")
+            or pdf_url_check
+        ),
+        "lifecycle_status": "awaiting_writeback" if accepted else failed_status,
     }
     if not accepted:
         safe_failure = _safe_trigger_failure(trigger_result)
-        safe_failure["code"] = "agent_trigger_failed"
         state["bom"]["safe_error"] = safe_failure
         state.setdefault("errors", []).append({
             "stage": "bom",
@@ -2273,14 +2531,14 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             error_code=safe_failure["code"],
             http_status=safe_failure["http_status"],
             retryable=safe_failure["retryable"],
-            status_after="failed",
+            status_after=failed_status,
         )
     else:
         _log_bom_lifecycle(
             "agent_triggered",
             project_code=project_code,
             product_id=product_id,
-            trigger_run_id=persisted_trigger_run_id,
+            trigger_run_id=effective_trigger_run_id,
             retry=True,
             http_status=trigger_result.get("http_status"),
         )
@@ -2288,7 +2546,7 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             "awaiting_writeback",
             project_code=project_code,
             product_id=product_id,
-            trigger_run_id=persisted_trigger_run_id,
+            trigger_run_id=effective_trigger_run_id,
             retry=True,
         )
         _log_bom_lifecycle(

@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 WORKSPACE_AGENT_API_BASE_URL = "https://api.chatgpt.com/v1/workspace_agents"
@@ -71,6 +72,27 @@ def _correlation_id(headers):
         if value:
             return value
     return None
+
+
+def _retry_after_seconds(headers):
+    if not headers:
+        return None
+    value = str(headers.get("Retry-After") or "").strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(
+                0.0,
+                (retry_at.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds(),
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def _safe_identifier(value):
@@ -305,6 +327,7 @@ def trigger_workspace_agent(
                 ),
                 "response": _response_payload(response_text),
                 "request_correlation_id": _correlation_id(response.headers),
+                "retry_after_seconds": _retry_after_seconds(response.headers),
                 "conversation_url_verified": False,
             }
     except urllib.error.HTTPError as exc:
@@ -317,6 +340,7 @@ def trigger_workspace_agent(
             "response": _response_payload(response_text),
             "error_type": "http_error",
             "request_correlation_id": _correlation_id(exc.headers),
+            "retry_after_seconds": _retry_after_seconds(exc.headers),
         }
     except (TimeoutError, socket.timeout) as exc:
         result = {
