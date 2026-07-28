@@ -27,7 +27,6 @@ def _run_retry_sequence(monkeypatch, responses):
     }
     saved = []
     calls = []
-    prepared_ids = iter(["run-2", "run-3"])
 
     monkeypatch.setattr(workflow, "get_bom_agent_configuration_health", _configured)
     monkeypatch.setattr(workflow, "_existing_state", lambda *_: (copy.deepcopy(state), None))
@@ -38,8 +37,8 @@ def _run_retry_sequence(monkeypatch, responses):
         saved.append(copy.deepcopy(updated))
         return updated
 
-    def prepare(*_args):
-        run_id = next(prepared_ids)
+    def prepare(*args):
+        run_id = args[5]
         state["bom"]["trigger_run_id"] = run_id
         return {
             "status": "ready",
@@ -88,9 +87,9 @@ def test_temporary_gateway_failure_then_success(monkeypatch, temporary_status):
     )
 
     assert result["status"] == "accepted"
-    assert result["trigger_run_id"] == "run-2"
+    assert result["trigger_run_id"] == "run-1"
     assert len(calls) == 2
-    assert calls[0] != calls[1]
+    assert calls[0] == calls[1]
     assert state["components"]["existing"]["status"] == "received"
     assert state["most"]["existing"]["status"] == "received"
 
@@ -130,8 +129,8 @@ def test_all_three_attempts_unavailable_is_retryable(monkeypatch):
     assert result["max_attempts"] == 3
     assert [item["trigger_run_id"] for item in result["attempts"]] == [
         "run-1",
-        "run-2",
-        "run-3",
+        "run-1",
+        "run-1",
     ]
     assert len(calls) == 3
     assert state["status"] == "failed_retryable"

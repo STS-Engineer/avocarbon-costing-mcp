@@ -200,20 +200,39 @@ def _handle(callback):
 
 def _trigger_failure_http_status(result: Dict[str, Any]) -> int | None:
     state = result.get("state") or {}
-    if result.get("status") not in {
+    bom = state.get("bom") or result.get("bom") or {}
+    failure_statuses = {
         "trigger_request_failed",
         "bom_trigger_failed",
-    } and state.get("status") not in {
-        "trigger_request_failed",
-        "bom_trigger_failed",
-    }:
+        "failed_retryable",
+        "failed_non_retryable",
+        "failed",
+    }
+    if (
+        result.get("success") is not False
+        and result.get("status") not in failure_statuses
+        and state.get("bom_status") not in failure_statuses
+        and bom.get("status") not in failure_statuses
+        and bom.get("lifecycle_status") not in failure_statuses
+    ):
         return None
-    safe_error = ((state.get("bom") or {}).get("safe_error") or {})
+    safe_error = bom.get("safe_error") or {}
     code = str(safe_error.get("code") or "")
+    upstream_status = safe_error.get("http_status") or bom.get("upstream_http_status")
+    if code == "workspace_agent_http_401" or upstream_status == 401:
+        return 401
+    if code == "workspace_agent_http_403" or upstream_status == 403:
+        return 403
     if code == "bom_agent_configuration_missing":
         return 503
-    if code == "workspace_agent_timeout":
+    if code == "workspace_agent_timeout" or upstream_status == 504:
         return 504
+    if code in {
+        "workspace_agent_temporarily_unavailable",
+        "workspace_agent_rate_limited",
+        "workspace_agent_network_error",
+    }:
+        return 503
     return 502
 
 
@@ -336,6 +355,23 @@ def retry_bom(request: RetryBomRequest):
         project_code=request.project_code,
         product_id=request.product_id,
     ))
+    state = result.get("state") or {}
+    bom = state.get("bom") or result.get("bom") or {}
+    logger.info(
+        "BOM retry API result: %s",
+        json.dumps({
+            "project_code": request.project_code,
+            "product_id": request.product_id,
+            "success": result.get("success"),
+            "workflow_status": state.get("status") or result.get("status"),
+            "bom_status": state.get("bom_status") or result.get("bom_status"),
+            "bom_lifecycle_status": bom.get("lifecycle_status"),
+            "trigger_run_id": bom.get("trigger_run_id"),
+            "upstream_http_status": bom.get("upstream_http_status"),
+            "retryable": bom.get("retryable"),
+            "response_shape": sorted(result),
+        }),
+    )
     _raise_trigger_failure(result)
     return result
 

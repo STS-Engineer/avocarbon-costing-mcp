@@ -613,6 +613,36 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+_BOM_RETRY_PRESERVED_WORKFLOW_STATUSES = {
+    "components_triggered",
+    "components_received",
+    "most_triggering",
+    "most_triggered",
+    "most_received",
+    "calculated",
+}
+
+
+def _workflow_status_during_bom_retry(
+    status_before: Optional[str],
+    bom_lifecycle_status: str,
+) -> str:
+    if status_before in _BOM_RETRY_PRESERVED_WORKFLOW_STATUSES:
+        return str(status_before)
+    return bom_lifecycle_status
+
+
+def _missing_outputs_with_bom(state: Dict[str, Any]) -> List[str]:
+    return [
+        "bom",
+        *[
+            item
+            for item in state.get("missing_outputs") or []
+            if item != "bom"
+        ],
+    ]
+
+
 def _apply_most_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
     most = state.setdefault("most", {})
     required = list(
@@ -1124,8 +1154,10 @@ def _prepare_automatic_bom_retry(
     normalized_input: Dict[str, Any],
     request_base_url: Optional[str],
     attempt_number: int,
+    trigger_run_id: str,
+    workflow_status_before: Optional[str],
+    current_step_before: Optional[str],
 ) -> Dict[str, Any]:
-    trigger_run_id = str(uuid.uuid4())
     state, _ = _existing_state(project_code, product_id)
     if state is None:
         return {
@@ -1134,9 +1166,16 @@ def _prepare_automatic_bom_retry(
             "note": "Workflow state disappeared before automatic retry.",
             "retryable": False,
         }
-    state["status"] = "retrying_trigger"
+    state["status"] = _workflow_status_during_bom_retry(
+        workflow_status_before,
+        "retrying_trigger",
+    )
     state["bom_status"] = "retrying_trigger"
-    state["current_step"] = "Step 1 BOM Agent"
+    state["current_step"] = (
+        current_step_before
+        if workflow_status_before in _BOM_RETRY_PRESERVED_WORKFLOW_STATUSES
+        else "Step 1 BOM Agent"
+    )
     state["bom"] = {
         **dict(state.get("bom") or {}),
         "status": "retrying_trigger",
@@ -1179,7 +1218,10 @@ def _prepare_automatic_bom_retry(
     state.update({
         "drawing_file_url": trigger.get("drawing_file_url"),
         "drawing_access_mode": trigger.get("drawing_access_mode"),
-        "status": "retrying_trigger",
+        "status": _workflow_status_during_bom_retry(
+            workflow_status_before,
+            "retrying_trigger",
+        ),
         "bom_status": "retrying_trigger",
     })
     state["bom"] = {
@@ -1274,6 +1316,9 @@ def _trigger_bom_agent_with_retries(
                 dict((retry_context or {}).get("normalized_input") or {}),
                 (retry_context or {}).get("request_base_url"),
                 attempt_number,
+                str(current_trigger_run_id or ""),
+                status_before,
+                (retry_context or {}).get("current_step_before"),
             )
             if prepared.get("status") != "ready":
                 last_result = prepared
@@ -1388,7 +1433,10 @@ def _trigger_bom_agent_with_retries(
             lifecycle = "retrying_trigger" if has_next_attempt else (
                 "failed_retryable" if retryable else "failed_non_retryable"
             )
-            state["status"] = lifecycle
+            state["status"] = _workflow_status_during_bom_retry(
+                status_before,
+                lifecycle,
+            )
             state["bom_status"] = lifecycle
             state["retryable"] = retryable and not has_next_attempt
             state["retry_available"] = retryable and not has_next_attempt
@@ -2262,7 +2310,17 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     if state is None:
         raise FileNotFoundError("Workflow state not found. Start the workflow before retrying the BOM Agent.")
     status_before = state.get("status")
+    current_step_before = state.get("current_step")
     existing_bom = dict(state.get("bom") or {})
+    _log_bom_lifecycle(
+        "retry_state_loaded",
+        project_code=project_code,
+        product_id=product_id,
+        status_before=status_before,
+        bom_status_before=existing_bom.get("status"),
+        previous_trigger_run_id=existing_bom.get("trigger_run_id"),
+        workflow_revision=state.get("workflow_revision"),
+    )
     if existing_bom.get("lifecycle_status") in {
         "trigger_request_sending",
         "triggering",
@@ -2327,10 +2385,17 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     customer_input.setdefault("product_id", product_id)
     trigger_run_id = str(uuid.uuid4())
     trigger_requested_at = _now_iso()
-    state["status"] = "drawing_preflight_started"
+    state["status"] = _workflow_status_during_bom_retry(
+        status_before,
+        "drawing_preflight_started",
+    )
     state["bom_status"] = "triggering"
-    state["current_step"] = "Step 1 BOM Agent"
-    state["missing_outputs"] = ["bom"]
+    state["current_step"] = (
+        current_step_before
+        if status_before in _BOM_RETRY_PRESERVED_WORKFLOW_STATUSES
+        else "Step 1 BOM Agent"
+    )
+    state["missing_outputs"] = _missing_outputs_with_bom(state)
     state["bom"] = {
         **existing_bom,
         "status": "drawing_preflight_started",
@@ -2433,7 +2498,10 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             ),
             "drawing_not_pdf",
         )
-        state["status"] = "failed"
+        state["status"] = _workflow_status_during_bom_retry(
+            status_before,
+            "failed",
+        )
         state["bom_status"] = "failed"
         state["bom"] = {
             **dict(state.get("bom") or {}),
@@ -2462,7 +2530,10 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             "trigger_attempts": state["bom"]["trigger_attempts"],
             "state": state,
         }
-    state["status"] = "drawing_preflight_passed"
+    state["status"] = _workflow_status_during_bom_retry(
+        status_before,
+        "drawing_preflight_passed",
+    )
     state["bom"] = {
         **dict(state.get("bom") or {}),
         "status": "drawing_preflight_passed",
@@ -2489,7 +2560,10 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         ),
     )
 
-    state["status"] = "trigger_request_sending"
+    state["status"] = _workflow_status_during_bom_retry(
+        status_before,
+        "trigger_request_sending",
+    )
     state["bom_status"] = "triggering"
     state["bom"] = {
         **dict(state.get("bom") or {}),
@@ -2510,6 +2584,7 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         retry_context={
             "normalized_input": customer_input,
             "request_base_url": None,
+            "current_step_before": current_step_before,
         },
     )
     effective_trigger_run_id = str(
@@ -2527,18 +2602,21 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     failed_status = "failed_retryable" if retryable_failure else "failed_non_retryable"
     latest_state, _ = _existing_state(project_code, product_id)
     state = latest_state or state
-    state["status"] = "awaiting_writeback" if accepted else failed_status
+    state["status"] = _workflow_status_during_bom_retry(
+        status_before,
+        "awaiting_writeback" if accepted else failed_status,
+    )
     state["bom_status"] = "triggered" if accepted else failed_status
-    state["current_step"] = "Step 1 BOM Agent"
-    state["missing_outputs"] = ["bom"]
+    state["current_step"] = (
+        current_step_before
+        if status_before in _BOM_RETRY_PRESERVED_WORKFLOW_STATUSES
+        else "Step 1 BOM Agent"
+    )
+    state["missing_outputs"] = _missing_outputs_with_bom(state)
     final_attempt = (trigger_result.get("attempts") or [{}])[-1]
     state["bom"] = {
         **dict(state.get("bom") or {}),
-        "status": (
-            "awaiting_writeback"
-            if accepted
-            else failed_status
-        ),
+        "status": "triggered" if accepted else failed_status,
         "display_status": "triggered" if accepted else failed_status,
         "trigger_request_status": (
             "trigger_request_accepted" if accepted else "trigger_request_failed"
@@ -2616,7 +2694,9 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         )
     _save_state(state)
     return {
+        "success": accepted,
         "status": state["status"],
+        "bom_status": state["bom_status"],
         "project_code": project_code,
         "product_id": product_id,
         "bom": state["bom"],

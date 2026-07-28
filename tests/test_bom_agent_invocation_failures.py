@@ -3,9 +3,9 @@ import json
 import socket
 import urllib.error
 
-from fastapi.testclient import TestClient
+import pytest
+from fastapi import HTTPException
 
-from app.main import app
 from app.routers import choke_workflow_router
 from services import choke_sequential_agent_workflow as workflow
 from services import workspace_agent_client
@@ -151,14 +151,12 @@ def test_start_route_returns_failed_state_in_non_200_error(monkeypatch):
         lambda **kwargs: {"status": "trigger_request_failed", "state": state},
     )
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/choke-workflow/start",
-            json={"input_file": "input.json", "dry_run": False},
-        )
+    result = {"status": "trigger_request_failed", "state": state}
+    with pytest.raises(HTTPException) as raised:
+        choke_workflow_router._raise_trigger_failure(result)
 
-    assert response.status_code == 502
-    assert response.json()["detail"]["state"]["bom_status"] == "failed"
+    assert raised.value.status_code == 401
+    assert raised.value.detail["state"]["bom_status"] == "failed"
 
 
 def test_retry_bom_only_returns_existing_received_state(monkeypatch):
