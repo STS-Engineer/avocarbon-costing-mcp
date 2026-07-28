@@ -38,6 +38,9 @@ from services.choke_writeback_mcp_diagnostic import (
     get_bom_agent_capability_diagnostic,
     get_writeback_mcp_connectivity_diagnostic,
 )
+from services.workspace_agent_trigger_diagnostic import (
+    run_minimal_trigger_diagnostic,
+)
 from services.choke_financial_workflow import (
     calculate_saved_financial_plan,
     get_financial_model_audit,
@@ -264,6 +267,11 @@ def bom_agent_health():
 @router.get("/bom-agent-capabilities")
 def bom_agent_capabilities():
     return _handle(get_bom_agent_capability_diagnostic)
+
+
+@router.get("/workspace-trigger-diagnostic")
+def workspace_trigger_diagnostic():
+    return _handle(run_minimal_trigger_diagnostic)
 
 
 @router.post("/storage-self-test")

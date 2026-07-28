@@ -2,177 +2,126 @@ import argparse
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
-import uuid
 from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-ENV_PATH = ROOT_DIR / ".env"
-TRIGGER_API_BASE_URL = "https://api.chatgpt.com/v1/workspace_agents"
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
-AGENT_ENV = {
-    "external": "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID",
-    "bom": "CHATGPT_CHOKE_BOM_AGENT_ID",
-    "most": "CHATGPT_MOST_AGENT_ID",
-}
+from services.project_data_paths import COSTING_RUNS_DIR
+from services.workspace_agent_trigger_diagnostic import (
+    MINIMAL_DIAGNOSTIC_INPUT,
+    run_raw_workspace_trigger,
+    unique_conversation_key,
+)
 
 
-def load_env():
+def load_env() -> None:
+    env_path = ROOT_DIR / ".env"
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(ENV_PATH)
+        load_dotenv(env_path)
         return
     except Exception:
         pass
-
-    if not ENV_PATH.exists():
+    if not env_path.exists():
         return
-
-    for raw_line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+        os.environ.setdefault(
+            key.strip(),
+            value.strip().strip('"').strip("'"),
+        )
 
 
-def clean_agent_id(agent_id):
-    cleaned = str(agent_id or "").strip().rstrip("/")
-    if cleaned.endswith("/trigger"):
-        cleaned = cleaned[: -len("/trigger")]
-    if "/" in cleaned:
-        cleaned = cleaned.rsplit("/", 1)[-1]
-    return cleaned
-
-
-def build_default_input(agent_name):
-    if agent_name == "external":
-        return """Project 24003-CHO-00.
-Component ferrite only.
-This is one external component only, not a complete choke.
-Annual quantity 600000.
-Production plant Kunshan.
-Destination China.
-Save address:
-data/costing_runs/24003-CHO-00/316-5001/components/316-5001-ferrite.json"""
-
-    if agent_name == "bom":
-        return """Project 24003-CHO-00.
-Product Fuse choke.
-Part number 316-5001.
-Drawing reference 316-5001-1-熔断电感-QS198102-0051 customer confirmed.pdf.
-Do not calculate final price.
-Create BOM JSON with ferrite, wire, tin, glue.
-Save address:
-data/costing_runs/24003-CHO-00/316-5001/bom.json"""
-
-    return """Project 24003-CHO-00.
-Operation only.
-Component-operation work package only.
-Operation 10 winding.
-Do not process full product.
-Do not read SharePoint.
-Return one MOST JSON.
-Save address:
-data/costing_runs/24003-CHO-00/316-5001/most/10-winding.json"""
-
-
-def print_dry_run(agent_name, agent_id, conversation_key, idempotency_key, input_text):
-    print(f"selected agent: {agent_name}")
-    print(f"agent id: {agent_id}")
-    print(f"conversation_key: {conversation_key}")
-    print(f"idempotency_key: {idempotency_key}")
-    print("input_text:")
-    print(input_text)
-
-
-def call_workspace_agent(agent_id, token, conversation_key, idempotency_key, input_text):
-    body = {
-        "conversation_key": conversation_key,
-        "input": input_text,
-    }
-    request = urllib.request.Request(
-        f"{TRIGGER_API_BASE_URL}/{agent_id}/trigger",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Idempotency-Key": idempotency_key,
-        },
-        method="POST",
+def _latest_bom_input_text() -> str | None:
+    candidates = sorted(
+        COSTING_RUNS_DIR.glob("*/*/workflow_state.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
     )
-
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            status = response.getcode()
-            response_text = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        status = exc.code
-        response_text = exc.read().decode("utf-8", errors="replace")
-    except Exception as exc:
-        print(f"Workspace Agent trigger failed before HTTP response: {exc}")
-        return 1
-
-    print(f"HTTP status: {status}")
-    if response_text:
-        print("response text:")
-        print(response_text)
-    if status == 202:
-        print("Workspace Agent trigger accepted")
-        return 0
-    return 1
+    for path in candidates:
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        input_text = (state.get("bom") or {}).get("input_text")
+        if isinstance(input_text, str) and input_text.strip():
+            return input_text
+    return None
 
 
-def parse_args():
+def _print_result(label: str, result: dict) -> None:
+    print(label)
+    print(f"HTTP status: {result.get('http_status')}")
+    print(
+        "request ID headers: "
+        + json.dumps(result.get("response_headers") or {}, sort_keys=True)
+    )
+    print(f"response body length: {result.get('response_body_length')}")
+    print(f"Retry-After: {result.get('retry_after')}")
+    print(f"elapsed seconds: {result.get('elapsed_seconds')}")
+    print(f"classification: {result.get('classification')}")
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Smoke-test ChatGPT Workspace Agent trigger API for AVOCarbon agents."
+        description="Raw one-request Workspace Agent trigger diagnostic."
     )
     parser.add_argument(
-        "--agent",
-        choices=sorted(AGENT_ENV),
-        required=True,
-        help="Agent to trigger.",
+        "--bom-payload-file",
+        help="Optional JSON/text file containing the exact BOM trigger input.",
     )
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--dry-run", action="store_true", help="Print payload only.")
-    mode.add_argument("--call-api", action="store_true", help="Call trigger API.")
     return parser.parse_args()
 
 
-def main():
+def main() -> int:
     args = parse_args()
     load_env()
 
-    env_name = AGENT_ENV[args.agent]
-    raw_agent_id = os.getenv(env_name)
-    agent_id = clean_agent_id(raw_agent_id)
-    token = os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN")
-    conversation_key = f"avocarbon-test-{args.agent}-24003-CHO-00"
-    idempotency_key = f"avocarbon-test-{args.agent}-{uuid.uuid4()}"
-    input_text = build_default_input(args.agent)
+    cases = [
+        ("A. minimal text only", None),
+        ("B. conversation_key omitted", None),
+        ("C. unique conversation_key", unique_conversation_key()),
+    ]
+    results = []
+    for label, conversation_key in cases:
+        result = run_raw_workspace_trigger(
+            input_text=MINIMAL_DIAGNOSTIC_INPUT,
+            conversation_key=conversation_key,
+            timeout_seconds=30,
+        )
+        results.append(result)
+        _print_result(label, result)
 
-    if args.dry_run:
-        print_dry_run(args.agent, agent_id, conversation_key, idempotency_key, input_text)
-        return 0
+    if any(result.get("http_status") == 202 for result in results):
+        if args.bom_payload_file:
+            bom_input = Path(args.bom_payload_file).read_text(encoding="utf-8")
+        else:
+            bom_input = _latest_bom_input_text()
+        if bom_input:
+            result = run_raw_workspace_trigger(
+                input_text=bom_input,
+                conversation_key=unique_conversation_key(),
+                timeout_seconds=30,
+            )
+            _print_result("D. exact saved BOM input", result)
+        else:
+            print("D. exact saved BOM input")
+            print("HTTP status: not_run")
+            print("request ID headers: {}")
+            print("response body length: 0")
+            print("Retry-After: None")
+            print("elapsed seconds: 0")
+            print("classification: no_saved_bom_input")
 
-    if not agent_id.startswith("agtch_"):
-        print("This is not a Workspace Agent trigger ID. Expected agtch_...")
-        print(f"selected agent: {args.agent}")
-        print(f"agent id: {agent_id or '<missing>'}")
-        return 1
-
-    if not token:
-        print("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN is missing. Cannot call API.")
-        print("Token was not printed.")
-        return 1
-
-    return call_workspace_agent(agent_id, token, conversation_key, idempotency_key, input_text)
+    return 0 if any(result.get("http_status") == 202 for result in results) else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
