@@ -8,12 +8,6 @@ from services.choke_writeback_mcp_diagnostic import WRITEBACK_TOOL_SCHEMAS
 
 
 OLD_MOST_INSTRUCTION = "Analyze only this work package and call save_most_output."
-BOM_INSTRUCTION = (
-    "Analyze the drawing according to your permanent agent instructions. "
-    "After producing the complete BOM JSON, call save_bom_output exactly once "
-    "with the exact project_code, product_id, trigger_run_id, and raw_json. "
-    "The backend accepts completion only from this correlated write-back."
-)
 
 
 def _state():
@@ -98,7 +92,7 @@ def test_most_payload_fields_and_identity_are_unchanged():
     assert payload["save_address"].endswith("agent_outputs/most/wp_20_wire_winding.json")
 
 
-def test_bom_instruction_unchanged_and_component_instruction_requires_pricing_basis():
+def test_bom_runtime_instruction_is_correlated_and_component_instruction_is_unchanged():
     bom = workflow._build_bom_trigger_payload(
         "TEST-PROJECT",
         "TEST-PRODUCT",
@@ -119,7 +113,13 @@ def test_bom_instruction_unchanged_and_component_instruction_requires_pricing_ba
         },
     )
 
-    assert bom["payload"]["instruction"] == BOM_INSTRUCTION
+    assert bom["payload"]["instruction"] == workflow._build_bom_runtime_instruction(
+        "TEST-PROJECT",
+        "TEST-PRODUCT",
+        bom["trigger_run_id"],
+    )
+    assert "Open drawing_file_url now" in bom["payload"]["instruction"]
+    assert "Do not wait for ./user_files/" in bom["payload"]["instruction"]
     # The component instruction was hardened (Phase 6) to require an explicit
     # pricing basis/currency for every priced value, closing the unit-mismatch
     # gap that let a wire developed-length get costed as if it were a kg price.

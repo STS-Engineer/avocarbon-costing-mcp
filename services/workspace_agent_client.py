@@ -12,6 +12,7 @@ from email.utils import parsedate_to_datetime
 
 
 WORKSPACE_AGENT_API_BASE_URL = "https://api.chatgpt.com/v1/workspace_agents"
+WORKSPACE_AGENT_TRIGGER_BODY_FIELDS = frozenset({"input", "conversation_key"})
 logger = logging.getLogger(__name__)
 FRESH_CONVERSATION_MODE = "new"
 CONTINUATION_FIELDS = {
@@ -191,6 +192,11 @@ def workspace_agent_configuration(
         "note": (
             "Configuration-only health check; no Workspace Agent run was created."
         ),
+        "trigger_request_contract": {
+            "supported_body_fields": sorted(WORKSPACE_AGENT_TRIGGER_BODY_FIELDS),
+            "file_attachments_supported": False,
+            "drawing_delivery_mode": "signed_url",
+        },
     }
 
 

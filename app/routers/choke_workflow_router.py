@@ -35,6 +35,7 @@ from services.project_data_paths import (
     get_workflow_run_paths,
 )
 from services.choke_writeback_mcp_diagnostic import (
+    get_bom_agent_capability_diagnostic,
     get_writeback_mcp_connectivity_diagnostic,
 )
 from services.choke_financial_workflow import (
@@ -258,6 +259,11 @@ def start_workflow(request: Request, payload: StartWorkflowRequest):
 @router.get("/bom-agent-health")
 def bom_agent_health():
     return _handle(get_bom_agent_configuration_health)
+
+
+@router.get("/bom-agent-capabilities")
+def bom_agent_capabilities():
+    return _handle(get_bom_agent_capability_diagnostic)
 
 
 @router.post("/storage-self-test")

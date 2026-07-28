@@ -80,3 +80,36 @@ def get_writeback_mcp_connectivity_diagnostic() -> Dict[str, Any]:
             "write_performed": False,
         },
     }
+
+
+def get_bom_agent_capability_diagnostic() -> Dict[str, Any]:
+    connectivity = get_writeback_mcp_connectivity_diagnostic()
+    schema = connectivity.get("save_bom_output_schema") or {}
+    required = set(schema.get("required") or [])
+    accepts_trigger_run_id = "trigger_run_id" in required
+    return {
+        "status": "ok" if connectivity.get("save_bom_output_schema_valid") else "configuration_error",
+        "drawing_delivery_mode": "signed_url",
+        "attachment_file_reference_present": False,
+        "save_bom_output_available": bool(connectivity.get("save_bom_output_exists")),
+        "save_bom_output_accepts_trigger_run_id": accepts_trigger_run_id,
+        "save_bom_output_required_fields": sorted(required),
+        "published_agent_version": (
+            os.getenv("CHATGPT_CHOKE_BOM_AGENT_PUBLISHED_VERSION") or "unknown"
+        ),
+        "conversation_mode": "new",
+        "diagnostic_source": "runtime_mcp_registration_contract",
+    }
+
+
+def require_bom_writeback_capability() -> Dict[str, Any]:
+    diagnostic = get_bom_agent_capability_diagnostic()
+    if (
+        not diagnostic["save_bom_output_available"]
+        or not diagnostic["save_bom_output_accepts_trigger_run_id"]
+    ):
+        raise RuntimeError(
+            "Published BOM Agent write-back capability is incompatible: "
+            "save_bom_output must require trigger_run_id."
+        )
+    return diagnostic

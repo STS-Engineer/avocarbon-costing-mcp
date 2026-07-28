@@ -53,6 +53,10 @@ from services.workspace_agent_client import (
     trigger_workspace_agent,
     workspace_agent_configuration,
 )
+from services.choke_writeback_mcp_diagnostic import (
+    get_bom_agent_capability_diagnostic,
+    require_bom_writeback_capability,
+)
 
 
 BASE_DIR = BACKEND_ROOT
@@ -880,6 +884,7 @@ def get_bom_agent_configuration_health() -> Dict[str, Any]:
         agent_id=os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID"),
         access_token=os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN"),
     )
+    capability = get_bom_agent_capability_diagnostic()
     return {
         "service": "choke-bom-workspace-agent",
         **diagnostic,
@@ -891,6 +896,7 @@ def get_bom_agent_configuration_health() -> Dict[str, Any]:
         },
         "callback_timeout_seconds": _bom_callback_timeout_seconds(),
         "execution_mode": "synchronous_request_path",
+        "agent_capability": capability,
     }
 
 
@@ -899,7 +905,13 @@ def _safe_trigger_failure(trigger_result: Dict[str, Any]) -> Dict[str, Any]:
     http_status = trigger_result.get("http_status")
     missing = trigger_result.get("missing_inputs") or []
     retryable = _is_retryable_trigger_result(trigger_result)
-    if missing:
+    if trigger_result.get("error_code") == "bom_writeback_schema_incompatible":
+        code = "bom_writeback_schema_incompatible"
+        message = str(
+            trigger_result.get("message")
+            or "BOM write-back tool schema is incompatible."
+        )
+    elif missing:
         code = "bom_agent_configuration_missing"
         message = (
             "BOM Workspace Agent configuration is incomplete: "
@@ -1215,6 +1227,19 @@ def _trigger_bom_agent_with_retries(
 ) -> Dict[str, Any]:
     _load_env()
     config = get_bom_agent_configuration_health()
+    try:
+        writeback_capability = require_bom_writeback_capability()
+    except RuntimeError as exc:
+        return {
+            "status": "failed",
+            "error_type": "configuration_error",
+            "error_code": "bom_writeback_schema_incompatible",
+            "message": str(exc),
+            "http_status": None,
+            "retryable": False,
+            "attempts": [],
+            "configuration": config,
+        }
     if not dry_run and config["status"] != "configured":
         result = {
             "status": "failed",
@@ -1282,6 +1307,15 @@ def _trigger_bom_agent_with_retries(
             timeout_seconds=config.get("invocation_timeout_seconds"),
             payload_bytes=len(current_input_text.encode("utf-8")),
             trigger_run_id_sent=current_trigger_run_id,
+            drawing_delivery_mode="signed_url",
+            attachment_file_reference_present=False,
+            prompt_contains_current_trigger_run_id=(
+                bool(current_trigger_run_id)
+                and str(current_trigger_run_id) in current_input_text
+            ),
+            mcp_tool_accepts_trigger_run_id=writeback_capability.get(
+                "save_bom_output_accepts_trigger_run_id"
+            ),
         )
         try:
             result = _trigger(
@@ -1415,6 +1449,25 @@ def _trigger_bom_agent_with_retries(
     }
 
 
+def _build_bom_runtime_instruction(
+    project_code: str,
+    product_id: str,
+    trigger_run_id: str,
+) -> str:
+    return (
+        "This API trigger cannot attach a conversation file. "
+        "The drawing_file_url in this payload is the drawing PDF for this current request. "
+        "Open drawing_file_url now and analyze that PDF according to your permanent Agent instructions. "
+        "Do not wait for ./user_files/, a conversation attachment, or another user message. "
+        f"Use project_code exactly as '{project_code}', product_id exactly as '{product_id}', "
+        f"and trigger_run_id exactly as '{trigger_run_id}'. "
+        "After producing the complete BOM JSON, call save_bom_output exactly once. "
+        "Pass those exact project_code, product_id, and trigger_run_id values, and pass the "
+        "complete BOM JSON object as raw_json. "
+        "Do not generate, replace, normalize, or reuse another trigger_run_id."
+    )
+
+
 def _build_bom_trigger_payload(
     project_code: str,
     product_id: str,
@@ -1488,11 +1541,10 @@ def _build_bom_trigger_payload(
             "unless file attachment support is used."
         )
 
-    writeback_instruction = (
-        "Analyze the drawing according to your permanent agent instructions. "
-        "After producing the complete BOM JSON, call save_bom_output exactly once "
-        "with the exact project_code, product_id, trigger_run_id, and raw_json. "
-        "The backend accepts completion only from this correlated write-back."
+    writeback_instruction = _build_bom_runtime_instruction(
+        project_code,
+        product_id,
+        trigger_run_id,
     )
     choke_classification = classify_choke(normalized_input, {})
     payload = {
@@ -1502,8 +1554,14 @@ def _build_bom_trigger_payload(
         **classification_trace(choke_classification),
         "drawing_file_url": drawing_file_url,
         "drawing_agent_proxy_url": generated_proxy_url,
+        "drawing_filename": (
+            Path(str(drawing_file_path)).name
+            if drawing_file_path
+            else Path(str(normalized_input.get("drawing_reference") or "")).name
+        ),
         "drawing_reference": normalized_input.get("drawing_reference"),
         "instruction": writeback_instruction,
+        "drawing_delivery_mode": "signed_url",
     }
     input_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
     return {
