@@ -77,8 +77,8 @@ def test_accepted_status_waits_for_callback(monkeypatch):
 
     workflow._apply_bom_callback_waiting_state(state, now=now + timedelta(seconds=10))
 
-    assert state["status"] == "awaiting_bom_callback"
-    assert state["bom"]["lifecycle_status"] == "awaiting_bom_callback"
+    assert state["status"] == "awaiting_writeback"
+    assert state["bom"]["lifecycle_status"] == "awaiting_writeback"
     assert state["bom"]["retryable"] is False
     assert state["message"] == "Agent request accepted and queued. Waiting for BOM output."
 
@@ -109,6 +109,9 @@ def test_callback_timeout_and_duplicate_retry_block(monkeypatch):
     )
     assert waiting["status"] == "bom_callback_timeout"
     assert waiting["bom"]["retryable"] is True
+    assert waiting["bom"]["lifecycle_status"] == "failed"
+    assert waiting["bom"]["failure_code"] == "callback_timeout"
+    assert waiting["bom"]["safe_error"]["code"] == "callback_timeout"
 
 
 def _patch_writeback(monkeypatch, tmp_path, state):

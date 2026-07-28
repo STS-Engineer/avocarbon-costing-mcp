@@ -9,7 +9,7 @@ import unicodedata
 import uuid
 from contextlib import contextmanager
 from decimal import Decimal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -182,6 +182,11 @@ def _is_local_url(url: Optional[str]) -> bool:
     return "://localhost" in text or "://127.0.0.1" in text or "://0.0.0.0" in text
 
 
+def _safe_url_path(url: Optional[str]) -> Optional[str]:
+    text = str(url or "").strip()
+    return urlsplit(text).path if text else None
+
+
 def _drawing_file_url_from_path(
     drawing_file_path: Optional[str],
     request_base_url: Optional[str] = None,
@@ -199,7 +204,7 @@ def _drawing_file_url_from_path(
         return None
     base_url = _public_base_url(request_base_url)
     try:
-        expiry_seconds = max(7200, int(os.getenv("AGENT_FILE_URL_EXPIRY_SECONDS", "14400")))
+        expiry_seconds = max(3600, int(os.getenv("AGENT_FILE_URL_EXPIRY_SECONDS", "3600")))
         return build_agent_file_url(
             base_url,
             project_code,
@@ -595,8 +600,10 @@ def _apply_bom_received_precedence(state: Dict[str, Any]) -> Dict[str, Any]:
         **existing_bom,
         "status": "received",
         "display_status": "received",
+        "lifecycle_status": "received",
         "retryable": False,
         "retry_available": False,
+        "failure_code": None,
         **({"trigger_result": trigger_result} if trigger_result else {}),
     }
     return state
@@ -950,6 +957,7 @@ def _apply_bom_callback_waiting_state(
     if lifecycle_status not in {
         "trigger_request_accepted",
         "awaiting_bom_callback",
+        "awaiting_writeback",
         "bom_callback_timeout",
     }:
         return state
@@ -972,12 +980,13 @@ def _apply_bom_callback_waiting_state(
         "retryable": timed_out,
         "retry_available": timed_out,
         "lifecycle_status": (
-            "bom_callback_timeout" if timed_out else "awaiting_bom_callback"
+            "failed" if timed_out else "awaiting_writeback"
         ),
+        "failure_code": "callback_timeout" if timed_out else None,
     })
     state["bom"] = bom
     state["status"] = (
-        "bom_callback_timeout" if timed_out else "awaiting_bom_callback"
+        "bom_callback_timeout" if timed_out else "awaiting_writeback"
     )
     state["bom_status"] = "failed" if timed_out else "triggered"
     bom["display_status"] = "failed" if timed_out else "triggered"
@@ -986,6 +995,21 @@ def _apply_bom_callback_waiting_state(
     state["retry_available"] = timed_out
     state["missing_outputs"] = ["bom"]
     if timed_out:
+        bom["safe_error"] = {
+            "code": "callback_timeout",
+            "message": "BOM write-back callback was not received before timeout.",
+            "retryable": True,
+        }
+        if not any(
+            isinstance(error, dict)
+            and error.get("error_code") == "callback_timeout"
+            for error in state.get("errors") or []
+        ):
+            state.setdefault("errors", []).append({
+                "stage": "bom",
+                "error_code": "callback_timeout",
+                "message": bom["safe_error"]["message"],
+            })
         state["message"] = (
             "BOM callback timeout reached. A controlled retry is now available."
         )
@@ -1268,7 +1292,6 @@ def _build_bom_trigger_payload(
         "drawing_file_url": drawing_file_url,
         "drawing_agent_proxy_url": generated_proxy_url,
         "drawing_reference": normalized_input.get("drawing_reference"),
-        "save_address": save_address,
         "instruction": writeback_instruction,
     }
     input_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -1288,6 +1311,42 @@ def _build_bom_trigger_payload(
         "warnings": warnings,
         "trigger_run_id": trigger_run_id,
     }
+
+
+def _refresh_bom_trigger_signed_url(
+    bom_trigger: Dict[str, Any],
+    request_base_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    fresh_proxy_url = _drawing_file_url_from_path(
+        bom_trigger.get("drawing_file_path"),
+        request_base_url,
+    )
+    if not fresh_proxy_url:
+        return bom_trigger
+    bom_trigger["drawing_agent_proxy_url"] = fresh_proxy_url
+    bom_trigger["drawing_file_url"] = fresh_proxy_url
+    bom_trigger["drawing_access_mode"] = "backend_signed_proxy"
+    bom_trigger["payload"]["drawing_file_url"] = fresh_proxy_url
+    other_candidates = [
+        candidate
+        for candidate in bom_trigger.get("drawing_url_candidates") or []
+        if candidate.get("access_mode") != "backend_signed_proxy"
+    ]
+    bom_trigger["drawing_url_candidates"] = [
+        {
+            "access_mode": "backend_signed_proxy",
+            "url": fresh_proxy_url,
+            "fresh": True,
+        },
+        *other_candidates,
+    ]
+    bom_trigger["input_text"] = json.dumps(
+        bom_trigger["payload"],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return bom_trigger
 
 
 def _validate_and_select_drawing_url(bom_trigger: Dict[str, Any]) -> Dict[str, Any]:
@@ -1401,6 +1460,10 @@ def start_real_choke_workflow(
             bom = dict(existing_state.get("bom") or {})
             active_statuses = {
                 "validating_drawing_access",
+                "drawing_preflight_started",
+                "drawing_preflight_passed",
+                "agent_triggered",
+                "awaiting_writeback",
                 "trigger_request_sending",
                 "trigger_request_accepted",
                 "awaiting_bom_callback",
@@ -1504,7 +1567,7 @@ def _start_real_choke_workflow_locked(
     existing_state.update({
         "workflow_request_id": workflow_request_id,
         "input_file": customer_input["_input_file"],
-        "status": "validating_drawing_access",
+        "status": "drawing_preflight_started",
         "bom_status": "triggering",
         "current_step": "Step 1 BOM Agent",
         "customer_input": normalized_input,
@@ -1512,7 +1575,7 @@ def _start_real_choke_workflow_locked(
     })
     existing_state["bom"] = {
         **dict(existing_state.get("bom") or {}),
-        "status": "validating_drawing_access",
+        "status": "drawing_preflight_started",
         "trigger_run_id": trigger_run_id,
         "trigger_requested_at": trigger_requested_at,
         "trigger_result": None,
@@ -1587,7 +1650,8 @@ def _start_real_choke_workflow_locked(
         "drawing_blob_url": bom_trigger.get("drawing_blob_url"),
         "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
         "drawing_url_is_local": _is_local_url(bom_trigger.get("drawing_file_url")),
-        "status": "validating_drawing_access",
+        "status": "drawing_preflight_started",
+        "lifecycle_status": "drawing_preflight_started",
         "bom_status": "triggering",
         "current_step": "Step 1 BOM Agent",
         "manufacturing_strategy": manufacturing_strategy,
@@ -1643,7 +1707,7 @@ def _start_real_choke_workflow_locked(
         "workflow_start_requested",
         input_file=customer_input["_input_file"],
         drawing_file_path=normalized_input.get("drawing_file_path"),
-        drawing_file_url=bom_trigger.get("drawing_file_url"),
+        drawing_url_path=_safe_url_path(bom_trigger.get("drawing_file_url")),
         status_before=status_before,
         **{
             key: value
@@ -1654,6 +1718,31 @@ def _start_real_choke_workflow_locked(
 
     pdf_url_check = {"success": True, "skipped": bool(dry_run), "method": "GET"}
     if not dry_run:
+        bom_trigger = _refresh_bom_trigger_signed_url(
+            bom_trigger,
+            request_base_url=request_base_url,
+        )
+        persisted_state["drawing_file_url"] = bom_trigger.get("drawing_file_url")
+        persisted_state["drawing_agent_proxy_url"] = bom_trigger.get(
+            "drawing_agent_proxy_url"
+        )
+        persisted_state["bom"] = {
+            **dict(persisted_state.get("bom") or {}),
+            "status": "drawing_preflight_started",
+            "lifecycle_status": "drawing_preflight_started",
+            "drawing_file_url": bom_trigger.get("drawing_file_url"),
+            "drawing_agent_proxy_url": bom_trigger.get(
+                "drawing_agent_proxy_url"
+            ),
+            "input_text": bom_trigger.get("input_text"),
+        }
+        _save_state(persisted_state)
+        _log_bom_lifecycle(
+            "drawing_preflight_started",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id=trigger_run_id,
+        )
         pdf_url_check = _validate_and_select_drawing_url(bom_trigger)
         validation_attempt.update({
             "status": "accepted" if pdf_url_check.get("success") else "failed",
@@ -1666,19 +1755,34 @@ def _start_real_choke_workflow_locked(
         persisted_state["bom"]["trigger_attempts"] = [validation_attempt]
         persisted_state["bom"]["pdf_url_check"] = pdf_url_check
         if not pdf_url_check.get("success"):
-            persisted_state["status"] = "bom_trigger_failed"
+            validation_results = [
+                item.get("validation") or {}
+                for item in pdf_url_check.get("candidate_validations") or []
+            ]
+            failure_code = next(
+                (
+                    result.get("error_code")
+                    for result in validation_results
+                    if result.get("error_code")
+                ),
+                "drawing_not_pdf",
+            )
+            persisted_state["status"] = "failed"
             persisted_state["bom_status"] = "failed"
             persisted_state["current_step"] = "Step 1 BOM Agent"
             persisted_state["missing_outputs"] = ["bom"]
             persisted_state["bom"] = {
                 **dict(persisted_state.get("bom") or {}),
-                "status": "bom_trigger_failed",
+                "status": "failed",
+                "lifecycle_status": "failed",
                 "display_status": "failed",
                 "retryable": True,
+                "failure_code": failure_code,
                 "pdf_url_check": pdf_url_check,
             }
             persisted_state.setdefault("errors", []).append({
                 "stage": "bom_pdf_access",
+                "error_code": failure_code,
                 "message": "No current drawing URL passed PDF validation; Workspace Agent was not triggered.",
                 "details": pdf_url_check,
             })
@@ -1687,12 +1791,13 @@ def _start_real_choke_workflow_locked(
                 "agent_invocation_failed",
                 project_code=project_code,
                 product_id=product_id,
-                error_code="drawing_access_validation_failed",
-                status_after="bom_trigger_failed",
+                error_code=failure_code,
+                status_after="failed",
             )
             return {
                 "message": "Drawing access validation failed; retry will generate fresh URLs.",
-                "status": "bom_trigger_failed",
+                "status": "failed",
+                "error_code": failure_code,
                 "retryable": True,
                 "state": persisted_state,
                 "canonical_workflow_state_path": str(persisted_path),
@@ -1700,6 +1805,32 @@ def _start_real_choke_workflow_locked(
                 "data_root": str(DATA_ROOT),
                 "pdf_url_check": pdf_url_check,
             }
+        persisted_state["status"] = "drawing_preflight_passed"
+        persisted_state["bom_status"] = "triggering"
+        persisted_state["bom"] = {
+            **dict(persisted_state.get("bom") or {}),
+            "status": "drawing_preflight_passed",
+            "lifecycle_status": "drawing_preflight_passed",
+            "pdf_url_check": pdf_url_check,
+        }
+        _save_state(persisted_state)
+        selected_validation = (pdf_url_check.get("selected") or {}).get(
+            "validation"
+        ) or {}
+        _log_bom_lifecycle(
+            "drawing_preflight_passed",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id=trigger_run_id,
+            safe_url_path=selected_validation.get("safe_url_path"),
+            http_status=selected_validation.get("http_status"),
+            content_type=selected_validation.get("content_type"),
+            content_length=selected_validation.get("content_length"),
+            token_expiry_time=selected_validation.get("token_expiry_time"),
+            remaining_token_lifetime_seconds=selected_validation.get(
+                "remaining_token_lifetime_seconds"
+            ),
+        )
         persisted_state.update({
             "drawing_file_url": bom_trigger.get("drawing_file_url"),
             "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
@@ -1734,14 +1865,14 @@ def _start_real_choke_workflow_locked(
     accepted = trigger_result.get("status") in {"accepted", "dry_run"}
     retryable_failure = not accepted and trigger_result.get("retryable") is True
     workflow_status = (
-        "awaiting_bom_callback"
+        "awaiting_writeback"
         if accepted
-        else "trigger_request_failed"
+        else "failed"
     )
     bom_status = (
-        "awaiting_bom_callback"
+        "awaiting_writeback"
         if accepted
-        else "trigger_request_failed"
+        else "failed"
     )
     latest_state, _ = _existing_state(project_code, product_id)
     state = latest_state or persisted_state
@@ -1754,7 +1885,7 @@ def _start_real_choke_workflow_locked(
             **dict(state.get("bom") or {}),
             "status": bom_status,
             "display_status": "triggered" if accepted else "failed",
-            "lifecycle_status": "awaiting_bom_callback" if accepted else bom_status,
+            "lifecycle_status": "awaiting_writeback" if accepted else "failed",
             "trigger_request_status": (
                 "trigger_request_accepted" if accepted else "trigger_request_failed"
             ),
@@ -1764,10 +1895,12 @@ def _start_real_choke_workflow_locked(
             "trigger_attempts": combined_attempts,
             "retryable": False if accepted else retryable_failure,
             "retry_available": False if accepted else retryable_failure,
+            "failure_code": None if accepted else "agent_trigger_failed",
             "pdf_url_check": pdf_url_check,
         }
         if not accepted:
             safe_failure = _safe_trigger_failure(trigger_result)
+            safe_failure["code"] = "agent_trigger_failed"
             state["bom"]["safe_error"] = safe_failure
             state.setdefault("errors", []).append({
                 "stage": "bom",
@@ -1782,7 +1915,21 @@ def _start_real_choke_workflow_locked(
                 error_code=safe_failure["code"],
                 http_status=safe_failure["http_status"],
                 retryable=safe_failure["retryable"],
-                status_after="trigger_request_failed",
+                status_after="failed",
+            )
+        else:
+            _log_bom_lifecycle(
+                "agent_triggered",
+                project_code=project_code,
+                product_id=product_id,
+                trigger_run_id=persisted_trigger_run_id,
+                http_status=trigger_result.get("http_status"),
+            )
+            _log_bom_lifecycle(
+                "awaiting_writeback",
+                project_code=project_code,
+                product_id=product_id,
+                trigger_run_id=persisted_trigger_run_id,
             )
     else:
         _apply_bom_received_precedence(state)
@@ -1851,11 +1998,11 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     _apply_bom_callback_waiting_state(state)
     existing_bom = dict(state.get("bom") or {})
     if (
-        existing_bom.get("lifecycle_status") == "awaiting_bom_callback"
+        existing_bom.get("lifecycle_status") in {"awaiting_bom_callback", "awaiting_writeback"}
         and ((existing_bom.get("trigger_result") or {}).get("status") == "accepted")
     ):
         return {
-            "status": "awaiting_bom_callback",
+            "status": "awaiting_writeback",
             "project_code": project_code,
             "product_id": product_id,
             "skipped": True,
@@ -1888,13 +2035,14 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     customer_input.setdefault("product_id", product_id)
     trigger_run_id = str(uuid.uuid4())
     trigger_requested_at = _now_iso()
-    state["status"] = "validating_drawing_access"
+    state["status"] = "drawing_preflight_started"
     state["bom_status"] = "triggering"
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
     state["bom"] = {
         **existing_bom,
-        "status": "validating_drawing_access",
+        "status": "drawing_preflight_started",
+        "lifecycle_status": "drawing_preflight_started",
         "trigger_run_id": trigger_run_id,
         "trigger_requested_at": trigger_requested_at,
         "trigger_result": None,
@@ -1944,6 +2092,7 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         trigger_run_id_sent=sent_trigger_run_id,
         retry=True,
     )
+    bom_trigger = _refresh_bom_trigger_signed_url(bom_trigger)
     if not bom_trigger.get("drawing_file_url"):
         raise ValueError("BOM Agent retry requires drawing_file_url in workflow state or customer_input.")
 
@@ -1956,12 +2105,20 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     }
     state["bom"] = {
         **dict(state.get("bom") or {}),
-        "status": "validating_drawing_access",
+        "status": "drawing_preflight_started",
+        "lifecycle_status": "drawing_preflight_started",
         "trigger_attempts": [validation_attempt],
         "drawing_agent_proxy_url": bom_trigger.get("drawing_agent_proxy_url"),
         "drawing_sas_url": bom_trigger.get("drawing_sas_url"),
     }
     _save_state(state)
+    _log_bom_lifecycle(
+        "drawing_preflight_started",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id=trigger_run_id,
+        retry=True,
+    )
     pdf_url_check = _validate_and_select_drawing_url(bom_trigger)
     validation_attempt.update({
         "status": "accepted" if pdf_url_check.get("success") else "failed",
@@ -1972,24 +2129,40 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "candidate_validations": pdf_url_check.get("candidate_validations") or [],
     })
     if not pdf_url_check.get("success"):
-        state["status"] = "bom_trigger_failed"
+        validation_results = [
+            item.get("validation") or {}
+            for item in pdf_url_check.get("candidate_validations") or []
+        ]
+        failure_code = next(
+            (
+                result.get("error_code")
+                for result in validation_results
+                if result.get("error_code")
+            ),
+            "drawing_not_pdf",
+        )
+        state["status"] = "failed"
         state["bom_status"] = "failed"
         state["bom"] = {
             **dict(state.get("bom") or {}),
-            "status": "bom_trigger_failed",
+            "status": "failed",
+            "lifecycle_status": "failed",
             "display_status": "failed",
             "retryable": True,
+            "failure_code": failure_code,
             "pdf_url_check": pdf_url_check,
             "trigger_attempts": [validation_attempt],
         }
         state.setdefault("errors", []).append({
             "stage": "bom_pdf_access",
+            "error_code": failure_code,
             "message": "Drawing access validation failed during retry.",
             "details": pdf_url_check,
         })
         _save_state(state)
         return {
-            "status": "bom_trigger_failed",
+            "status": "failed",
+            "error_code": failure_code,
             "retryable": True,
             "project_code": project_code,
             "product_id": product_id,
@@ -1997,6 +2170,32 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             "trigger_attempts": state["bom"]["trigger_attempts"],
             "state": state,
         }
+    state["status"] = "drawing_preflight_passed"
+    state["bom"] = {
+        **dict(state.get("bom") or {}),
+        "status": "drawing_preflight_passed",
+        "lifecycle_status": "drawing_preflight_passed",
+        "pdf_url_check": pdf_url_check,
+    }
+    _save_state(state)
+    selected_validation = (pdf_url_check.get("selected") or {}).get(
+        "validation"
+    ) or {}
+    _log_bom_lifecycle(
+        "drawing_preflight_passed",
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id=trigger_run_id,
+        retry=True,
+        safe_url_path=selected_validation.get("safe_url_path"),
+        http_status=selected_validation.get("http_status"),
+        content_type=selected_validation.get("content_type"),
+        content_length=selected_validation.get("content_length"),
+        token_expiry_time=selected_validation.get("token_expiry_time"),
+        remaining_token_lifetime_seconds=selected_validation.get(
+            "remaining_token_lifetime_seconds"
+        ),
+    )
 
     state["status"] = "trigger_request_sending"
     state["bom_status"] = "triggering"
@@ -2026,16 +2225,16 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     }
     accepted = trigger_result.get("status") == "accepted"
     retryable_failure = not accepted and trigger_result.get("retryable") is True
-    state["status"] = "awaiting_bom_callback" if accepted else "trigger_request_failed"
+    state["status"] = "awaiting_writeback" if accepted else "failed"
     state["bom_status"] = "triggered" if accepted else "failed"
     state["current_step"] = "Step 1 BOM Agent"
     state["missing_outputs"] = ["bom"]
     state["bom"] = {
         **dict(state.get("bom") or {}),
         "status": (
-            "awaiting_bom_callback"
+            "awaiting_writeback"
             if accepted
-            else "trigger_request_failed"
+            else "failed"
         ),
         "display_status": "triggered" if accepted else "failed",
         "trigger_request_status": (
@@ -2045,6 +2244,7 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "callback_timeout_seconds": _bom_callback_timeout_seconds(),
         "retryable": False if accepted else retryable_failure,
         "retry_available": False if accepted else retryable_failure,
+        "failure_code": None if accepted else "agent_trigger_failed",
         "trigger_result": trigger_result,
         "trigger_attempts": [validation_attempt, *(trigger_result.get("attempts") or [])],
         "input_text": input_text,
@@ -2053,11 +2253,12 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "drawing_access_mode": bom_trigger.get("drawing_access_mode"),
         "pdf_url_check": pdf_url_check,
         "lifecycle_status": (
-            "awaiting_bom_callback" if accepted else "trigger_request_failed"
+            "awaiting_writeback" if accepted else "failed"
         ),
     }
     if not accepted:
         safe_failure = _safe_trigger_failure(trigger_result)
+        safe_failure["code"] = "agent_trigger_failed"
         state["bom"]["safe_error"] = safe_failure
         state.setdefault("errors", []).append({
             "stage": "bom",
@@ -2072,15 +2273,30 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             error_code=safe_failure["code"],
             http_status=safe_failure["http_status"],
             retryable=safe_failure["retryable"],
-            status_after="trigger_request_failed",
+            status_after="failed",
         )
     else:
+        _log_bom_lifecycle(
+            "agent_triggered",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id=persisted_trigger_run_id,
+            retry=True,
+            http_status=trigger_result.get("http_status"),
+        )
+        _log_bom_lifecycle(
+            "awaiting_writeback",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id=persisted_trigger_run_id,
+            retry=True,
+        )
         _log_bom_lifecycle(
             "agent_response_received",
             project_code=project_code,
             product_id=product_id,
             http_status=trigger_result.get("http_status"),
-            status_after="awaiting_bom_callback",
+            status_after="awaiting_writeback",
         )
     _save_state(state)
     return {

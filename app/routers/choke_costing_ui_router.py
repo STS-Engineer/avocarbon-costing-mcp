@@ -8,6 +8,7 @@ from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -158,7 +159,7 @@ def get_agent_file_url(request: Request, drawing_file_path: str) -> str | None:
     except (ValueError, IndexError):
         return None
     try:
-        expiry_seconds = max(7200, int(os.getenv("AGENT_FILE_URL_EXPIRY_SECONDS", "14400")))
+        expiry_seconds = max(3600, int(os.getenv("AGENT_FILE_URL_EXPIRY_SECONDS", "3600")))
         return build_agent_file_url(
             _public_base_url(request),
             project_code,
@@ -428,7 +429,9 @@ async def create_customer_input(request: Request):
         input_file=_relative_to_base(output_path),
         customer_input_path=str(output_path.resolve()),
         drawing_file_path=drawing_file_path,
-        drawing_file_url=drawing_file_url,
+        drawing_url_path=urlsplit(drawing_file_url).path
+        if drawing_file_url
+        else None,
         status_after="saved",
     )
     return {

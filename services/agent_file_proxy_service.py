@@ -9,7 +9,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from services.project_data_paths import CUSTOMER_INPUT_DIR
 from services.public_url_service import normalize_public_rest_base_url
@@ -65,11 +65,11 @@ def _signature(project_code: str, filename: str, expires_at: int) -> str:
     return hmac.new(_signing_secret(), message, hashlib.sha256).hexdigest()
 
 
-def create_agent_file_token(project_code: str, filename: str, expiry_seconds: int = 14400) -> str:
+def create_agent_file_token(project_code: str, filename: str, expiry_seconds: int = 3600) -> str:
     project = _safe_part(project_code, "project_code")
     name = _safe_part(filename, "filename")
     current_timestamp = int(time.time())
-    expires_at = current_timestamp + max(7200, int(expiry_seconds))
+    expires_at = current_timestamp + max(3600, int(expiry_seconds))
     logger.info(
         "Agent PDF token created path=%s expires=%s current=%s",
         canonical_agent_file_relative_path(project, name),
@@ -142,7 +142,7 @@ def build_agent_file_url(
     public_base_url: str,
     project_code: str,
     filename: str,
-    expiry_seconds: int = 14400,
+    expiry_seconds: int = 3600,
 ) -> str:
     project = _safe_part(project_code, "project_code")
     name = _safe_part(filename, "filename")
@@ -156,14 +156,100 @@ def build_agent_file_url(
     )
 
 
+def inspect_signed_url_expiry(
+    url: str,
+    now_timestamp: int | None = None,
+) -> Dict[str, Any]:
+    current_timestamp = int(time.time()) if now_timestamp is None else int(now_timestamp)
+    parsed = urlsplit(str(url or "").strip())
+    query = parse_qs(parsed.query)
+    expires_at = None
+    expiry_source = None
+
+    token = (query.get("token") or [None])[0]
+    if token:
+        try:
+            expires_at = int(str(token).split(".", 1)[0])
+            expiry_source = "backend_signed_token"
+        except (TypeError, ValueError):
+            return {
+                "valid": False,
+                "reason": "malformed_token",
+                "safe_url_path": parsed.path,
+                "expires_at": None,
+                "remaining_seconds": None,
+            }
+    else:
+        sas_expiry = (query.get("se") or [None])[0]
+        if sas_expiry:
+            try:
+                parsed_expiry = datetime.fromisoformat(
+                    unquote(str(sas_expiry)).replace("Z", "+00:00")
+                )
+                if parsed_expiry.tzinfo is None:
+                    parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+                expires_at = int(parsed_expiry.timestamp())
+                expiry_source = "azure_sas"
+            except (TypeError, ValueError):
+                return {
+                    "valid": False,
+                    "reason": "malformed_sas_expiry",
+                    "safe_url_path": parsed.path,
+                    "expires_at": None,
+                    "remaining_seconds": None,
+                }
+
+    remaining_seconds = (
+        expires_at - current_timestamp if expires_at is not None else None
+    )
+    return {
+        "valid": expires_at is not None and remaining_seconds >= 1800,
+        "reason": (
+            "valid"
+            if expires_at is not None and remaining_seconds >= 1800
+            else "expiry_too_close"
+            if expires_at is not None
+            else "expiry_not_found"
+        ),
+        "safe_url_path": parsed.path,
+        "expiry_source": expiry_source,
+        "expires_at": expires_at,
+        "expires_at_utc": (
+            datetime.fromtimestamp(expires_at, timezone.utc).isoformat()
+            if expires_at is not None
+            else None
+        ),
+        "remaining_seconds": remaining_seconds,
+    }
+
+
 def verify_agent_pdf_url(url: str, timeout_seconds: float = 15.0) -> Dict[str, Any]:
     checked_url = str(url or "").strip()
     parsed = urlsplit(checked_url)
+    expiry = inspect_signed_url_expiry(checked_url)
+    safe_url_path = parsed.path
+    if not expiry.get("valid"):
+        reason = expiry.get("reason")
+        error_code = (
+            "drawing_url_expired"
+            if reason in {"expiry_too_close", "malformed_token", "malformed_sas_expiry"}
+            else "drawing_url_expiry_unknown"
+        )
+        result = {
+            "success": False,
+            "method": "GET",
+            "safe_url_path": safe_url_path,
+            "error_code": error_code,
+            "rejection_reason": reason,
+            "token_expiry_time": expiry.get("expires_at_utc"),
+            "remaining_token_lifetime_seconds": expiry.get("remaining_seconds"),
+        }
+        logger.warning("Agent PDF preflight rejected: %s", json.dumps(result))
+        return result
     request = urllib.request.Request(
         checked_url,
         headers={
             "Accept": "application/pdf",
-            "Range": "bytes=0-4095",
             "User-Agent": "AVOCarbon-Costing-Backend/1.0",
         },
         method="GET",
@@ -174,24 +260,40 @@ def verify_agent_pdf_url(url: str, timeout_seconds: float = 15.0) -> Dict[str, A
             content_length_header = response.headers.get("Content-Length")
             first_bytes = response.read(4096)
             content_length = int(content_length_header) if content_length_header else len(first_bytes)
+            redirected = response.geturl() != checked_url
             valid = (
-                response.status in {200, 206}
-                and content_type == "application/pdf"
+                response.status == 200
+                and "application/pdf" in content_type
                 and content_length > 0
                 and first_bytes.startswith(b"%PDF")
+                and not redirected
             )
-            return {
+            if redirected:
+                error_code = "drawing_url_forbidden"
+            elif content_length <= 0 or not first_bytes:
+                error_code = "drawing_empty"
+            elif "application/pdf" not in content_type or not first_bytes.startswith(b"%PDF"):
+                error_code = "drawing_not_pdf"
+            elif response.status != 200:
+                error_code = "drawing_url_forbidden"
+            else:
+                error_code = None
+            result = {
                 "success": valid,
                 "method": "GET",
                 "http_status": response.status,
                 "content_type": content_type,
                 "content_length": content_length,
                 "pdf_signature_present": first_bytes.startswith(b"%PDF"),
-                "final_url_host": urlsplit(response.geturl()).netloc,
-                "requested_url_host": parsed.netloc,
-                "redirected": response.geturl() != checked_url,
+                "safe_url_path": safe_url_path,
+                "redirected": redirected,
+                "error_code": error_code,
+                "token_expiry_time": expiry.get("expires_at_utc"),
+                "remaining_token_lifetime_seconds": expiry.get("remaining_seconds"),
                 "rejection_reason": None if valid else "invalid_pdf_response",
             }
+            logger.info("Agent PDF preflight: %s", json.dumps(result))
+            return result
     except urllib.error.HTTPError as exc:
         response_body = ""
         try:
@@ -205,19 +307,34 @@ def verify_agent_pdf_url(url: str, timeout_seconds: float = 15.0) -> Dict[str, A
                 rejection_reason = str(detail)
         except (AttributeError, json.JSONDecodeError):
             pass
-        return {
+        error_code = (
+            "drawing_url_forbidden"
+            if exc.code in {401, 403}
+            else "drawing_url_expired"
+            if exc.code in {408, 410}
+            else "drawing_not_pdf"
+        )
+        result = {
             "success": False,
             "method": "GET",
             "http_status": exc.code,
-            "error": str(exc),
+            "safe_url_path": safe_url_path,
+            "error_code": error_code,
             "rejection_reason": rejection_reason,
-            "requested_url_host": parsed.netloc,
+            "token_expiry_time": expiry.get("expires_at_utc"),
+            "remaining_token_lifetime_seconds": expiry.get("remaining_seconds"),
         }
+        logger.warning("Agent PDF preflight HTTP failure: %s", json.dumps(result))
+        return result
     except (OSError, urllib.error.URLError, ValueError) as exc:
-        return {
+        result = {
             "success": False,
             "method": "GET",
-            "error": str(exc),
+            "safe_url_path": safe_url_path,
+            "error_code": "drawing_url_forbidden",
             "rejection_reason": type(exc).__name__,
-            "requested_url_host": parsed.netloc,
+            "token_expiry_time": expiry.get("expires_at_utc"),
+            "remaining_token_lifetime_seconds": expiry.get("remaining_seconds"),
         }
+        logger.warning("Agent PDF preflight connection failure: %s", json.dumps(result))
+        return result

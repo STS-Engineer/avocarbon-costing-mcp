@@ -82,11 +82,18 @@ def test_rebuilding_trigger_payload_creates_a_fresh_proxy_token(monkeypatch):
     assert "/0300440157_INDUCTOR_20_04_24.pdf?" in second["drawing_agent_proxy_url"]
 
 
-def test_pdf_validation_uses_get_range_when_head_is_not_supported(monkeypatch):
+def test_pdf_validation_requires_get_200_without_range(monkeypatch):
     observed = {}
+    monkeypatch.setenv("AGENT_FILE_SIGNING_SECRET", "test-secret")
+    monkeypatch.setattr(proxy.time, "time", lambda: 1_000)
+    url = proxy.build_agent_file_url(
+        "https://backend.example.test",
+        "P",
+        "drawing.pdf",
+    )
 
     class Response:
-        status = 206
+        status = 200
         headers = {"Content-Type": "application/pdf", "Content-Length": "20"}
 
         def __enter__(self):
@@ -99,7 +106,7 @@ def test_pdf_validation_uses_get_range_when_head_is_not_supported(monkeypatch):
             return b"%PDF-1.4\nvalid"
 
         def geturl(self):
-            return "https://backend.example.test/drawing.pdf"
+            return url
 
     def fake_urlopen(request, timeout):
         observed["method"] = request.get_method()
@@ -107,10 +114,10 @@ def test_pdf_validation_uses_get_range_when_head_is_not_supported(monkeypatch):
         return Response()
 
     monkeypatch.setattr(proxy.urllib.request, "urlopen", fake_urlopen)
-    result = proxy.verify_agent_pdf_url("https://backend.example.test/drawing.pdf")
+    result = proxy.verify_agent_pdf_url(url)
 
     assert result["success"] is True
-    assert observed == {"method": "GET", "range": "bytes=0-4095"}
+    assert observed == {"method": "GET", "range": None}
 
 
 def test_proxy_validation_selects_proxy_and_does_not_try_sas(monkeypatch):
@@ -277,7 +284,7 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
     assert len(trigger_calls) == 1
     assert trigger_calls[0]["trigger_run_id"] == state["bom"]["trigger_run_id"]
     assert state["bom"]["trigger_run_id"] != "old-run"
-    assert result["status"] == "awaiting_bom_callback"
+    assert result["status"] == "awaiting_writeback"
     assert result["state"]["missing_outputs"] == ["bom"]
     assert [item["stage"] for item in result["trigger_attempts"]] == [
         "drawing_access_validation",
