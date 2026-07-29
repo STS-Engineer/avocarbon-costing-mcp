@@ -41,6 +41,7 @@ from services.project_data_paths import (
     atomic_write_json,
     data_reference_candidates,
     ensure_workflow_storage_ready,
+    get_git_commit,
     get_legacy_workflow_state_paths,
     get_workflow_run_paths,
     portable_data_reference,
@@ -1157,18 +1158,54 @@ def _safe_trigger_attempt(
     }
 
 
+def _bom_conversation_key(
+    project_code: str,
+    product_id: str,
+    trigger_run_id: str,
+) -> str:
+    trigger_run_id = str(trigger_run_id or "").strip()
+    if not trigger_run_id:
+        raise ValueError("BOM invocation requires trigger_run_id.")
+    return f"{project_code}:{product_id}:sequential:bom:{trigger_run_id}"
+
+
+def _bom_idempotency_key(
+    project_code: str,
+    product_id: str,
+    trigger_run_id: str,
+) -> str:
+    return _bom_conversation_key(project_code, product_id, trigger_run_id)
+
+
 def _bom_invocation_identifiers(
     project_code: str,
     product_id: str,
     trigger_run_id: str,
 ) -> Dict[str, str]:
-    trigger_run_id = str(trigger_run_id or "").strip()
-    if not trigger_run_id:
-        raise ValueError("BOM invocation requires trigger_run_id.")
-    key = f"{project_code}:{product_id}:sequential:bom:{trigger_run_id}"
     return {
-        "conversation_key": key,
-        "idempotency_key": key,
+        "conversation_key": _bom_conversation_key(
+            project_code,
+            product_id,
+            trigger_run_id,
+        ),
+        "idempotency_key": _bom_idempotency_key(
+            project_code,
+            product_id,
+            trigger_run_id,
+        ),
+    }
+
+
+def _conversation_key_audit(conversation_key: str, trigger_run_id: str) -> Dict[str, Any]:
+    value = str(conversation_key or "")
+    trigger_run_id = str(trigger_run_id or "")
+    return {
+        "conversation_key_hash": hashlib.sha256(value.encode("utf-8")).hexdigest()[:12],
+        "conversation_key_suffix": value[-len(trigger_run_id):] if trigger_run_id else "",
+        "expected_conversation_key_suffix": trigger_run_id,
+        "conversation_key_matches_trigger_run_id": bool(
+            trigger_run_id and value.endswith(trigger_run_id)
+        ),
     }
 
 
@@ -1403,6 +1440,11 @@ def _trigger_bom_agent_with_retries(
             mcp_tool_accepts_trigger_run_id=writeback_capability.get(
                 "save_bom_output_accepts_trigger_run_id"
             ),
+            build_commit=get_git_commit(),
+            **_conversation_key_audit(
+                conversation_key,
+                str(current_trigger_run_id or ""),
+            ),
         )
         try:
             result = _trigger(
@@ -1469,8 +1511,10 @@ def _trigger_bom_agent_with_retries(
             status_before=status_before,
             result_status=attempt.get("result_status"),
             trigger_run_id=current_trigger_run_id,
-            conversation_key=conversation_key,
-            idempotency_key=idempotency_key,
+            **_conversation_key_audit(
+                conversation_key,
+                str(current_trigger_run_id or ""),
+            ),
             request_id=attempt.get("request_id"),
         )
         state, _ = _existing_state(project_code, product_id)

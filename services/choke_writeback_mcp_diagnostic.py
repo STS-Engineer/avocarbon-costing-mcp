@@ -98,6 +98,7 @@ def get_bom_agent_capability_diagnostic() -> Dict[str, Any]:
             os.getenv("CHATGPT_CHOKE_BOM_AGENT_PUBLISHED_VERSION") or "unknown"
         ),
         "conversation_mode": "new",
+        "conversation_strategy": "project_product_trigger_run_id",
         "diagnostic_source": "runtime_mcp_registration_contract",
     }
 

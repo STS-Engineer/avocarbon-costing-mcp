@@ -16,7 +16,12 @@ from server import (
     mcp,
     root_info as mcp_root_info,
 )
-from services.project_data_paths import get_data_root, validate_data_root_configuration
+from services.project_data_paths import (
+    get_build_time,
+    get_data_root,
+    get_git_commit,
+    validate_data_root_configuration,
+)
 from services.public_url_service import get_public_url_diagnostics
 
 
@@ -106,3 +111,12 @@ def api_health():
         payload["storage_errors"] = storage_status["errors"]
         return JSONResponse(payload, status_code=503)
     return payload
+
+
+@app.get("/api/version", tags=["Health"])
+def api_version():
+    return {
+        "git_commit": get_git_commit(),
+        "build_time": get_build_time(),
+        "bom_conversation_strategy": "project_product_trigger_run_id",
+    }

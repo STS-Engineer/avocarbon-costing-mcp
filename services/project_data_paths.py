@@ -21,6 +21,7 @@ except Exception:
 
 DATA_ROOT_RAW = os.getenv("DATA_ROOT")
 WORKFLOW_PATH_VERSION = "canonical-v1"
+BUILD_INFO_PATH = BACKEND_ROOT / "build_info.json"
 
 
 def _absolute_root(value: str | None, default: Path) -> Path:
@@ -60,10 +61,22 @@ def persistent_storage_enabled() -> bool:
 
 
 def get_git_commit() -> str | None:
-    for name in ("GIT_COMMIT_SHA", "BUILD_SOURCEVERSION", "WEBSITE_DEPLOYMENT_ID"):
+    for name in ("GIT_COMMIT_SHA", "BUILD_SOURCEVERSION", "GITHUB_SHA"):
         value = str(os.getenv(name) or "").strip()
         if value:
             return value
+    if BUILD_INFO_PATH.exists():
+        try:
+            value = str(
+                json.loads(BUILD_INFO_PATH.read_text(encoding="utf-8")).get(
+                    "git_commit"
+                )
+                or ""
+            ).strip()
+            if value:
+                return value
+        except (OSError, json.JSONDecodeError):
+            pass
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
@@ -74,6 +87,24 @@ def get_git_commit() -> str | None:
         ).strip() or None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def get_build_time() -> str | None:
+    for name in ("BUILD_TIME", "BUILD_TIMESTAMP"):
+        value = str(os.getenv(name) or "").strip()
+        if value:
+            return value
+    if BUILD_INFO_PATH.exists():
+        try:
+            return str(
+                json.loads(BUILD_INFO_PATH.read_text(encoding="utf-8")).get(
+                    "build_time"
+                )
+                or ""
+            ).strip() or None
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
 
 
 def validate_data_root_configuration() -> Dict[str, Any]:
@@ -105,6 +136,7 @@ def validate_data_root_configuration() -> Dict[str, Any]:
         "cwd": str(Path.cwd().resolve()),
         "startup_module": "app.main:app",
         "git_commit": get_git_commit(),
+        "build_time": get_build_time(),
     }
 
 
