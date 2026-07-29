@@ -1157,6 +1157,21 @@ def _safe_trigger_attempt(
     }
 
 
+def _bom_invocation_identifiers(
+    project_code: str,
+    product_id: str,
+    trigger_run_id: str,
+) -> Dict[str, str]:
+    trigger_run_id = str(trigger_run_id or "").strip()
+    if not trigger_run_id:
+        raise ValueError("BOM invocation requires trigger_run_id.")
+    key = f"{project_code}:{product_id}:sequential:bom:{trigger_run_id}"
+    return {
+        "conversation_key": key,
+        "idempotency_key": key,
+    }
+
+
 def _prepare_automatic_bom_retry(
     project_code: str,
     product_id: str,
@@ -1164,6 +1179,8 @@ def _prepare_automatic_bom_retry(
     request_base_url: Optional[str],
     attempt_number: int,
     trigger_run_id: str,
+    conversation_key: str,
+    idempotency_key: str,
     workflow_status_before: Optional[str],
     current_step_before: Optional[str],
 ) -> Dict[str, Any]:
@@ -1191,7 +1208,8 @@ def _prepare_automatic_bom_retry(
         "display_status": "retrying_trigger",
         "lifecycle_status": "retrying_trigger",
         "trigger_run_id": trigger_run_id,
-        "trigger_requested_at": _now_iso(),
+        "conversation_key": conversation_key,
+        "idempotency_key": idempotency_key,
         "trigger_attempt_number": attempt_number,
         "retryable": False,
         "retry_available": False,
@@ -1238,6 +1256,8 @@ def _prepare_automatic_bom_retry(
         "status": "retrying_trigger",
         "lifecycle_status": "retrying_trigger",
         "trigger_run_id": persisted_id,
+        "conversation_key": conversation_key,
+        "idempotency_key": idempotency_key,
         "input_text": trigger.get("input_text"),
         "drawing_file_url": trigger.get("drawing_file_url"),
         "drawing_access_mode": trigger.get("drawing_access_mode"),
@@ -1247,6 +1267,8 @@ def _prepare_automatic_bom_retry(
     return {
         "status": "ready",
         "trigger_run_id": persisted_id,
+        "conversation_key": conversation_key,
+        "idempotency_key": idempotency_key,
         "input_text": trigger["input_text"],
         "pdf_url_check": preflight,
     }
@@ -1275,6 +1297,8 @@ def _trigger_bom_agent_with_retries(
     status_before: Optional[str],
     trigger_run_id: Optional[str] = None,
     retry_context: Optional[Dict[str, Any]] = None,
+    conversation_key: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     _load_env()
     config = get_bom_agent_configuration_health()
@@ -1316,6 +1340,17 @@ def _trigger_bom_agent_with_retries(
     current_input_text = input_text
     current_trigger_run_id = trigger_run_id
     current_pdf_url_check = None
+    invocation_identifiers = _bom_invocation_identifiers(
+        project_code,
+        product_id,
+        str(current_trigger_run_id or ""),
+    )
+    conversation_key = str(
+        conversation_key or invocation_identifiers["conversation_key"]
+    ).strip()
+    idempotency_key = str(
+        idempotency_key or invocation_identifiers["idempotency_key"]
+    ).strip()
 
     for attempt_number in range(1, max_attempts + 1):
         if attempt_number > 1:
@@ -1326,6 +1361,8 @@ def _trigger_bom_agent_with_retries(
                 (retry_context or {}).get("request_base_url"),
                 attempt_number,
                 str(current_trigger_run_id or ""),
+                conversation_key,
+                idempotency_key,
                 status_before,
                 (retry_context or {}).get("current_step_before"),
             )
@@ -1346,10 +1383,6 @@ def _trigger_bom_agent_with_retries(
             current_trigger_run_id = prepared["trigger_run_id"]
             current_pdf_url_check = prepared.get("pdf_url_check")
 
-        idempotency_key = (
-            f"{project_code}:{product_id}:sequential:bom:"
-            f"{current_trigger_run_id or uuid.uuid4()}"
-        )
         _log_bom_lifecycle(
             "before_agent_invocation",
             project_code=project_code,
@@ -1376,7 +1409,7 @@ def _trigger_bom_agent_with_retries(
                 "CHATGPT_CHOKE_BOM_AGENT_ID",
                 "",
                 current_input_text,
-                f"{project_code}:{product_id}:sequential:bom",
+                conversation_key,
                 idempotency_key,
                 dry_run=dry_run,
                 preserve_request_identifiers=True,
@@ -1436,6 +1469,8 @@ def _trigger_bom_agent_with_retries(
             status_before=status_before,
             result_status=attempt.get("result_status"),
             trigger_run_id=current_trigger_run_id,
+            conversation_key=conversation_key,
+            idempotency_key=idempotency_key,
             request_id=attempt.get("request_id"),
         )
         state, _ = _existing_state(project_code, product_id)
@@ -1456,6 +1491,8 @@ def _trigger_bom_agent_with_retries(
                 "display_status": lifecycle,
                 "lifecycle_status": lifecycle,
                 "trigger_run_id": current_trigger_run_id,
+                "conversation_key": conversation_key,
+                "idempotency_key": idempotency_key,
                 "trigger_attempt_number": attempt_number,
                 "trigger_attempts": attempts,
                 "retryable": retryable and not has_next_attempt,
@@ -1502,6 +1539,8 @@ def _trigger_bom_agent_with_retries(
         "retryable": final_retryable,
         "max_attempts": max_attempts,
         "trigger_run_id": current_trigger_run_id,
+        "conversation_key": conversation_key,
+        "idempotency_key": idempotency_key,
         "input_text": current_input_text,
         "pdf_url_check": current_pdf_url_check,
     }
@@ -1891,6 +1930,13 @@ def _start_real_choke_workflow_locked(
 
     trigger_run_id = str(uuid.uuid4())
     trigger_requested_at = _now_iso()
+    invocation_identifiers = _bom_invocation_identifiers(
+        project_code,
+        product_id,
+        trigger_run_id,
+    )
+    conversation_key = invocation_identifiers["conversation_key"]
+    idempotency_key = invocation_identifiers["idempotency_key"]
     existing_state = _load_state(project_code, product_id)
     status_before = existing_state.get("status")
     existing_state.update({
@@ -1906,6 +1952,8 @@ def _start_real_choke_workflow_locked(
         **dict(existing_state.get("bom") or {}),
         "status": "drawing_preflight_started",
         "trigger_run_id": trigger_run_id,
+        "conversation_key": conversation_key,
+        "idempotency_key": idempotency_key,
         "trigger_requested_at": trigger_requested_at,
         "trigger_result": None,
         "retryable": False,
@@ -1926,10 +1974,23 @@ def _start_real_choke_workflow_locked(
         ((persisted_before_payload or {}).get("bom") or {}).get("trigger_run_id")
         or ""
     ).strip()
+    persisted_conversation_key = str(
+        ((persisted_before_payload or {}).get("bom") or {}).get("conversation_key")
+        or ""
+    ).strip()
+    persisted_idempotency_key = str(
+        ((persisted_before_payload or {}).get("bom") or {}).get("idempotency_key")
+        or ""
+    ).strip()
     if persisted_trigger_run_id != trigger_run_id:
         raise RuntimeError(
             "Persisted BOM trigger_run_id does not match the created run ID."
         )
+    if (
+        persisted_conversation_key != conversation_key
+        or persisted_idempotency_key != idempotency_key
+    ):
+        raise RuntimeError("Persisted BOM invocation identifiers do not match.")
     _log_bom_lifecycle(
         "trigger_run_id_persisted",
         project_code=project_code,
@@ -2000,6 +2061,8 @@ def _start_real_choke_workflow_locked(
         **dict(state.get("bom") or {}),
         "status": "validating_drawing_access",
         "trigger_run_id": trigger_run_id,
+        "conversation_key": persisted_conversation_key,
+        "idempotency_key": persisted_idempotency_key,
         "trigger_requested_at": trigger_requested_at,
         "save_path": save_address,
         "drawing_file_path": bom_trigger.get("drawing_file_path"),
@@ -2183,6 +2246,8 @@ def _start_real_choke_workflow_locked(
         dry_run=dry_run,
         status_before=status_before,
         trigger_run_id=persisted_trigger_run_id,
+        conversation_key=persisted_conversation_key,
+        idempotency_key=persisted_idempotency_key,
         retry_context={
             "normalized_input": normalized_input,
             "request_base_url": request_base_url,
@@ -2217,6 +2282,8 @@ def _start_real_choke_workflow_locked(
             "display_status": "triggered" if accepted else failed_status,
             "lifecycle_status": "awaiting_writeback" if accepted else failed_status,
             "trigger_run_id": effective_trigger_run_id,
+            "conversation_key": persisted_conversation_key,
+            "idempotency_key": persisted_idempotency_key,
             "trigger_request_status": (
                 "trigger_request_accepted" if accepted else "trigger_request_failed"
             ),
@@ -2395,6 +2462,13 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     customer_input.setdefault("product_id", product_id)
     trigger_run_id = str(uuid.uuid4())
     trigger_requested_at = _now_iso()
+    invocation_identifiers = _bom_invocation_identifiers(
+        project_code,
+        product_id,
+        trigger_run_id,
+    )
+    conversation_key = invocation_identifiers["conversation_key"]
+    idempotency_key = invocation_identifiers["idempotency_key"]
     state["status"] = _workflow_status_during_bom_retry(
         status_before,
         "drawing_preflight_started",
@@ -2411,6 +2485,8 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "status": "drawing_preflight_started",
         "lifecycle_status": "drawing_preflight_started",
         "trigger_run_id": trigger_run_id,
+        "conversation_key": conversation_key,
+        "idempotency_key": idempotency_key,
         "trigger_requested_at": trigger_requested_at,
         "trigger_result": None,
         "retryable": False,
@@ -2427,10 +2503,21 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
     persisted_trigger_run_id = str(
         ((persisted_state or {}).get("bom") or {}).get("trigger_run_id") or ""
     ).strip()
+    persisted_conversation_key = str(
+        ((persisted_state or {}).get("bom") or {}).get("conversation_key") or ""
+    ).strip()
+    persisted_idempotency_key = str(
+        ((persisted_state or {}).get("bom") or {}).get("idempotency_key") or ""
+    ).strip()
     if persisted_trigger_run_id != trigger_run_id:
         raise RuntimeError(
             "Persisted retry trigger_run_id does not match the created run ID."
         )
+    if (
+        persisted_conversation_key != conversation_key
+        or persisted_idempotency_key != idempotency_key
+    ):
+        raise RuntimeError("Persisted retry invocation identifiers do not match.")
     _log_bom_lifecycle(
         "trigger_run_id_persisted",
         project_code=project_code,
@@ -2591,6 +2678,8 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         dry_run=False,
         status_before=status_before,
         trigger_run_id=persisted_trigger_run_id,
+        conversation_key=persisted_conversation_key,
+        idempotency_key=persisted_idempotency_key,
         retry_context={
             "normalized_input": customer_input,
             "request_base_url": None,
@@ -2642,6 +2731,8 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "retry_after_seconds": None if accepted else final_attempt.get("retry_after_seconds"),
         "trigger_attempt_number": final_attempt.get("attempt_number"),
         "trigger_run_id": effective_trigger_run_id,
+        "conversation_key": persisted_conversation_key,
+        "idempotency_key": persisted_idempotency_key,
         "trigger_result": trigger_result,
         "trigger_attempts": [validation_attempt, *(trigger_result.get("attempts") or [])],
         "input_text": trigger_result.get("input_text") or input_text,

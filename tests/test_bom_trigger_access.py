@@ -284,6 +284,13 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
     assert len(trigger_calls) == 1
     assert trigger_calls[0]["trigger_run_id"] == state["bom"]["trigger_run_id"]
     assert state["bom"]["trigger_run_id"] != "old-run"
+    expected_key = (
+        f"P:10:sequential:bom:{state['bom']['trigger_run_id']}"
+    )
+    assert trigger_calls[0]["conversation_key"] == expected_key
+    assert trigger_calls[0]["idempotency_key"] == expected_key
+    assert state["bom"]["conversation_key"] == expected_key
+    assert state["bom"]["idempotency_key"] == expected_key
     assert result["status"] == "awaiting_writeback"
     assert result["state"]["missing_outputs"] == ["bom"]
     assert [item["stage"] for item in result["trigger_attempts"]] == [

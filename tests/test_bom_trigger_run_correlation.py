@@ -111,6 +111,7 @@ def _patch_start_flow(monkeypatch, tmp_path, project_code="P", product_id="X"):
 
     def trigger_agent(**kwargs):
         sent_ids.append(kwargs["trigger_run_id"])
+        state["_sent_invocation"] = dict(kwargs)
         return {"status": "dry_run", "attempts": [], "retryable": False}
 
     monkeypatch.setattr(workflow, "_build_bom_trigger_payload", build_payload)
@@ -140,6 +141,11 @@ def test_start_created_persisted_and_sent_ids_are_identical(monkeypatch):
         assert created == persisted == built_ids[0] == sent_ids[0]
         assert state["bom"]["trigger_run_id"] == sent_ids[0]
         assert result["state"]["bom"]["trigger_run_id"] == sent_ids[0]
+        expected_key = f"P:X:sequential:bom:{sent_ids[0]}"
+        assert state["bom"]["conversation_key"] == expected_key
+        assert state["bom"]["idempotency_key"] == expected_key
+        assert state["_sent_invocation"]["conversation_key"] == expected_key
+        assert state["_sent_invocation"]["idempotency_key"] == expected_key
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 

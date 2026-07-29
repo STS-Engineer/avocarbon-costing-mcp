@@ -123,6 +123,7 @@ def test_unexpected_invocation_exception_becomes_failed_result(monkeypatch):
         input_text="test",
         dry_run=False,
         status_before="pending",
+        trigger_run_id="run-test",
     )
 
     assert result["status"] == "failed"
