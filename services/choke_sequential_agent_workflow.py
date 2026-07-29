@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from services import choke_component_costing as component_costing
 from services.choke_classification import classify_choke, classification_trace
+from services.bom_invocation_identity import (
+    bom_conversation_key as _bom_conversation_key,
+    bom_idempotency_key as _bom_idempotency_key,
+    bom_invocation_identifiers as _bom_invocation_identifiers,
+)
 from services.currency_service import normalize_currency_code, resolve_project_currency
 from services.choke_financial_calculation import calculate_dl_voh
 from services.choke_orchestrator import run_choke_orchestration
@@ -1155,44 +1160,6 @@ def _safe_trigger_attempt(
         "retryable": retryable,
         "next_retry_seconds": next_retry_seconds,
         "failure_timestamp": _now_iso() if result.get("status") == "failed" else None,
-    }
-
-
-def _bom_conversation_key(
-    project_code: str,
-    product_id: str,
-    trigger_run_id: str,
-) -> str:
-    trigger_run_id = str(trigger_run_id or "").strip()
-    if not trigger_run_id:
-        raise ValueError("BOM invocation requires trigger_run_id.")
-    return f"{project_code}:{product_id}:sequential:bom:{trigger_run_id}"
-
-
-def _bom_idempotency_key(
-    project_code: str,
-    product_id: str,
-    trigger_run_id: str,
-) -> str:
-    return _bom_conversation_key(project_code, product_id, trigger_run_id)
-
-
-def _bom_invocation_identifiers(
-    project_code: str,
-    product_id: str,
-    trigger_run_id: str,
-) -> Dict[str, str]:
-    return {
-        "conversation_key": _bom_conversation_key(
-            project_code,
-            product_id,
-            trigger_run_id,
-        ),
-        "idempotency_key": _bom_idempotency_key(
-            project_code,
-            product_id,
-            trigger_run_id,
-        ),
     }
 
 

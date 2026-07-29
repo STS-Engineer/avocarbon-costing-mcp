@@ -1,7 +1,9 @@
 import json
 import os
+import uuid
 from pathlib import Path
 
+from services.bom_invocation_identity import bom_invocation_identifiers
 from services.choke_demo_outputs import (
     get_demo_bom_output_3165001,
     get_demo_component_cost_outputs_3165001,
@@ -338,6 +340,12 @@ def _build_material_cost_breakdown(component_entries):
 
 def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents, choke_classification=None):
     agent_id = _agent_id("CHATGPT_CHOKE_BOM_AGENT_ID", "Choke BOM Analyzer")
+    trigger_run_id = str(uuid.uuid4())
+    invocation = bom_invocation_identifiers(
+        customer_input["project_code"],
+        customer_input["product_id"],
+        trigger_run_id,
+    )
     instructions = [
         "This starts from customer input.",
         "Do not calculate final price.",
@@ -346,13 +354,17 @@ def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents,
         "Save or prepare JSON at save_address.",
         "Return JSON only.",
     ]
-    payload = {**customer_input, **classification_trace(choke_classification)}
+    payload = {
+        **customer_input,
+        **classification_trace(choke_classification),
+        "trigger_run_id": trigger_run_id,
+    }
     input_text = _json_input_text(instructions, payload, save_address)
     trigger = _trigger_or_plan(
         agent_id,
         input_text,
-        f"{customer_input['project_code']}:{customer_input['product_id']}:bom",
-        f"{customer_input['project_code']}:{customer_input['product_id']}:bom:v1",
+        invocation["conversation_key"],
+        invocation["idempotency_key"],
         dry_run,
         trigger_agents,
     )
@@ -361,6 +373,7 @@ def _build_bom_agent_call(customer_input, save_address, dry_run, trigger_agents,
         "status": _trigger_status(trigger, dry_run, trigger_agents),
         "conversation_key": trigger.get("conversation_key"),
         "idempotency_key": trigger.get("idempotency_key"),
+        "trigger_run_id": trigger_run_id,
         "save_address": save_address,
         "input_text": input_text,
         "trigger_result": trigger,

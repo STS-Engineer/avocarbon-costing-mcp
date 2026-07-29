@@ -1,7 +1,10 @@
 import inspect
 
 from app import main as app_main
+from services import bom_invocation_identity
+from services import choke_orchestrator
 from services import choke_sequential_agent_workflow as workflow
+from services import choke_workspace_orchestrator
 from services.choke_writeback_mcp_diagnostic import (
     get_bom_agent_capability_diagnostic,
 )
@@ -15,10 +18,17 @@ def test_authoritative_bom_key_builders_include_trigger_run_id():
 
 
 def test_production_workflow_has_no_fixed_bom_conversation_fallback():
-    source = inspect.getsource(workflow)
+    sources = [
+        inspect.getsource(workflow),
+        inspect.getsource(choke_orchestrator),
+        inspect.getsource(choke_workspace_orchestrator),
+    ]
 
-    assert 'f"{project_code}:{product_id}:sequential:bom"' not in source
-    assert source.count(
+    assert all(
+        'f"{project_code}:{product_id}:sequential:bom"' not in source
+        for source in sources
+    )
+    assert inspect.getsource(bom_invocation_identity).count(
         'f"{project_code}:{product_id}:sequential:bom:{trigger_run_id}"'
     ) == 1
 

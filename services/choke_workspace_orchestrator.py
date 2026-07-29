@@ -1,6 +1,8 @@
 import json
 import os
+import uuid
 
+from services.bom_invocation_identity import bom_invocation_identifiers
 from services.choke_financial_calculation import calculate_choke_financials
 from services.choke_standard_schema import build_standard_choke_costing_json
 from services.external_component_agent import run_external_component_agent
@@ -198,6 +200,12 @@ def build_choke_workspace_orchestration(payload, dry_run=True):
     most_agent_id = os.getenv("MOST_AGENT_ID", "MOST Assemblage")
 
     bom_save_address = _save_address(project_code, product_id, "bom", f"{product_id}-bom.json")
+    bom_trigger_run_id = str(uuid.uuid4())
+    bom_invocation = bom_invocation_identifiers(
+        project_code,
+        product_id,
+        bom_trigger_run_id,
+    )
     bom_input = {
         "task": "Read the choke plan and create component list and BOM.",
         "project_code": project_code,
@@ -206,14 +214,15 @@ def build_choke_workspace_orchestration(payload, dry_run=True):
         "product_id": product_id,
         "drawing_reference": payload.get("drawing_reference"),
         "save_address": bom_save_address,
+        "trigger_run_id": bom_trigger_run_id,
     }
     bom_trigger = _build_agent_trigger(
         bom_agent_id,
         bom_input,
         bom_save_address,
         dry_run,
-        f"{project_code}:{product_id}:bom",
-        f"{project_code}:{product_id}:bom:v1",
+        bom_invocation["conversation_key"],
+        bom_invocation["idempotency_key"],
     )
 
     production_plant = plant_data.get("plant_name") or manufacturing_strategy.get("production_plant")
@@ -304,6 +313,7 @@ def build_choke_workspace_orchestration(payload, dry_run=True):
             "save_address": bom_save_address,
             "agent_id": bom_agent_id,
             "trigger_result": bom_trigger,
+            "trigger_run_id": bom_trigger_run_id,
             "data": None,
         },
         "components": component_calls,
