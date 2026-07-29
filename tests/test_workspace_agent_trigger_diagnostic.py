@@ -106,6 +106,11 @@ def test_unique_conversation_key_is_the_only_optional_field(monkeypatch):
             b'{"error":"trigger currently unavailable"}',
             "temporary service failure",
         ),
+        (
+            409,
+            b'{"error":{"message":"The workspace agent trigger is not currently available."}}',
+            "agent_channel_unavailable",
+        ),
         (429, b'{"error":"quota exceeded"}', "quota/credits"),
         (429, b'{"error":"try again"}', "temporary service failure"),
         (503, b'{"error":"unavailable"}', "temporary service failure"),
@@ -154,3 +159,38 @@ def test_admin_result_contains_only_safe_contract_fields(monkeypatch):
         "classification": "accepted",
         "checked_at": result["checked_at"],
     }
+
+
+def test_agent_type_selects_its_configured_channel(monkeypatch):
+    monkeypatch.setenv(
+        "CHATGPT_MOST_AGENT_ID",
+        "agtch_most12345678",
+    )
+    captured = []
+    monkeypatch.setattr(
+        diagnostic.urllib.request,
+        "urlopen",
+        lambda request, timeout: captured.append(request) or FakeResponse(),
+    )
+
+    result = diagnostic.run_raw_workspace_trigger(
+        agent_type="most",
+        input_text=diagnostic.MINIMAL_DIAGNOSTIC_INPUT,
+    )
+
+    assert result["agent_type"] == "most"
+    assert captured[0].full_url.endswith("/agtch_most12345678/trigger")
+
+
+def test_safe_error_extracts_message_without_exposing_request_data():
+    result = {
+        "response_body": json.dumps({
+            "error": {
+                "message": "The workspace agent trigger is not currently available."
+            }
+        })
+    }
+
+    assert diagnostic.safe_trigger_error(result) == (
+        "The workspace agent trigger is not currently available."
+    )

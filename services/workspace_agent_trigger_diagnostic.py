@@ -24,6 +24,11 @@ REQUEST_ID_HEADERS = (
     "x-correlation-id",
     "cf-ray",
 )
+AGENT_ID_ENVIRONMENTS = {
+    "bom": "CHATGPT_CHOKE_BOM_AGENT_ID",
+    "external": "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID",
+    "most": "CHATGPT_MOST_AGENT_ID",
+}
 
 
 def _trigger_base_url() -> str:
@@ -66,6 +71,8 @@ def classify_trigger_failure(
     if http_status == 404:
         return "api_channel"
     if http_status == 409:
+        if "workspace agent trigger is not currently available" in body:
+            return "agent_channel_unavailable"
         if any(term in body for term in ("temporar", "currently unavailable", "try again")):
             return "temporary service failure"
         return "api_channel"
@@ -87,8 +94,16 @@ def run_raw_workspace_trigger(
     input_text: str,
     conversation_key: Optional[str] = None,
     timeout_seconds: float = 30,
+    agent_type: str = "bom",
 ) -> Dict[str, Any]:
-    agent_id = clean_agent_id(os.getenv("CHATGPT_CHOKE_BOM_AGENT_ID"))
+    normalized_agent_type = str(agent_type or "").strip().lower()
+    agent_env = AGENT_ID_ENVIRONMENTS.get(normalized_agent_type)
+    if not agent_env:
+        raise ValueError(
+            "agent_type must be one of: "
+            + ", ".join(sorted(AGENT_ID_ENVIRONMENTS))
+        )
+    agent_id = clean_agent_id(os.getenv(agent_env))
     token = str(os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN") or "").strip()
     base_url = _trigger_base_url()
     endpoint = f"{base_url}/{agent_id}/trigger"
@@ -97,11 +112,12 @@ def run_raw_workspace_trigger(
     if not agent_id.startswith("agtch_") or not token:
         missing = []
         if not agent_id.startswith("agtch_"):
-            missing.append("CHATGPT_CHOKE_BOM_AGENT_ID")
+            missing.append(agent_env)
         if not token:
             missing.append("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN")
         return {
             "configured": False,
+            "agent_type": normalized_agent_type,
             "http_status": None,
             "response_headers": {},
             "response_body": "",
@@ -158,6 +174,7 @@ def run_raw_workspace_trigger(
     elapsed = round(time.perf_counter() - started, 3)
     return {
         "configured": True,
+        "agent_type": normalized_agent_type,
         "http_status": http_status,
         "response_headers": _safe_headers(response_headers),
         "response_body": response_body,
@@ -176,6 +193,28 @@ def run_raw_workspace_trigger(
         "request_body_fields": sorted(body),
         "request_body_size": len(request_data),
     }
+
+
+def safe_trigger_error(result: Dict[str, Any]) -> Optional[str]:
+    body = result.get("response_body")
+    if not body:
+        return None
+    parsed: Any = body
+    if isinstance(body, str):
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            return body[:500]
+    if isinstance(parsed, dict):
+        error = parsed.get("error")
+        if isinstance(error, dict):
+            value = error.get("message") or error.get("code")
+            return str(value)[:500] if value else None
+        if isinstance(error, str):
+            return error[:500]
+        value = parsed.get("message") or parsed.get("detail")
+        return str(value)[:500] if value else None
+    return str(parsed)[:500]
 
 
 def run_minimal_trigger_diagnostic() -> Dict[str, Any]:
