@@ -209,12 +209,14 @@ def trigger_workspace_agent(
     dry_run=True,
     timeout_seconds=None,
     conversation_mode=FRESH_CONVERSATION_MODE,
+    preserve_request_identifiers=False,
 ):
     if conversation_mode != FRESH_CONVERSATION_MODE:
         raise ValueError("Only conversation_mode='new' is supported.")
     invocation = _fresh_invocation_values(conversation_key, idempotency_key)
-    conversation_key = invocation["conversation_key"]
-    idempotency_key = invocation["idempotency_key"]
+    if not preserve_request_identifiers:
+        conversation_key = invocation["conversation_key"]
+        idempotency_key = invocation["idempotency_key"]
     invocation_id = invocation["invocation_id"]
     created_at = datetime.now(timezone.utc).isoformat()
     cleaned_agent_id = clean_agent_id(agent_id)

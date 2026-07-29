@@ -880,7 +880,15 @@ def _json_input_text(instructions: List[str], payload: Dict[str, Any], save_addr
     )
 
 
-def _trigger(agent_id_env: str, fallback_agent_name: str, input_text: str, conversation_key: str, idempotency_key: str, dry_run: bool) -> Dict[str, Any]:
+def _trigger(
+    agent_id_env: str,
+    fallback_agent_name: str,
+    input_text: str,
+    conversation_key: str,
+    idempotency_key: str,
+    dry_run: bool,
+    preserve_request_identifiers: bool = False,
+) -> Dict[str, Any]:
     _load_env()
     return trigger_workspace_agent(
         agent_id=os.getenv(agent_id_env) or fallback_agent_name,
@@ -890,6 +898,7 @@ def _trigger(agent_id_env: str, fallback_agent_name: str, input_text: str, conve
         idempotency_key=idempotency_key,
         dry_run=dry_run,
         conversation_mode="new",
+        preserve_request_identifiers=preserve_request_identifiers,
     )
 
 
@@ -1370,6 +1379,7 @@ def _trigger_bom_agent_with_retries(
                 f"{project_code}:{product_id}:sequential:bom",
                 idempotency_key,
                 dry_run=dry_run,
+                preserve_request_identifiers=True,
             )
         except Exception as exc:
             logger.exception(
