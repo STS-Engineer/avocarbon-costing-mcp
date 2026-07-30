@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -60,6 +61,73 @@ def test_202_optional_metadata_remains_unverified_diagnostic(monkeypatch):
     assert result["status"] == "accepted"
     assert result["response"]["conversation_url"]
     assert result["conversation_url_verified"] is False
+
+
+def test_conversation_url_audit_is_safe():
+    result = workflow._safe_conversation_url_audit(
+        "https://chatgpt.com/g/g-example/c/abcdef123456?secret=not-logged"
+    )
+
+    assert result == {
+        "conversation_url_returned": True,
+        "conversation_url_host": "chatgpt.com",
+        "conversation_url_path_suffix": "abcdef123456",
+    }
+    assert "secret" not in json.dumps(result)
+
+
+def test_accepted_trigger_logs_safe_conversation_diagnostic(monkeypatch, caplog):
+    monkeypatch.setattr(workflow, "_load_env", lambda: None)
+    monkeypatch.setattr(
+        workflow,
+        "get_bom_agent_configuration_health",
+        lambda: {
+            "status": "configured",
+            "agent_id_masked": "agtch_...test",
+            "token_present": True,
+            "endpoint": "https://api.chatgpt.com/v1/workspace_agents/{agent_id}/trigger",
+            "invocation_timeout_seconds": 30,
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "require_bom_writeback_capability",
+        lambda: {"save_bom_output_accepts_trigger_run_id": True},
+    )
+    monkeypatch.setattr(workflow, "_bom_trigger_max_attempts", lambda: 1)
+    monkeypatch.setattr(workflow, "_existing_state", lambda *args: (None, None))
+    monkeypatch.setattr(workflow, "append_workflow_event", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        workflow,
+        "_trigger",
+        lambda *args, **kwargs: {
+            "status": "accepted",
+            "http_status": 202,
+            "request_correlation_id": "request-safe",
+            "response": {
+                "conversation_url": (
+                    "https://chatgpt.com/g/g-example/c/abcdef123456?secret=not-logged"
+                )
+            },
+        },
+    )
+    caplog.set_level(logging.INFO, logger=workflow.__name__)
+
+    result = workflow._trigger_bom_agent_with_retries(
+        "P",
+        "X",
+        '{"trigger_run_id":"run-current"}',
+        dry_run=False,
+        status_before="created",
+        trigger_run_id="run-current",
+    )
+
+    assert result["status"] == "accepted"
+    assert '"event": "trigger_accepted"' in caplog.text
+    assert '"request_id": "request-safe"' in caplog.text
+    assert '"conversation_url_returned": true' in caplog.text
+    assert '"conversation_url_path_suffix": "abcdef123456"' in caplog.text
+    assert "not-logged" not in caplog.text
 
 
 def test_accepted_status_waits_for_callback(monkeypatch):
@@ -171,15 +239,18 @@ def _test_dir():
     return path
 
 
-def test_missing_trigger_run_id_callback_is_rejected(monkeypatch):
+def test_missing_trigger_run_id_callback_is_rejected(monkeypatch, caplog):
     tmp_path = _test_dir()
     state = _waiting_state()
     _patch_writeback(monkeypatch, tmp_path, state)
 
     try:
-        result = workflow.save_bom_output("P", "X", {"bom": []})
+        caplog.set_level(logging.INFO, logger=workflow.__name__)
+        result = workflow.save_bom_output("P", "X", "", {"bom": []})
         assert result["error_code"] == "missing_trigger_run_id"
         assert not (tmp_path / "raw.json").exists()
+        assert '"event": "callback_rejected"' in caplog.text
+        assert '"rejection_reason": "missing_trigger_run_id"' in caplog.text
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
@@ -188,32 +259,43 @@ def test_wrong_trigger_run_id_is_recorded_as_stale(monkeypatch):
     tmp_path = _test_dir()
     state = _waiting_state()
     _patch_writeback(monkeypatch, tmp_path, state)
+    raw_path = tmp_path / "raw.json"
+    normalized_path = tmp_path / "normalized.json"
+    raw_path.write_text('{"existing":"raw"}', encoding="utf-8")
+    normalized_path.write_text('{"existing":"normalized"}', encoding="utf-8")
+    state_before = json.loads(json.dumps(state))
 
     try:
         result = workflow.save_bom_output(
-            "P", "X", {"bom": []}, trigger_run_id="run-old"
+            "P", "X", "run-old", {"bom": []}
         )
         assert result["status"] == "stale_callback"
         assert state["stale_bom_callbacks"][0]["received_trigger_run_id"] == "run-old"
-        assert not (tmp_path / "raw.json").exists()
+        assert raw_path.read_text(encoding="utf-8") == '{"existing":"raw"}'
+        assert normalized_path.read_text(encoding="utf-8") == '{"existing":"normalized"}'
+        assert state["bom"] == state_before["bom"]
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
 
-def test_valid_current_run_callback_completes_and_normalizes(monkeypatch):
+def test_valid_current_run_callback_completes_and_normalizes(monkeypatch, caplog):
     tmp_path = _test_dir()
     state = _waiting_state()
     _patch_writeback(monkeypatch, tmp_path, state)
 
     try:
+        caplog.set_level(logging.INFO, logger=workflow.__name__)
         result = workflow.save_bom_output(
-            "P", "X", {"bom": []}, trigger_run_id="run-current"
+            "P", "X", "run-current", {"bom": []}
         )
         assert result["success"] is True
         assert state["status"] == "bom_received"
         assert state["bom"]["callback_status"] == "bom_received"
         assert state["bom"]["normalization_status"] == "bom_normalized"
         assert state["bom"]["received_for_trigger_run_id"] == "run-current"
+        assert '"event": "callback_accepted"' in caplog.text
+        assert '"event": "raw_bom_saved"' in caplog.text
+        assert '"event": "normalized_bom_saved"' in caplog.text
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 

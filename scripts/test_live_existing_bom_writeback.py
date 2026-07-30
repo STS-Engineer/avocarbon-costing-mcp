@@ -46,9 +46,14 @@ def sample_bom():
 
 
 def main():
+    active_state = get_workflow_state(PROJECT_CODE, PRODUCT_ID)
+    trigger_run_id = str((active_state.get("bom") or {}).get("trigger_run_id") or "").strip()
+    if not trigger_run_id:
+        raise RuntimeError("Active BOM workflow has no trigger_run_id.")
     response = server.save_bom_output(
         project_code=PROJECT_CODE,
         product_id=PRODUCT_ID,
+        trigger_run_id=trigger_run_id,
         raw_json=sample_bom(),
     )
     assert response.get("success") is True, response

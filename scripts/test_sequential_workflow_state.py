@@ -84,7 +84,12 @@ def main():
     }
 
     section("SAVE FAKE BOM OUTPUT")
-    bom_saved = save_bom_output(PROJECT_CODE, PRODUCT_ID, fake_bom)
+    bom_saved = save_bom_output(
+        PROJECT_CODE,
+        PRODUCT_ID,
+        state["bom"]["trigger_run_id"],
+        fake_bom,
+    )
     normalized = bom_saved["normalized_bom"]
     print(json.dumps({
         "state_status": bom_saved["state"]["status"],

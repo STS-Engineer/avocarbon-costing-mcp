@@ -136,8 +136,13 @@ def main() -> int:
     print(f"project_code: {project_code}")
     print(f"product_id: {product_id}")
 
-    start_real_choke_workflow(input_file=input_file, dry_run=True)
-    save_bom_output(project_code, product_id, bom_json())
+    started = start_real_choke_workflow(input_file=input_file, dry_run=True)
+    save_bom_output(
+        project_code,
+        product_id,
+        started["state"]["bom"]["trigger_run_id"],
+        bom_json(),
+    )
     for component_id, delivered_cost, transportation, duty, forwarder in [
         ("ferrite_core", 0.129, 0.005, 0, 0.001),
         ("magnet_wire", 0.333, 0.003, 0, 0.001),

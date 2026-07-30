@@ -38,8 +38,8 @@ def main():
         "drawing_reference": "test-drawing.pdf",
     }, indent=2), encoding="utf-8")
 
-    start_real_choke_workflow(portable_data_reference(input_path), dry_run=True)
-    save_bom_output(PROJECT_CODE, PRODUCT_ID, {
+    started = start_real_choke_workflow(portable_data_reference(input_path), dry_run=True)
+    save_bom_output(PROJECT_CODE, PRODUCT_ID, started["state"]["bom"]["trigger_run_id"], {
         "quote_information": {
             "product_name": "Fuse choke",
             "part_number": PRODUCT_ID,

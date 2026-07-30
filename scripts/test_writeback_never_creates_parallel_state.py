@@ -45,13 +45,14 @@ def main():
             json={"input_file": "data/customer_inputs/no_parallel.json", "dry_run": True},
         )
         assert response.status_code == 200, response.text
+        trigger_run_id = response.json()["state"]["bom"]["trigger_run_id"]
 
     original_cwd = Path.cwd()
     changed_cwd = TEST_DIR / "different-cwd"
     changed_cwd.mkdir()
     try:
         os.chdir(changed_cwd)
-        saved = server.save_bom_output(PROJECT_CODE, PRODUCT_ID, {
+        saved = server.save_bom_output(PROJECT_CODE, PRODUCT_ID, trigger_run_id, {
             "bom": [
                 {"component_id": "ferrite_core", "component": "Ferrite Core"},
                 {"component_id": "magnet_wire", "component": "Magnet Wire"},

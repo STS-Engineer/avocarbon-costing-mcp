@@ -138,6 +138,23 @@ def _log_bom_lifecycle(event: str, **fields: Any) -> None:
     )
 
 
+def _safe_conversation_url_audit(value: Any) -> Dict[str, Any]:
+    conversation_url = str(value or "").strip()
+    if not conversation_url:
+        return {
+            "conversation_url_returned": False,
+            "conversation_url_host": None,
+            "conversation_url_path_suffix": None,
+        }
+    parsed = urlsplit(conversation_url)
+    path = parsed.path.rstrip("/")
+    return {
+        "conversation_url_returned": True,
+        "conversation_url_host": parsed.hostname,
+        "conversation_url_path_suffix": path[-12:] if path else None,
+    }
+
+
 def _id_timestamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -832,6 +849,10 @@ def run_storage_self_test() -> Dict[str, Any]:
             "status": "starting",
             "input_file": "storage-self-test",
             "customer_input": {"project_code": project_code, "product_id": product_id},
+            "bom": {
+                "status": "awaiting_bom_callback",
+                "trigger_run_id": f"storage-self-test-{suffix}",
+            },
         })
         _save_state(state)
         rest_write_path = str(paths["workflow_state_path"])
@@ -840,6 +861,7 @@ def run_storage_self_test() -> Dict[str, Any]:
         writeback = save_bom_output(
             project_code=project_code,
             product_id=product_id,
+            trigger_run_id=f"storage-self-test-{suffix}",
             raw_json={"bom": []},
         )
         rest_read_state, rest_read_state_path = _existing_state(project_code, product_id)
@@ -1517,12 +1539,33 @@ def _trigger_bom_agent_with_retries(
             }
             _save_state(state)
         if accepted:
+            response_payload = (
+                last_result.get("response")
+                if isinstance(last_result.get("response"), dict)
+                else {}
+            )
+            conversation_audit = _safe_conversation_url_audit(
+                response_payload.get("conversation_url")
+            )
+            _log_bom_lifecycle(
+                "trigger_accepted",
+                project_code=project_code,
+                product_id=product_id,
+                trigger_run_id=current_trigger_run_id,
+                attempt_number=attempt_number,
+                http_status=last_result.get("http_status"),
+                request_id=last_result.get("request_correlation_id"),
+                **conversation_audit,
+            )
             append_workflow_event(
                 project_code,
                 product_id,
                 "bom_trigger_accepted",
                 attempt_number=attempt_number,
                 http_status=last_result.get("http_status"),
+                trigger_run_id=current_trigger_run_id,
+                request_id=last_result.get("request_correlation_id"),
+                **conversation_audit,
                 status_before=status_before,
                 status_after="trigger_request_accepted",
             )
@@ -3527,8 +3570,8 @@ def _refresh_master_data_for_state(state: Dict[str, Any]) -> Dict[str, Any]:
 def save_bom_output(
     project_code: str,
     product_id: str,
+    trigger_run_id: str,
     raw_json: Dict[str, Any],
-    trigger_run_id: Optional[str] = None,
     allow_create_without_start: bool = False,
 ) -> Dict[str, Any]:
     _log_bom_lifecycle(
@@ -3652,6 +3695,14 @@ def save_bom_output(
                 error_code=response["error_code"],
                 expected_trigger_run_id=expected_trigger_run_id,
             )
+            _log_bom_lifecycle(
+                "callback_rejected",
+                project_code=project_code,
+                product_id=product_id,
+                trigger_run_id_received=received_trigger_run_id,
+                trigger_run_id_expected=expected_trigger_run_id,
+                rejection_reason=response["error_code"],
+            )
             return response
         if expected_trigger_run_id and received_trigger_run_id != expected_trigger_run_id:
             stale_callback = {
@@ -3680,7 +3731,22 @@ def save_bom_output(
                 expected_trigger_run_id=expected_trigger_run_id,
                 received_trigger_run_id=received_trigger_run_id,
             )
+            _log_bom_lifecycle(
+                "callback_rejected",
+                project_code=project_code,
+                product_id=product_id,
+                trigger_run_id_received=received_trigger_run_id,
+                trigger_run_id_expected=expected_trigger_run_id,
+                rejection_reason=response["error_code"],
+            )
             return response
+        _log_bom_lifecycle(
+            "callback_accepted",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id_received=received_trigger_run_id,
+            trigger_run_id_expected=expected_trigger_run_id,
+        )
         status_before = (existing_state or {}).get("status")
         append_workflow_event(
             project_code,
@@ -3724,6 +3790,14 @@ def save_bom_output(
         logger.info("save_bom_output paths resolved: %s", json.dumps(path_debug, default=str))
 
         _write_json(raw_path, raw_json)
+        _log_bom_lifecycle(
+            "raw_bom_saved",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id_received=received_trigger_run_id,
+            raw_bom_saved=raw_path.exists(),
+            raw_bom_path=str(raw_path),
+        )
         append_workflow_event(
             project_code,
             product_id,
@@ -3748,6 +3822,15 @@ def save_bom_output(
             for item in normalized.get("components") or []
             if isinstance(item, dict) and item.get("component_id")
         ]
+        _log_bom_lifecycle(
+            "normalized_bom_saved",
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id_received=received_trigger_run_id,
+            normalized_bom_saved=normalized_path.exists(),
+            normalized_bom_path=str(normalized_path),
+            component_ids=component_ids,
+        )
         append_workflow_event(
             project_code,
             product_id,

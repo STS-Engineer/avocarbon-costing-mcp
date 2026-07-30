@@ -188,6 +188,7 @@ def main() -> int:
     bom_response = server.save_bom_output(
         project_code=project_code,
         product_id=product_id,
+        trigger_run_id=start_state["bom"]["trigger_run_id"],
         raw_json=_sample_bom(project_code, product_id),
     )
     bom_state = _assert_state(bom_response, "bom_received", "save_bom_output")

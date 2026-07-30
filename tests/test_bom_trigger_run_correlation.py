@@ -202,8 +202,8 @@ def test_bom_only_correlation_created_sent_received_expected(monkeypatch):
         result = workflow.save_bom_output(
             "P",
             "X",
+            sent_ids[0],
             {"bom": []},
-            trigger_run_id=sent_ids[0],
         )
         correlation = next(
             fields

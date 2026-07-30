@@ -73,7 +73,7 @@ def main():
     drawing_url_before = start_state["drawing_file_url"]
     input_file_before = start_state["input_file"]
 
-    saved = save_bom_output(PROJECT_CODE, PRODUCT_ID, {
+    saved = save_bom_output(PROJECT_CODE, PRODUCT_ID, start_state["bom"]["trigger_run_id"], {
         "quote_information": {
             "product_name": "Rod choke",
             "part_number": PRODUCT_ID,

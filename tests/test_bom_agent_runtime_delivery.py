@@ -1,6 +1,8 @@
+import asyncio
 import inspect
 
 import server
+from app.routers.choke_workflow_router import SaveBomOutputRequest
 from services import choke_sequential_agent_workflow as workflow
 from services import choke_writeback_mcp_diagnostic as mcp_diagnostic
 from services.workspace_agent_client import (
@@ -88,6 +90,77 @@ def test_save_bom_output_schema_requires_trigger_run_id():
     ]
     runtime_signature = inspect.signature(server.save_bom_output)
     assert runtime_signature.parameters["trigger_run_id"].default is inspect.Parameter.empty
+
+
+def test_registered_mcp_writeback_schemas_are_strict_and_scoped():
+    tools = {
+        tool.name: tool.inputSchema
+        for tool in asyncio.run(server.mcp.list_tools())
+        if tool.name in {
+            "save_bom_output",
+            "save_component_output",
+            "save_most_output",
+        }
+    }
+
+    bom_schema = tools["save_bom_output"]
+    assert set(bom_schema["properties"]) == {
+        "project_code",
+        "product_id",
+        "trigger_run_id",
+        "raw_json",
+    }
+    assert set(bom_schema["required"]) == {
+        "project_code",
+        "product_id",
+        "trigger_run_id",
+        "raw_json",
+    }
+    assert bom_schema["properties"]["trigger_run_id"] == {
+        "title": "Trigger Run Id",
+        "type": "string",
+    }
+
+    component_schema = tools["save_component_output"]
+    assert set(component_schema["properties"]) == {
+        "project_code",
+        "product_id",
+        "component_id",
+        "raw_json",
+    }
+    assert set(component_schema["required"]) == {
+        "project_code",
+        "product_id",
+        "component_id",
+        "raw_json",
+    }
+
+    most_schema = tools["save_most_output"]
+    assert set(most_schema["properties"]) == {
+        "project_code",
+        "product_id",
+        "trigger_run_id",
+        "raw_json",
+        "most_scope_id",
+        "work_package_id",
+    }
+    assert set(most_schema["required"]) == {
+        "project_code",
+        "product_id",
+        "trigger_run_id",
+        "raw_json",
+    }
+
+
+def test_rest_bom_writeback_schema_requires_trigger_run_id():
+    model_schema = getattr(
+        SaveBomOutputRequest,
+        "model_json_schema",
+        SaveBomOutputRequest.schema,
+    )()
+
+    assert "trigger_run_id" in model_schema["required"]
+    assert model_schema["properties"]["trigger_run_id"]["type"] == "string"
 
 
 def test_invocation_fails_before_agent_when_schema_is_incompatible(monkeypatch):

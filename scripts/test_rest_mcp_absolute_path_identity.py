@@ -51,7 +51,7 @@ def main():
         assert status.status_code == 200, status.text
         rest_status_path = status.json()["canonical_workflow_state_path"]
 
-    save = server.save_bom_output(PROJECT_CODE, PRODUCT_ID, {
+    save = server.save_bom_output(PROJECT_CODE, PRODUCT_ID, start_payload["state"]["bom"]["trigger_run_id"], {
         "bom": [{"component_id": "ferrite_core", "component": "Ferrite Core"}],
     })
     assert save.get("success") is True, save

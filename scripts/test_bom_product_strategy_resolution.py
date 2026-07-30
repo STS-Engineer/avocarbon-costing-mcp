@@ -84,7 +84,7 @@ def main():
         "input_file": portable_data_reference(input_path),
         "customer_input": customer_input,
         "status": "bom_triggered",
-        "bom": {"status": "triggered"},
+        "bom": {"status": "triggered", "trigger_run_id": "test-bom-product-run"},
     })
     workflow._save_state(state)
     workflow.get_master_manufacturing_strategy = select_manufacturing_strategy
@@ -94,7 +94,12 @@ def main():
     assert extracted["canonical_product"] == "Fuse chokes", extracted
     assert extracted["part_number"] == "316-5001", extracted
 
-    writeback = workflow.save_bom_output(PROJECT_CODE, PRODUCT_ID, sample_bom())
+    writeback = workflow.save_bom_output(
+        PROJECT_CODE,
+        PRODUCT_ID,
+        "test-bom-product-run",
+        sample_bom(),
+    )
     assert writeback["success"] is True, writeback
     saved_state = workflow.get_workflow_state(PROJECT_CODE, PRODUCT_ID)
     assert saved_state["product_id"] == PRODUCT_ID, saved_state

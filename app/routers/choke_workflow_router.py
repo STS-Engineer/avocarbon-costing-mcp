@@ -64,7 +64,7 @@ class StartWorkflowRequest(BaseModel):
 class SaveBomOutputRequest(BaseModel):
     project_code: str
     product_id: str
-    trigger_run_id: str | None = None
+    trigger_run_id: str
     raw_json: Dict[str, Any] = Field(default_factory=dict)
 
 

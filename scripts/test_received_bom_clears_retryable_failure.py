@@ -17,6 +17,7 @@ def main():
     suffix = datetime.now().strftime("%Y%m%d%H%M%S%f")
     project_code = f"BOM-RECEIVED-PRECEDENCE-{suffix}"
     product_id = f"PART-{suffix}"
+    trigger_run_id = f"run-{suffix}"
     trigger_failure = {
         "stage": "bom",
         "trigger_result": {
@@ -35,6 +36,7 @@ def main():
         "bom": {
             "status": "trigger_failed_retryable",
             "retryable": True,
+            "trigger_run_id": trigger_run_id,
             "trigger_result": trigger_failure["trigger_result"],
         },
         "components": {},
@@ -42,7 +44,7 @@ def main():
         "customer_input": {},
     })
 
-    result = save_bom_output(project_code, product_id, {
+    result = save_bom_output(project_code, product_id, trigger_run_id, {
         "bom": [
             {"component_id": "ferrite_core", "component": "Ferrite core", "quantity": 1},
             {"component_id": "magnet_wire", "component": "Magnet wire", "quantity": 1},

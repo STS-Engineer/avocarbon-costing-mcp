@@ -203,7 +203,27 @@ def save_choke_bom_result(
         agent_name=agent_name,
         delegated_tool="save_bom_output",
     )
-    workflow_update = save_bom_output(project_code, product_id, raw_json)
+    trigger_run_id = str(raw_json.get("trigger_run_id") or "").strip()
+    if not trigger_run_id:
+        return {
+            "success": False,
+            "status": "rejected",
+            "error_code": "missing_trigger_run_id",
+            "message": (
+                "Legacy BOM write-back requires raw_json.trigger_run_id and "
+                "cannot use the obsolete three-field contract."
+            ),
+            "project_code": project_code,
+            "product_id": product_id,
+            "legacy_tool": "save_choke_bom_result",
+            "delegated_tool": "save_bom_output",
+        }
+    workflow_update = save_bom_output(
+        project_code=project_code,
+        product_id=product_id,
+        trigger_run_id=trigger_run_id,
+        raw_json=raw_json,
+    )
     if not workflow_update.get("success"):
         return {
             **workflow_update,
