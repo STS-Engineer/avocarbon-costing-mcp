@@ -71,6 +71,7 @@ At the end of component costing, call save_component_output with:
 - project_code
 - product_id
 - component_id
+- trigger_run_id
 - raw_json = your full final component costing JSON
 ```
 
@@ -81,6 +82,7 @@ Required tool payload:
   "project_code": "24003-CHO-00",
   "product_id": "316-5001",
   "component_id": "ferrite_core",
+  "trigger_run_id": "<exact component trigger_run_id>",
   "raw_json": {}
 }
 ```
@@ -94,6 +96,8 @@ At the end of MOST estimation, call save_most_output with:
 - project_code
 - product_id
 - work_package_id
+- most_scope_id
+- trigger_run_id
 - raw_json = your full final MOST JSON
 ```
 
@@ -104,6 +108,8 @@ Required tool payload:
   "project_code": "24003-CHO-00",
   "product_id": "316-5001",
   "work_package_id": "wp_10_winding",
+  "most_scope_id": "wp_10_winding",
+  "trigger_run_id": "<exact MOST trigger_run_id>",
   "raw_json": {}
 }
 ```

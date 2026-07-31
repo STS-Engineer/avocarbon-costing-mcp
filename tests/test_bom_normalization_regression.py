@@ -491,13 +491,16 @@ def test_most_callback_requires_current_trigger_run_id(monkeypatch):
     monkeypatch.setattr(workflow, "append_workflow_event", lambda *_a, **_k: {})
 
     missing = workflow.save_most_output(
-        "TEST-PROJECT", "TEST-PRODUCT", "wp_10_wire_winding", {}
+        "TEST-PROJECT", "TEST-PRODUCT", "wp_10_wire_winding", {},
+        most_scope_id="wp_10_wire_winding",
+        trigger_run_id="",
     )
     stale = workflow.save_most_output(
         "TEST-PROJECT",
         "TEST-PRODUCT",
         "wp_10_wire_winding",
         {},
+        most_scope_id="wp_10_wire_winding",
         trigger_run_id="most-run-old",
     )
 
@@ -564,6 +567,7 @@ def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
             "operation_name": "Winding",
             "cycle_time_seconds": 12,
         },
+        most_scope_id="wp_10_wire_winding",
         trigger_run_id="most-run-current",
     )
 

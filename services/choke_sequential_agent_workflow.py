@@ -1647,13 +1647,15 @@ def _prepare_automatic_bom_retry(
         trigger_run_id=persisted_id,
     )
     trigger = _refresh_bom_trigger_signed_url(trigger, request_base_url)
-    preflight = _validate_and_select_drawing_url(trigger)
+    mcp_check = _mcp_drawing_preflight(project_code, product_id, persisted_id)
+    url_check = _validate_and_select_drawing_url(trigger)
+    preflight = _combine_drawing_preflights(mcp_check, url_check)
     if not preflight.get("success"):
         return {
             "status": "failed",
             "http_status": None,
             "error_type": "drawing_preflight_failed",
-            "note": "Drawing PDF preflight failed during automatic retry.",
+            "note": "Current drawing MCP delivery preflight failed during automatic retry.",
             "retryable": False,
             "trigger_run_id": persisted_id,
             "pdf_url_check": preflight,
@@ -1812,7 +1814,7 @@ def _trigger_bom_agent_with_retries(
             timeout_seconds=config.get("invocation_timeout_seconds"),
             payload_bytes=len(current_input_text.encode("utf-8")),
             trigger_run_id_sent=current_trigger_run_id,
-            drawing_delivery_mode="signed_url",
+            drawing_delivery_mode="mcp_embedded_resource",
             attachment_file_reference_present=False,
             prompt_contains_current_trigger_run_id=(
                 bool(current_trigger_run_id)
@@ -1998,16 +2000,18 @@ def _build_bom_runtime_instruction(
     trigger_run_id: str,
 ) -> str:
     return (
-        "This API trigger cannot attach a conversation file. "
-        "The drawing_file_url in this payload is the drawing PDF for this current request. "
-        "Open drawing_file_url now and analyze that PDF according to your permanent Agent instructions. "
-        "Do not wait for ./user_files/, a conversation attachment, or another user message. "
+        "First call get_choke_drawing with the exact project_code, product_id, and "
+        "trigger_run_id in this payload. Analyze only the current PDF returned by that MCP action. "
+        "The drawing_file_url is diagnostic metadata only and is not the primary drawing source. "
+        "If get_choke_drawing fails, stop and return BOM_INPUT_FILE_UNAVAILABLE. "
+        "Never use an archived BOM, prior technical output, ./user_files/, or another drawing as a replacement. "
         f"Use project_code exactly as '{project_code}', product_id exactly as '{product_id}', "
         f"and trigger_run_id exactly as '{trigger_run_id}'. "
         "After producing the complete BOM JSON, call save_bom_output exactly once. "
         "Pass those exact project_code, product_id, and trigger_run_id values, and pass the "
         "complete BOM JSON object as raw_json. "
-        "Do not generate, replace, normalize, or reuse another trigger_run_id."
+        "Do not generate, replace, normalize, or reuse another trigger_run_id, and do not call "
+        "save_bom_output if the current drawing was not successfully returned by get_choke_drawing."
     )
 
 
@@ -2104,7 +2108,7 @@ def _build_bom_trigger_payload(
         ),
         "drawing_reference": normalized_input.get("drawing_reference"),
         "instruction": writeback_instruction,
-        "drawing_delivery_mode": "signed_url",
+        "drawing_delivery_mode": "mcp_embedded_resource",
     }
     input_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
     return {
@@ -2122,6 +2126,63 @@ def _build_bom_trigger_payload(
         "drawing_url_is_local": _is_local_url(drawing_file_url),
         "warnings": warnings,
         "trigger_run_id": trigger_run_id,
+    }
+
+
+def _mcp_drawing_preflight(
+    project_code: str,
+    product_id: str,
+    trigger_run_id: str,
+) -> Dict[str, Any]:
+    from services.choke_drawing_mcp_service import get_current_choke_drawing
+
+    try:
+        result = get_current_choke_drawing(
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id=trigger_run_id,
+            include_bytes=False,
+            record_events=False,
+        )
+        return {
+            "success": True,
+            "delivery_mode": "mcp_embedded_resource",
+            "filename": result.get("filename"),
+            "mime_type": result.get("mime_type"),
+            "checksum_sha256": result.get("checksum_sha256"),
+            "source_revision": result.get("source_revision"),
+            "file_size": result.get("file_size"),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "delivery_mode": "mcp_embedded_resource",
+            "error_code": "BOM_INPUT_FILE_UNAVAILABLE",
+            "message": str(exc),
+        }
+
+
+def _combine_drawing_preflights(
+    mcp_check: Dict[str, Any],
+    url_check: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not mcp_check.get("success"):
+        return {
+            **mcp_check,
+            "url_diagnostic": url_check,
+            "pdf_network_access_blocked": not bool(url_check.get("success")),
+        }
+    return {
+        "success": True,
+        "delivery_mode": "mcp_embedded_resource",
+        "selected": {
+            "access_mode": "mcp_embedded_resource",
+            "validation": mcp_check,
+        },
+        "mcp_drawing_check": mcp_check,
+        "url_diagnostic": url_check,
+        "pdf_network_access_blocked": not bool(url_check.get("success")),
+        "candidate_validations": url_check.get("candidate_validations") or [],
     }
 
 
@@ -2581,7 +2642,16 @@ def _start_real_choke_workflow_locked(
             product_id=product_id,
             trigger_run_id=trigger_run_id,
         )
-        pdf_url_check = _validate_and_select_drawing_url(bom_trigger)
+        mcp_drawing_check = _mcp_drawing_preflight(
+            project_code,
+            product_id,
+            trigger_run_id,
+        )
+        url_diagnostic = _validate_and_select_drawing_url(bom_trigger)
+        pdf_url_check = _combine_drawing_preflights(
+            mcp_drawing_check,
+            url_diagnostic,
+        )
         validation_attempt.update({
             "status": "accepted" if pdf_url_check.get("success") else "failed",
             "completed_at": _now_iso(),
@@ -2597,7 +2667,7 @@ def _start_real_choke_workflow_locked(
                 item.get("validation") or {}
                 for item in pdf_url_check.get("candidate_validations") or []
             ]
-            failure_code = next(
+            failure_code = pdf_url_check.get("error_code") or next(
                 (
                     result.get("error_code")
                     for result in validation_results
@@ -2621,7 +2691,7 @@ def _start_real_choke_workflow_locked(
             persisted_state.setdefault("errors", []).append({
                 "stage": "bom_pdf_access",
                 "error_code": failure_code,
-                "message": "No current drawing URL passed PDF validation; Workspace Agent was not triggered.",
+                "message": "The current drawing could not be prepared for MCP delivery; Workspace Agent was not triggered.",
                 "details": pdf_url_check,
             })
             _save_state(persisted_state)
@@ -2633,7 +2703,7 @@ def _start_real_choke_workflow_locked(
                 status_after="failed",
             )
             return {
-                "message": "Drawing access validation failed; retry will generate fresh URLs.",
+                "message": "Current drawing MCP delivery validation failed.",
                 "status": "failed",
                 "error_code": failure_code,
                 "retryable": True,
@@ -2652,6 +2722,14 @@ def _start_real_choke_workflow_locked(
             "pdf_url_check": pdf_url_check,
         }
         _save_state(persisted_state)
+        if pdf_url_check.get("pdf_network_access_blocked"):
+            append_workflow_event(
+                project_code,
+                product_id,
+                "pdf_network_access_blocked",
+                trigger_run_id=trigger_run_id,
+                primary_delivery_mode="mcp_embedded_resource",
+            )
         selected_validation = (pdf_url_check.get("selected") or {}).get(
             "validation"
         ) or {}
@@ -2993,9 +3071,6 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         retry=True,
     )
     bom_trigger = _refresh_bom_trigger_signed_url(bom_trigger)
-    if not bom_trigger.get("drawing_file_url"):
-        raise ValueError("BOM Agent retry requires drawing_file_url in workflow state or customer_input.")
-
     validation_attempt = {
         "attempt_id": str(uuid.uuid4()),
         "stage": "drawing_access_validation",
@@ -3019,7 +3094,13 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         trigger_run_id=trigger_run_id,
         retry=True,
     )
-    pdf_url_check = _validate_and_select_drawing_url(bom_trigger)
+    mcp_drawing_check = _mcp_drawing_preflight(
+        project_code,
+        product_id,
+        trigger_run_id,
+    )
+    url_diagnostic = _validate_and_select_drawing_url(bom_trigger)
+    pdf_url_check = _combine_drawing_preflights(mcp_drawing_check, url_diagnostic)
     validation_attempt.update({
         "status": "accepted" if pdf_url_check.get("success") else "failed",
         "completed_at": _now_iso(),
@@ -3033,7 +3114,7 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
             item.get("validation") or {}
             for item in pdf_url_check.get("candidate_validations") or []
         ]
-        failure_code = next(
+        failure_code = pdf_url_check.get("error_code") or next(
             (
                 result.get("error_code")
                 for result in validation_results
@@ -3059,7 +3140,7 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         state.setdefault("errors", []).append({
             "stage": "bom_pdf_access",
             "error_code": failure_code,
-            "message": "Drawing access validation failed during retry.",
+            "message": "Current drawing MCP delivery validation failed during retry.",
             "details": pdf_url_check,
         })
         _save_state(state)
@@ -4023,6 +4104,13 @@ def save_bom_output(
         return error_response
 
     try:
+        append_workflow_event(
+            project_code,
+            product_id,
+            "save_bom_output_action_called",
+            trigger_run_id_received=str(trigger_run_id or "").strip(),
+            raw_json_top_level_keys=raw_keys,
+        )
         existing_state, existing_state_path = _existing_state(project_code, product_id)
         recovery = None
         if existing_state is None:
@@ -4669,6 +4757,26 @@ def get_workflow_debug(project_code: str, product_id: str) -> Dict[str, Any]:
             for item in normalized_bom.get("components") or []
             if isinstance(item, dict) and item.get("component_id")
         ]
+    lifecycle_events = []
+    lifecycle_events_path = _events_path(project_code, product_id).resolve()
+    if lifecycle_events_path.exists():
+        for line in lifecycle_events_path.read_text(encoding="utf-8").splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                lifecycle_events.append(item)
+    event_names = {str(item.get("event") or "") for item in lifecycle_events}
+    bom_state = (state or {}).get("bom") or {}
+    trigger_result = bom_state.get("trigger_result") or {}
+    trigger_api_accepted = trigger_result.get("status") in {"accepted", "dry_run"}
+    drawing_action_called = "drawing_mcp_action_called" in event_names
+    drawing_delivered = "drawing_mcp_delivered" in event_names
+    writeback_action_called = "save_bom_output_action_called" in event_names
+    writeback_accepted = bool(
+        {"bom_received", "save_bom_output_completed"} & event_names
+    )
     response = {
         "project_code": project_code,
         "product_id": product_id,
@@ -4684,6 +4792,22 @@ def get_workflow_debug(project_code: str, product_id: str) -> Dict[str, Any]:
         "normalized_bom_path": str(normalized_path),
         "normalized_bom_exists": normalized_path.exists(),
         "normalized_component_ids": normalized_component_ids,
+        "bom_agent_delivery_lifecycle": {
+            "trigger_api_accepted": trigger_api_accepted,
+            "agent_started": drawing_action_called,
+            "drawing_mcp_action_called": drawing_action_called,
+            "drawing_delivered": drawing_delivered,
+            "save_bom_output_action_called": writeback_action_called,
+            "writeback_accepted": writeback_accepted,
+            "callback_completed": bom_state.get("status") == "received",
+            "action_schema_mismatch": any(
+                str(error.get("error_code") or "") == "bom_writeback_schema_incompatible"
+                for error in ((state or {}).get("errors") or [])
+                if isinstance(error, dict)
+            ),
+            "pdf_network_access_blocked": "pdf_network_access_blocked" in event_names,
+            "events_path": str(lifecycle_events_path),
+        },
         "bom_trigger_attempts": ((state or {}).get("bom") or {}).get("trigger_attempts") or [],
         "last_bom_trigger_status": (
             (((state or {}).get("bom") or {}).get("trigger_result") or {}).get("status")
@@ -5624,7 +5748,14 @@ def normalize_component_output(
     return normalized
 
 
-def save_component_output(project_code: str, product_id: str, component_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
+def save_component_output(
+    project_code: str,
+    product_id: str,
+    component_id: str,
+    raw_json: Dict[str, Any],
+    *,
+    trigger_run_id: str,
+) -> Dict[str, Any]:
     component_id = _safe_part(component_id, "component_id")
     correlation_id = str(uuid.uuid4())
     state, state_path = _existing_state(project_code, product_id)
@@ -5637,6 +5768,32 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
             raise ValueError("BOM output must be received before component write-back.")
         if not isinstance(raw_json, dict):
             raise ValueError("raw_json must be a JSON object.")
+        existing = (state.get("components") or {}).get(component_id) or {}
+        expected_trigger_run_id = str(existing.get("trigger_run_id") or "").strip()
+        received_trigger_run_id = str(trigger_run_id or "").strip()
+        if not received_trigger_run_id:
+            raise ValueError("trigger_run_id is required for component write-back.")
+        if not expected_trigger_run_id:
+            raise ValueError("No active component trigger_run_id exists for this component.")
+        if received_trigger_run_id != expected_trigger_run_id:
+            stale_callback = {
+                "received_at": _now_iso(),
+                "received_trigger_run_id": received_trigger_run_id,
+                "expected_trigger_run_id": expected_trigger_run_id,
+                "reason": "trigger_run_id_mismatch",
+            }
+            existing.setdefault("stale_callback_history", []).append(stale_callback)
+            state.setdefault("components", {})[component_id] = existing
+            _save_state(state)
+            return {
+                "success": False,
+                "status": "stale_callback",
+                "error_code": "trigger_run_id_mismatch",
+                "message": "Component callback belongs to a different trigger run.",
+                "project_code": project_code,
+                "product_id": str(product_id),
+                "component_id": component_id,
+            }
         returned_id = raw_json.get("component_id")
         if returned_id not in [None, ""] and str(returned_id).strip() != component_id:
             raise ValueError("raw_json component_id does not match the tool component_id.")
@@ -5688,6 +5845,7 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
             "save_path": _relative(raw_path),
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
+            "received_for_trigger_run_id": received_trigger_run_id,
             "costing_readiness": pricing_completeness.get("status") or "complete",
             "requires_regeneration": requires_regeneration,
             "source_bom_revision": normalized.get("source_bom_revision"),
@@ -6721,10 +6879,15 @@ def save_most_output(
     project_code: str,
     product_id: str,
     work_package_id: str,
-    raw_json: Any,
-    trigger_run_id: Optional[str] = None,
+    raw_json: Dict[str, Any],
+    *,
+    most_scope_id: str,
+    trigger_run_id: str,
 ) -> Dict[str, Any]:
     work_package_id = _safe_part(work_package_id, "work_package_id")
+    most_scope_id = _safe_part(most_scope_id, "most_scope_id")
+    if most_scope_id != work_package_id:
+        raise ValueError("most_scope_id must match work_package_id.")
     correlation_id = str(uuid.uuid4())
     state, state_path = _existing_state(project_code, product_id)
     status_before = (state or {}).get("status")
@@ -6734,13 +6897,8 @@ def save_most_output(
             raise ValueError("Workflow state not found. MOST write-back cannot create a workflow.")
         if (state.get("bom") or {}).get("status") != "received":
             raise ValueError("BOM output must be received before MOST write-back.")
-        if isinstance(raw_json, str):
-            try:
-                raw_json = json.loads(raw_json)
-            except json.JSONDecodeError as exc:
-                raise ValueError("raw_json string must contain one valid JSON object.") from exc
         if not isinstance(raw_json, dict):
-            raise ValueError("raw_json must be a JSON object or a string containing one JSON object.")
+            raise ValueError("raw_json must be a JSON object.")
         returned_id = raw_json.get("work_package_id") or raw_json.get("most_scope_id")
         if returned_id not in [None, ""] and str(returned_id).strip() != work_package_id:
             raise ValueError("raw_json work_package_id does not match the tool work_package_id.")

@@ -23,6 +23,10 @@ from services.project_data_paths import (
     validate_data_root_configuration,
 )
 from services.public_url_service import get_public_url_diagnostics
+from services.choke_writeback_mcp_diagnostic import (
+    get_mcp_schema_fingerprints,
+    validate_runtime_writeback_schemas,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,12 @@ mcp_streamable_http_app = mcp.streamable_http_app()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     storage_status = validate_data_root_configuration()
+    schema_status = validate_runtime_writeback_schemas(raise_on_error=True)
+    logger.info(
+        "Validated runtime MCP action catalog: status=%s commit=%s",
+        schema_status["status"],
+        schema_status["server_commit"],
+    )
     if storage_status["healthy"]:
         logger.info("CANONICAL_DATA_ROOT=%s", get_data_root())
     else:
@@ -92,8 +102,10 @@ async def health(request: Request):
 def api_health():
     storage_status = validate_data_root_configuration()
     public_url_diagnostics = get_public_url_diagnostics()
+    mcp_schema_status = get_mcp_schema_fingerprints()
+    healthy = storage_status["healthy"] and mcp_schema_status["status"] == "ok"
     payload = {
-        "status": "ok" if storage_status["healthy"] else "unhealthy",
+        "status": "ok" if healthy else "unhealthy",
         "service": "avocarbon-costing-backend",
         **{key: storage_status[key] for key in (
             "git_commit",
@@ -106,9 +118,11 @@ def api_health():
             "startup_module",
         )},
         **public_url_diagnostics,
+        "mcp_action_schemas": mcp_schema_status,
     }
-    if not storage_status["healthy"]:
-        payload["storage_errors"] = storage_status["errors"]
+    if not healthy:
+        if not storage_status["healthy"]:
+            payload["storage_errors"] = storage_status["errors"]
         return JSONResponse(payload, status_code=503)
     return payload
 

@@ -1,0 +1,50 @@
+{
+  "status": "complete",
+  "mode": "dry_run",
+  "project_code": null,
+  "product_id": null,
+  "searched_data_root": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.tmp\\pytest-current-revision-escalated\\test_report_file_is_written_ou0",
+  "costing_runs_root": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.tmp\\pytest-current-revision-escalated\\test_report_file_is_written_ou0\\costing_runs",
+  "exclude_test_runs": false,
+  "test_run_patterns": [],
+  "summary": {
+    "total_scanned": 1,
+    "would_migrate": 1,
+    "migrated": 0,
+    "skipped": 0,
+    "failed": 0,
+    "legacy_component_output_count": 1,
+    "legacy_most_output_count": 1,
+    "obsolete_component_output_count": 1,
+    "obsolete_most_output_count": 1,
+    "files_created_or_updated": 0,
+    "files_deleted": 0,
+    "agent_triggers": 0
+  },
+  "runs": [
+    {
+      "run_dir": "C:\\Users\\youssef.benamor\\avocarbon-costing-system\\mcp_server\\.tmp\\pytest-current-revision-escalated\\test_report_file_is_written_ou0\\costing_runs\\PROJECT-A\\PRODUCT",
+      "status": "would_migrate",
+      "technical_revisions": {
+        "raw_bom": "raw-bom-sha256:094defb027adb2015eaf91a708910c46d415a38eff86a8bdce2aa12db4c71ec6",
+        "normalized_bom": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+        "process_decomposition": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e"
+      },
+      "legacy_component_outputs": [
+        "core"
+      ],
+      "legacy_most_outputs": [
+        "wp_winding"
+      ],
+      "obsolete_component_outputs": [
+        "removed_core"
+      ],
+      "obsolete_most_outputs": [
+        "wp_removed"
+      ],
+      "files_created_or_updated": 0,
+      "files_deleted": 0,
+      "agent_triggers": 0
+    }
+  ]
+}

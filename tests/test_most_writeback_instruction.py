@@ -118,8 +118,10 @@ def test_bom_runtime_instruction_is_correlated_and_component_instruction_is_unch
         "TEST-PRODUCT",
         bom["trigger_run_id"],
     )
-    assert "Open drawing_file_url now" in bom["payload"]["instruction"]
-    assert "Do not wait for ./user_files/" in bom["payload"]["instruction"]
+    assert "First call get_choke_drawing" in bom["payload"]["instruction"]
+    assert "Never use an archived BOM" in bom["payload"]["instruction"]
+    assert "./user_files/" in bom["payload"]["instruction"]
+    assert "or another drawing as a replacement" in bom["payload"]["instruction"]
     # The component instruction was hardened (Phase 6) to require an explicit
     # pricing basis/currency for every priced value, closing the unit-mismatch
     # gap that let a wire developed-length get costed as if it were a kg price.
@@ -138,11 +140,10 @@ def test_connector_diagnostic_and_openapi_require_trigger_run_id():
     )
     request_schema = schema["components"]["schemas"]["SaveMostOutputRequest"]
     assert "trigger_run_id" in request_schema["required"]
+    assert "work_package_id" in request_schema["required"]
+    assert "most_scope_id" in request_schema["required"]
     assert request_schema["properties"]["trigger_run_id"]["type"] == "string"
-    assert {item["type"] for item in request_schema["properties"]["raw_json"]["oneOf"]} == {
-        "object",
-        "string",
-    }
+    assert request_schema["properties"]["raw_json"]["type"] == "object"
 
     runtime_signature = inspect.signature(server.save_most_output)
     parameter = runtime_signature.parameters["trigger_run_id"]

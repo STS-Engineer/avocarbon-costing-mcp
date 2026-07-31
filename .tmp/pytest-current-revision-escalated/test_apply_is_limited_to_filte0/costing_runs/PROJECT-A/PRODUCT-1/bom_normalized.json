@@ -1,0 +1,23 @@
+{
+  "components": [
+    {
+      "component_id": "core",
+      "component": "Core",
+      "quantity_per_product": 1,
+      "quantity_unit": "pc",
+      "costing_route": "external_component_costing_agent",
+      "component_definition": {
+        "quantity_per_product": 1,
+        "quantity_unit": "pc"
+      },
+      "source_bom_revision": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+      "technical_revision": "component-input-sha256:fe148192188f6bc2230360e9fe41a9b192d2854d3bbc8137f3131a6e9a872175"
+    }
+  ],
+  "choke_classification": {
+    "choke_subtype": "fuse_choke"
+  },
+  "revision_schema_version": "1.0",
+  "source_raw_bom_revision": "raw-bom-sha256:094defb027adb2015eaf91a708910c46d415a38eff86a8bdce2aa12db4c71ec6",
+  "technical_revision": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550"
+}

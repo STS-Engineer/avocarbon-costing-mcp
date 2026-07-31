@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 import os
 import sys
@@ -11,6 +13,7 @@ import anyio
 import psycopg2
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.types import BlobResourceContents, EmbeddedResource, TextContent
 from psycopg2.extras import Json, RealDictCursor
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -617,6 +620,65 @@ def find_project_product(project_code: str, product_reference: str):
 
 
 @mcp.tool()
+def get_choke_drawing(
+    project_code: str,
+    product_id: str,
+    trigger_run_id: str,
+) -> List[Any]:
+    """
+    Retrieve the current workflow drawing for Choke BOM analysis.
+
+    The Choke BOM Analyzer must call this action before analysis. It returns the
+    current PDF as an MCP embedded resource and rejects missing, stale, or
+    mismatched trigger_run_id values. Archived BOM data is never returned.
+    """
+    try:
+        from services.choke_drawing_mcp_service import get_current_choke_drawing
+
+        result = get_current_choke_drawing(
+            project_code=project_code,
+            product_id=product_id,
+            trigger_run_id=trigger_run_id,
+        )
+        pdf_bytes = result.pop("pdf_bytes")
+        metadata = TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, sort_keys=True),
+        )
+        resource = EmbeddedResource(
+            type="resource",
+            resource=BlobResourceContents(
+                uri=(
+                    "avocarbon://choke-drawing/"
+                    f"{project_code}/{product_id}/{trigger_run_id}"
+                ),
+                mimeType="application/pdf",
+                blob=base64.b64encode(pdf_bytes).decode("ascii"),
+            ),
+        )
+        return [metadata, resource]
+    except Exception as exc:
+        logger.warning(
+            "get_choke_drawing rejected for project=%s product=%s: %s",
+            project_code,
+            product_id,
+            type(exc).__name__,
+        )
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "success": False,
+                "status": "blocked",
+                "error_code": "BOM_INPUT_FILE_UNAVAILABLE",
+                "message": str(exc),
+                "project_code": project_code,
+                "product_id": product_id,
+                "trigger_run_id": trigger_run_id,
+            }, ensure_ascii=False, sort_keys=True),
+        )]
+
+
+@mcp.tool()
 def save_bom_output(
     project_code: str,
     product_id: str,
@@ -677,13 +739,15 @@ def save_component_output(
     project_code: str,
     product_id: str,
     component_id: str,
+    trigger_run_id: str,
     raw_json: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
 
-    Save one final External Component Costing Agent JSON to the backend workflow. This
-    is equivalent to POST /api/choke-workflow/save-component-output.
+    Save one final External Component Costing Agent JSON to the backend workflow.
+    Pass the exact trigger_run_id from this component Agent request. This is
+    equivalent to POST /api/choke-workflow/save-component-output.
     """
     try:
         from services.choke_sequential_agent_workflow import save_component_output as workflow_save_component_output
@@ -692,6 +756,7 @@ def save_component_output(
             project_code=project_code,
             product_id=product_id,
             component_id=component_id,
+            trigger_run_id=trigger_run_id,
             raw_json=raw_json,
         )
         traceability = _save_agent_json_traceability(
@@ -715,27 +780,28 @@ def save_component_output(
 def save_most_output(
     project_code: str,
     product_id: str,
+    work_package_id: str,
+    most_scope_id: str,
     trigger_run_id: str,
-    raw_json: Dict[str, Any] | str,
-    most_scope_id: Optional[str] = None,
-    work_package_id: Optional[str] = None,
+    raw_json: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     The agent must call this tool at the end of its analysis. The backend workflow will not continue until this tool is called.
 
-    Save one final MOST operation JSON to the backend workflow. This is equivalent to
-    POST /api/choke-workflow/save-most-output.
+    Save one final MOST operation JSON to the backend workflow. Pass the exact
+    work_package_id, most_scope_id, and trigger_run_id from the MOST Agent request.
+    This is equivalent to POST /api/choke-workflow/save-most-output.
     """
     try:
-        scope_id = most_scope_id or work_package_id
-        if not scope_id:
-            return error("most_scope_id or work_package_id is required.")
+        if most_scope_id != work_package_id:
+            return error("most_scope_id must match work_package_id.")
         from services.choke_sequential_agent_workflow import save_most_output as workflow_save_most_output
 
         workflow_response = workflow_save_most_output(
             project_code=project_code,
             product_id=product_id,
-            work_package_id=scope_id,
+            work_package_id=work_package_id,
+            most_scope_id=most_scope_id,
             trigger_run_id=trigger_run_id,
             raw_json=raw_json,
         )
@@ -743,7 +809,7 @@ def save_most_output(
             project_code=project_code,
             product_id=product_id,
             output_type="most",
-            object_id=scope_id,
+            object_id=work_package_id,
             agent_name="most_assemblage_agent",
             status="received",
             raw_json=raw_json,

@@ -73,6 +73,15 @@ def _patch_retry(monkeypatch, state, trigger_result):
             "candidate_validations": [],
         },
     )
+    monkeypatch.setattr(
+        workflow,
+        "_mcp_drawing_preflight",
+        lambda *_args: {
+            "success": True,
+            "delivery_mode": "mcp_embedded_resource",
+            "mime_type": "application/pdf",
+        },
+    )
     calls = []
 
     def trigger(**kwargs):

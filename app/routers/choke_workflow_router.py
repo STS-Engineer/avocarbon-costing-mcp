@@ -36,6 +36,7 @@ from services.project_data_paths import (
 )
 from services.choke_writeback_mcp_diagnostic import (
     get_bom_agent_capability_diagnostic,
+    get_mcp_schema_fingerprints,
     get_writeback_mcp_connectivity_diagnostic,
 )
 from services.workspace_agent_trigger_diagnostic import (
@@ -65,7 +66,7 @@ class SaveBomOutputRequest(BaseModel):
     project_code: str
     product_id: str
     trigger_run_id: str
-    raw_json: Dict[str, Any] = Field(default_factory=dict)
+    raw_json: Dict[str, Any]
 
 
 class TriggerStageRequest(BaseModel):
@@ -100,15 +101,17 @@ class SaveComponentOutputRequest(BaseModel):
     project_code: str
     product_id: str
     component_id: str
-    raw_json: Dict[str, Any] = Field(default_factory=dict)
+    trigger_run_id: str
+    raw_json: Dict[str, Any]
 
 
 class SaveMostOutputRequest(BaseModel):
     project_code: str
     product_id: str
     work_package_id: str
-    trigger_run_id: str | None = None
-    raw_json: Dict[str, Any] | str = Field(default_factory=dict)
+    most_scope_id: str
+    trigger_run_id: str
+    raw_json: Dict[str, Any]
 
 
 class CalculateRealOutputsRequest(BaseModel):
@@ -319,6 +322,11 @@ def mcp_connectivity_diagnostic():
     return _handle(get_writeback_mcp_connectivity_diagnostic)
 
 
+@router.get("/mcp-schema-fingerprints")
+def mcp_schema_fingerprints():
+    return _handle(get_mcp_schema_fingerprints)
+
+
 @router.get("/bom-output/{project_code}/{product_id}")
 def bom_output(project_code: str, product_id: str):
     return _handle(lambda: get_bom_output(project_code, product_id))
@@ -415,6 +423,7 @@ def save_component(request: SaveComponentOutputRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         component_id=request.component_id,
+        trigger_run_id=request.trigger_run_id,
         raw_json=request.raw_json,
     ))
 
@@ -456,6 +465,7 @@ def save_most(request: SaveMostOutputRequest):
         project_code=request.project_code,
         product_id=request.product_id,
         work_package_id=request.work_package_id,
+        most_scope_id=request.most_scope_id,
         trigger_run_id=request.trigger_run_id,
         raw_json=request.raw_json,
     ))

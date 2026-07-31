@@ -1,0 +1,6 @@
+{"timestamp": "2026-07-31T12:06:03.759468+00:00", "event": "simulation_created", "simulation_id": "SIM-TEST"}
+{"timestamp": "2026-07-31T12:06:03.789628+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "bom", "identifier": null, "replaced": false}
+{"timestamp": "2026-07-31T12:06:03.799029+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "component_costing", "identifier": "ferrite_core", "replaced": false}
+{"timestamp": "2026-07-31T12:06:03.811327+00:00", "event": "output_saved", "simulation_id": "SIM-TEST", "output_type": "most_component", "identifier": "ferrite_core", "replaced": false}
+{"timestamp": "2026-07-31T12:06:03.820076+00:00", "event": "context_updated", "simulation_id": "SIM-TEST", "fields": ["plant_data_override"]}
+{"timestamp": "2026-07-31T12:06:03.856020+00:00", "event": "simulation_calculated", "simulation_id": "SIM-TEST", "status": "blocked", "blocking_errors": ["ferrite_core-op.dl_rate"]}

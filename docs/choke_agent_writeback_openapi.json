@@ -137,6 +137,7 @@
           "project_code",
           "product_id",
           "component_id",
+          "trigger_run_id",
           "raw_json"
         ],
         "properties": {
@@ -152,6 +153,10 @@
             "type": "string",
             "description": "Component ID from the component costing agent input payload."
           },
+          "trigger_run_id": {
+            "type": "string",
+            "description": "Current component trigger correlation ID from the component Agent payload."
+          },
           "raw_json": {
             "type": "object",
             "description": "The complete final component costing JSON produced by the External Component Costing Agent.",
@@ -166,6 +171,7 @@
           "project_code",
           "product_id",
           "work_package_id",
+          "most_scope_id",
           "trigger_run_id",
           "raw_json"
         ],
@@ -182,21 +188,18 @@
             "type": "string",
             "description": "MOST work package ID from the MOST agent input payload."
           },
+          "most_scope_id": {
+            "type": "string",
+            "description": "MOST scope ID from the Agent payload; it must equal work_package_id."
+          },
           "trigger_run_id": {
             "type": "string",
             "description": "Current MOST trigger correlation ID from the work-package payload."
           },
           "raw_json": {
-            "description": "The complete final MOST operation JSON produced by the MOST Agent, as an object or a JSON-encoded string.",
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": true
-              },
-              {
-                "type": "string"
-              }
-            ]
+            "type": "object",
+            "description": "The complete final MOST operation JSON produced by the MOST Agent.",
+            "additionalProperties": true
           }
         },
         "additionalProperties": false

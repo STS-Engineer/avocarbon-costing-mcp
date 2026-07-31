@@ -96,6 +96,7 @@ Input:
   "project_code": "string",
   "product_id": "string",
   "component_id": "string",
+  "trigger_run_id": "string",
   "raw_json": {}
 }
 ```
@@ -136,21 +137,14 @@ Input:
 {
   "project_code": "string",
   "product_id": "string",
-  "most_scope_id": "string",
-  "raw_json": {}
-}
-```
-
-Backward-compatible alias:
-
-```json
-{
-  "project_code": "string",
-  "product_id": "string",
   "work_package_id": "string",
+  "most_scope_id": "string",
+  "trigger_run_id": "string",
   "raw_json": {}
 }
 ```
+
+`work_package_id` and `most_scope_id` are both required and must match.
 
 Behavior:
 
@@ -246,6 +240,7 @@ At the end of component costing, call save_component_output with:
 - project_code from input
 - product_id from input
 - component_id from input
+- trigger_run_id from input, copied exactly
 - raw_json = your full final component costing JSON
 
 This run must contain exactly one component. Do not merge all components into one JSON.
@@ -258,7 +253,9 @@ Do not only return the JSON in chat. The backend workflow will not continue unti
 At the end of MOST estimation, call save_most_output with:
 - project_code from input
 - product_id from input
-- most_scope_id from input, or work_package_id if that is the provided identifier
+- work_package_id from input
+- most_scope_id from input; it must match work_package_id
+- trigger_run_id from input, copied exactly
 - raw_json = your full final MOST JSON
 
 This run must contain exactly one component/process scope. Do not merge all operations into one JSON.

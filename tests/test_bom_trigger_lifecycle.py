@@ -313,9 +313,9 @@ def test_trigger_payload_requires_correlated_writeback():
 
 
 def test_tool_not_attached_produces_configuration_diagnostic(monkeypatch):
-    schemas = dict(mcp_diagnostic.WRITEBACK_TOOL_SCHEMAS)
+    schemas = mcp_diagnostic._runtime_tool_schemas()
     schemas.pop("save_bom_output")
-    monkeypatch.setattr(mcp_diagnostic, "WRITEBACK_TOOL_SCHEMAS", schemas)
+    monkeypatch.setattr(mcp_diagnostic, "_runtime_tool_schemas", lambda: schemas)
 
     result = mcp_diagnostic.get_writeback_mcp_connectivity_diagnostic()
 

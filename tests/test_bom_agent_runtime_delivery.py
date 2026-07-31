@@ -2,7 +2,11 @@ import asyncio
 import inspect
 
 import server
-from app.routers.choke_workflow_router import SaveBomOutputRequest
+from app.routers.choke_workflow_router import (
+    SaveBomOutputRequest,
+    SaveComponentOutputRequest,
+    SaveMostOutputRequest,
+)
 from services import choke_sequential_agent_workflow as workflow
 from services import choke_writeback_mcp_diagnostic as mcp_diagnostic
 from services.workspace_agent_client import (
@@ -28,10 +32,10 @@ def test_workspace_trigger_contract_has_no_attachment_field(monkeypatch):
 
     assert WORKSPACE_AGENT_TRIGGER_BODY_FIELDS == {"input", "conversation_key"}
     assert diagnostic["trigger_request_contract"]["file_attachments_supported"] is False
-    assert diagnostic["trigger_request_contract"]["drawing_delivery_mode"] == "signed_url"
+    assert diagnostic["trigger_request_contract"]["drawing_delivery_mode"] == "mcp_embedded_resource"
 
 
-def test_signed_url_runtime_instruction_is_explicit_and_correlated(monkeypatch):
+def test_mcp_drawing_runtime_instruction_is_explicit_and_correlated(monkeypatch):
     monkeypatch.setattr(
         workflow,
         "_drawing_file_url_from_path",
@@ -45,11 +49,13 @@ def test_signed_url_runtime_instruction_is_explicit_and_correlated(monkeypatch):
     )
     instruction = payload["payload"]["instruction"]
 
-    assert payload["payload"]["drawing_delivery_mode"] == "signed_url"
+    assert payload["payload"]["drawing_delivery_mode"] == "mcp_embedded_resource"
     assert payload["payload"]["drawing_filename"] == "original drawing.pdf"
-    assert "Open drawing_file_url now" in instruction
-    assert "Do not wait for ./user_files/" in instruction
-    assert "another user message" in instruction
+    assert "First call get_choke_drawing" in instruction
+    assert "Analyze only the current PDF returned by that MCP action" in instruction
+    assert "drawing_file_url is diagnostic metadata only" in instruction
+    assert "BOM_INPUT_FILE_UNAVAILABLE" in instruction
+    assert "Never use an archived BOM" in instruction
     assert "project_code exactly as 'P-100'" in instruction
     assert "product_id exactly as 'PART-200'" in instruction
     assert "trigger_run_id exactly as 'run-current'" in instruction
@@ -79,7 +85,8 @@ def test_runtime_instruction_never_reuses_old_trigger_id(monkeypatch):
 def test_save_bom_output_schema_requires_trigger_run_id():
     diagnostic = mcp_diagnostic.get_bom_agent_capability_diagnostic()
 
-    assert diagnostic["drawing_delivery_mode"] == "signed_url"
+    assert diagnostic["drawing_delivery_mode"] == "mcp_embedded_resource"
+    assert diagnostic["get_choke_drawing_available"] is True
     assert diagnostic["save_bom_output_available"] is True
     assert diagnostic["save_bom_output_accepts_trigger_run_id"] is True
     assert diagnostic["save_bom_output_required_fields"] == [
@@ -97,10 +104,23 @@ def test_registered_mcp_writeback_schemas_are_strict_and_scoped():
         tool.name: tool.inputSchema
         for tool in asyncio.run(server.mcp.list_tools())
         if tool.name in {
+            "get_choke_drawing",
             "save_bom_output",
             "save_component_output",
             "save_most_output",
         }
+    }
+
+    drawing_schema = tools["get_choke_drawing"]
+    assert set(drawing_schema["properties"]) == {
+        "project_code",
+        "product_id",
+        "trigger_run_id",
+    }
+    assert set(drawing_schema["required"]) == {
+        "project_code",
+        "product_id",
+        "trigger_run_id",
     }
 
     bom_schema = tools["save_bom_output"]
@@ -126,12 +146,14 @@ def test_registered_mcp_writeback_schemas_are_strict_and_scoped():
         "project_code",
         "product_id",
         "component_id",
+        "trigger_run_id",
         "raw_json",
     }
     assert set(component_schema["required"]) == {
         "project_code",
         "product_id",
         "component_id",
+        "trigger_run_id",
         "raw_json",
     }
 
@@ -147,6 +169,8 @@ def test_registered_mcp_writeback_schemas_are_strict_and_scoped():
     assert set(most_schema["required"]) == {
         "project_code",
         "product_id",
+        "work_package_id",
+        "most_scope_id",
         "trigger_run_id",
         "raw_json",
     }
@@ -161,6 +185,29 @@ def test_rest_bom_writeback_schema_requires_trigger_run_id():
 
     assert "trigger_run_id" in model_schema["required"]
     assert model_schema["properties"]["trigger_run_id"]["type"] == "string"
+
+
+def test_rest_component_and_most_writeback_schemas_match_mcp_catalog():
+    component_schema = getattr(
+        SaveComponentOutputRequest,
+        "model_json_schema",
+        SaveComponentOutputRequest.schema,
+    )()
+    most_schema = getattr(
+        SaveMostOutputRequest,
+        "model_json_schema",
+        SaveMostOutputRequest.schema,
+    )()
+
+    assert set(component_schema["required"]) == {
+        "project_code", "product_id", "component_id", "trigger_run_id", "raw_json"
+    }
+    assert component_schema["properties"]["trigger_run_id"]["type"] == "string"
+    assert set(most_schema["required"]) == {
+        "project_code", "product_id", "work_package_id", "most_scope_id",
+        "trigger_run_id", "raw_json",
+    }
+    assert most_schema["properties"]["trigger_run_id"]["type"] == "string"
 
 
 def test_invocation_fails_before_agent_when_schema_is_incompatible(monkeypatch):

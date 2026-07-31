@@ -195,7 +195,7 @@ def workspace_agent_configuration(
         "trigger_request_contract": {
             "supported_body_fields": sorted(WORKSPACE_AGENT_TRIGGER_BODY_FIELDS),
             "file_attachments_supported": False,
-            "drawing_delivery_mode": "signed_url",
+            "drawing_delivery_mode": "mcp_embedded_resource",
         },
     }
 

@@ -269,6 +269,15 @@ def test_retry_records_validation_and_one_agent_attempt(monkeypatch):
             "candidate_validations": [{"validation": {"success": True}}],
         },
     )
+    monkeypatch.setattr(
+        workflow,
+        "_mcp_drawing_preflight",
+        lambda *_args: {
+            "success": True,
+            "delivery_mode": "mcp_embedded_resource",
+            "mime_type": "application/pdf",
+        },
+    )
 
     def trigger_once(**kwargs):
         trigger_calls.append(kwargs)

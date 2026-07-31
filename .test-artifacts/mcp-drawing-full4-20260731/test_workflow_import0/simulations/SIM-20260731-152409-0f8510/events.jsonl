@@ -1,0 +1,3 @@
+{"timestamp": "2026-07-31T14:24:09.844976+00:00", "event": "simulation_created", "simulation_id": "SIM-20260731-152409-0f8510"}
+{"timestamp": "2026-07-31T14:24:09.909137+00:00", "event": "output_saved", "simulation_id": "SIM-20260731-152409-0f8510", "output_type": "bom", "identifier": null, "replaced": false}
+{"timestamp": "2026-07-31T14:24:09.911299+00:00", "event": "workflow_imported", "simulation_id": "SIM-20260731-152409-0f8510", "workflow": "P/X"}

@@ -1,0 +1,118 @@
+{
+  "components": {
+    "core": {
+      "status": "received"
+    },
+    "removed_core": {
+      "status": "received"
+    }
+  },
+  "most": {
+    "wp_winding": {
+      "status": "received"
+    },
+    "wp_removed": {
+      "status": "received"
+    }
+  },
+  "process_decomposition": {
+    "status": "ready",
+    "required_work_package_ids": [
+      "wp_winding"
+    ],
+    "work_packages": [
+      {
+        "work_package_id": "wp_winding",
+        "operation_key": "winding",
+        "operation_name": "Winding",
+        "component_ids": [
+          "core"
+        ],
+        "status": "confirmed",
+        "source_bom_revision": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+        "source_component_revisions": {
+          "core": "component-input-sha256:fe148192188f6bc2230360e9fe41a9b192d2854d3bbc8137f3131a6e9a872175"
+        },
+        "technical_revision": "work-package-input-sha256:58785d8ac376c187f7a8ee7a1fc54f91b966f4d49021c9d552c578557d7eb0a9",
+        "source_process_revision": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e"
+      }
+    ],
+    "revision_schema_version": "1.0",
+    "source_bom_revision": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+    "technical_revision": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e"
+  },
+  "technical_revisions": {
+    "raw_bom": "raw-bom-sha256:094defb027adb2015eaf91a708910c46d415a38eff86a8bdce2aa12db4c71ec6",
+    "normalized_bom": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+    "process_decomposition": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e"
+  },
+  "component_revision_reconciliation": {
+    "current_bom_revision": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+    "current_components": [
+      "core"
+    ],
+    "valid_components": [],
+    "missing_components": [],
+    "stale_components": [],
+    "blocked_components": [],
+    "legacy_unverified_components": [
+      {
+        "component_id": "core",
+        "classification": "externally_costed",
+        "source_bom_revision": "normalized-bom-sha256:65eeb85323b84c78fbfcc74c88d9f68e10c2cbfddbb87fb9c2afd8f38188c550",
+        "source_component_revision": "component-input-sha256:fe148192188f6bc2230360e9fe41a9b192d2854d3bbc8137f3131a6e9a872175",
+        "status": "legacy_unverified",
+        "status_reason": "source_revision_metadata_missing"
+      }
+    ],
+    "obsolete_components": [
+      {
+        "component_id": "removed_core",
+        "status": "obsolete_for_current_revision",
+        "status_reason": "component_not_in_current_bom",
+        "preservation_note": "Preserved for audit; excluded from the current technical revision."
+      }
+    ]
+  },
+  "most_revision_reconciliation": {
+    "process_revision": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e",
+    "required_work_packages": [
+      "wp_winding"
+    ],
+    "valid_work_packages": [],
+    "missing_work_packages": [],
+    "stale_work_packages": [],
+    "blocked_work_packages": [],
+    "received_not_normalized_work_packages": [],
+    "legacy_unverified_work_packages": [
+      {
+        "work_package_id": "wp_winding",
+        "operation_key": "winding",
+        "source_process_revision": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e",
+        "affected_component_ids": [
+          "core"
+        ],
+        "status": "legacy_unverified",
+        "status_reason": "source_revision_metadata_missing"
+      }
+    ],
+    "obsolete_work_packages": [
+      {
+        "work_package_id": "wp_removed",
+        "operation_key": null,
+        "source_process_revision": "process-sha256:534efa8052552658225534919cfdff75008543dd0dc1d834cccb67b11fba398e",
+        "saved_output_revision": null,
+        "status": "obsolete_for_current_revision",
+        "status_reason": "work_package_not_required_by_current_process",
+        "affected_component_ids": [],
+        "preservation_note": "Preserved for audit; excluded from the current technical revision."
+      }
+    ]
+  },
+  "migration_notes": [
+    {
+      "status": "technical_revision_metadata_added",
+      "legacy_outputs_policy": "legacy_unverified_until_inputs_match"
+    }
+  ]
+}
