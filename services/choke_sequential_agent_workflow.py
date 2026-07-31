@@ -1682,6 +1682,9 @@ def _prepare_automatic_bom_retry(
         "drawing_file_url": trigger.get("drawing_file_url"),
         "drawing_access_mode": trigger.get("drawing_access_mode"),
         "pdf_url_check": preflight,
+        "drawing_input_snapshot": (
+            preflight.get("mcp_drawing_check") or {}
+        ).get("drawing_input_snapshot"),
     }
     _save_state(state)
     return {
@@ -2134,30 +2137,29 @@ def _mcp_drawing_preflight(
     product_id: str,
     trigger_run_id: str,
 ) -> Dict[str, Any]:
-    from services.choke_drawing_mcp_service import get_current_choke_drawing
+    from services.choke_drawing_mcp_service import capture_choke_drawing_snapshot
 
     try:
-        result = get_current_choke_drawing(
+        snapshot = capture_choke_drawing_snapshot(
             project_code=project_code,
             product_id=product_id,
             trigger_run_id=trigger_run_id,
-            include_bytes=False,
-            record_events=False,
         )
         return {
             "success": True,
             "delivery_mode": "mcp_embedded_resource",
-            "filename": result.get("filename"),
-            "mime_type": result.get("mime_type"),
-            "checksum_sha256": result.get("checksum_sha256"),
-            "source_revision": result.get("source_revision"),
-            "file_size": result.get("file_size"),
+            "filename": snapshot.get("filename"),
+            "mime_type": snapshot.get("mime_type"),
+            "checksum_sha256": snapshot.get("document_revision_hash"),
+            "source_revision": f"drawing-sha256:{snapshot.get('document_revision_hash')}",
+            "file_size": snapshot.get("file_size"),
+            "drawing_input_snapshot": snapshot,
         }
     except Exception as exc:
         return {
             "success": False,
             "delivery_mode": "mcp_embedded_resource",
-            "error_code": "BOM_INPUT_FILE_UNAVAILABLE",
+            "error_code": getattr(exc, "error_code", "DRAWING_ACCESS_FAILED"),
             "message": str(exc),
         }
 
@@ -2720,6 +2722,9 @@ def _start_real_choke_workflow_locked(
             "status": "drawing_preflight_passed",
             "lifecycle_status": "drawing_preflight_passed",
             "pdf_url_check": pdf_url_check,
+            "drawing_input_snapshot": (
+                pdf_url_check.get("mcp_drawing_check") or {}
+            ).get("drawing_input_snapshot"),
         }
         _save_state(persisted_state)
         if pdf_url_check.get("pdf_network_access_blocked"):
@@ -3163,6 +3168,9 @@ def _retry_bom_agent_locked(project_code: str, product_id: str) -> Dict[str, Any
         "status": "drawing_preflight_passed",
         "lifecycle_status": "drawing_preflight_passed",
         "pdf_url_check": pdf_url_check,
+        "drawing_input_snapshot": (
+            pdf_url_check.get("mcp_drawing_check") or {}
+        ).get("drawing_input_snapshot"),
     }
     _save_state(state)
     selected_validation = (pdf_url_check.get("selected") or {}).get(

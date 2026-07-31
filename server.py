@@ -658,6 +658,7 @@ def get_choke_drawing(
         )
         return [metadata, resource]
     except Exception as exc:
+        error_code = getattr(exc, "error_code", "DRAWING_ACCESS_FAILED")
         logger.warning(
             "get_choke_drawing rejected for project=%s product=%s: %s",
             project_code,
@@ -669,7 +670,7 @@ def get_choke_drawing(
             text=json.dumps({
                 "success": False,
                 "status": "blocked",
-                "error_code": "BOM_INPUT_FILE_UNAVAILABLE",
+                "error_code": error_code,
                 "message": str(exc),
                 "project_code": project_code,
                 "product_id": product_id,

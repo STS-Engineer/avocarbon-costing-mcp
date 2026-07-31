@@ -32,8 +32,9 @@ Add the backend write-back action/MCP/tool to these agents:
 - External Component Costing Agent
 - Estimateur MOST Assemblage
 
-The action exposes three tools:
+The MCP connector exposes four tools:
 
+- `get_choke_drawing`
 - `save_bom_output`
 - `save_component_output`
 - `save_most_output`
@@ -45,9 +46,12 @@ Each agent should only call the tool that matches its role.
 Add this instruction to the Choke BOM Analyzer:
 
 ```text
-At the end of your analysis, call save_bom_output with:
+First call get_choke_drawing with project_code, product_id and trigger_run_id.
+Analyze only that returned current PDF. At the end of your analysis, call
+save_bom_output with:
 - project_code from input
 - product_id from input
+- trigger_run_id from input, copied exactly
 - raw_json = your full final BOM JSON
 Do not only return the JSON in chat.
 ```
@@ -58,6 +62,7 @@ Required tool payload:
 {
   "project_code": "24003-CHO-00",
   "product_id": "316-5001",
+  "trigger_run_id": "<exact BOM trigger_run_id>",
   "raw_json": {}
 }
 ```

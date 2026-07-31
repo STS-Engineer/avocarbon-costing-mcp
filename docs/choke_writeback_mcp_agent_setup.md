@@ -16,9 +16,11 @@ Azure MCP URL:
 https://mcp-costing.azurewebsites.net/mcp
 ```
 
-These tools allow ChatGPT Workspace Agents to save their final JSON outputs back to the Choke backend so the workflow can continue automatically.
+These tools allow ChatGPT Workspace Agents to retrieve the current correlated
+drawing and save their final JSON outputs back to the Choke backend.
 
-Azure Blob SAS is only for reading the drawing PDF. The write-back MCP is for saving JSON outputs.
+`get_choke_drawing` returns the current PDF as an MCP embedded resource. A
+short-lived backend download URL is metadata only.
 
 ## Agent Configuration
 
@@ -45,6 +47,21 @@ Do not use localhost in ChatGPT Workspace Agents. Use the deployed Azure MCP URL
 
 ## Required MCP Tools
 
+### get_choke_drawing
+
+Use with: **Choke BOM Analyzer** before BOM analysis.
+
+```json
+{
+  "project_code": "string",
+  "product_id": "string",
+  "trigger_run_id": "string"
+}
+```
+
+The tool rejects stale triggers and drawings whose path or SHA-256 revision no
+longer matches the trigger-time input snapshot.
+
 ### save_bom_output
 
 Use with: **Choke BOM Analyzer**
@@ -66,6 +83,7 @@ Input:
 {
   "project_code": "string",
   "product_id": "string",
+  "trigger_run_id": "string",
   "raw_json": {}
 }
 ```

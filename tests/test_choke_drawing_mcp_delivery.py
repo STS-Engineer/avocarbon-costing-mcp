@@ -8,6 +8,7 @@ from mcp.types import EmbeddedResource, TextContent
 
 import server
 from services import choke_drawing_mcp_service as drawing_service
+from services import choke_sequential_agent_workflow as workflow
 from services.choke_writeback_mcp_diagnostic import (
     get_mcp_schema_fingerprints,
     validate_runtime_writeback_schemas,
@@ -18,6 +19,7 @@ def _workflow(tmp_path: Path, monkeypatch, *, trigger_run_id: str = "run-current
     drawing = tmp_path / "current drawing.pdf"
     drawing.write_bytes(b"%PDF-1.7\ncurrent drawing\n%%EOF")
     state_path = tmp_path / "workflow_state.json"
+    checksum = hashlib.sha256(drawing.read_bytes()).hexdigest()
     state_path.write_text(json.dumps({
         "project_code": "P-100",
         "product_id": "PART-200",
@@ -29,12 +31,25 @@ def _workflow(tmp_path: Path, monkeypatch, *, trigger_run_id: str = "run-current
                 "stored_path": str(drawing),
                 "mime_type": "application/pdf",
                 "file_size": drawing.stat().st_size,
-                "checksum_sha256": hashlib.sha256(drawing.read_bytes()).hexdigest(),
+                "checksum_sha256": checksum,
             }],
         },
         "bom": {
             "trigger_run_id": trigger_run_id,
             "drawing_file_path": str(drawing),
+            "drawing_input_snapshot": {
+                "project_code": "P-100",
+                "product_id": "PART-200",
+                "trigger_run_id": trigger_run_id,
+                "document_id": checksum[:16],
+                "stored_path": str(drawing),
+                "filename": "customer drawing.pdf",
+                "stored_filename": drawing.name,
+                "mime_type": "application/pdf",
+                "revision": f"sha256:{checksum}",
+                "document_revision_hash": checksum,
+                "file_size": drawing.stat().st_size,
+            },
         },
     }), encoding="utf-8")
     monkeypatch.setattr(
@@ -97,6 +112,10 @@ def test_current_trigger_returns_only_current_pdf_as_embedded_resource(tmp_path,
     assert result["mime_type"] == "application/pdf"
     assert result["checksum_sha256"] == hashlib.sha256(drawing.read_bytes()).hexdigest()
     assert result["source_revision"].startswith("drawing-sha256:")
+    assert result["status"] == "available"
+    assert result["document_id"] == result["document_revision_hash"][:16]
+    assert "download_url" in result
+    assert "expires_at" in result
 
     content = server.get_choke_drawing("P-100", "PART-200", "run-current")
     assert isinstance(content[0], TextContent)
@@ -107,10 +126,12 @@ def test_current_trigger_returns_only_current_pdf_as_embedded_resource(tmp_path,
 def test_missing_and_stale_trigger_ids_cannot_read_current_pdf(tmp_path, monkeypatch):
     _workflow(tmp_path, monkeypatch)
 
-    with pytest.raises(ValueError, match="required"):
+    with pytest.raises(drawing_service.DrawingAccessError, match="required") as missing:
         drawing_service.get_current_choke_drawing("P-100", "PART-200", "")
-    with pytest.raises(ValueError, match="does not match"):
+    assert missing.value.error_code == "TRIGGER_RUN_NOT_FOUND"
+    with pytest.raises(drawing_service.DrawingAccessError, match="does not match") as stale:
         drawing_service.get_current_choke_drawing("P-100", "PART-200", "run-stale")
+    assert stale.value.error_code == "STALE_TRIGGER_RUN"
 
 
 def test_wrong_project_or_product_cannot_access_another_workflow(tmp_path, monkeypatch):
@@ -131,6 +152,100 @@ def test_wrong_project_or_product_cannot_access_another_workflow(tmp_path, monke
     with pytest.raises(ValueError, match="not found"):
         drawing_service.get_current_choke_drawing("P-OTHER", "PART-200", "run-current")
     assert drawing.exists()
+
+
+def test_unlinked_and_unsupported_documents_return_explicit_codes(tmp_path, monkeypatch):
+    drawing = _workflow(tmp_path, monkeypatch)
+    state_path = tmp_path / "workflow_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["customer_input"]["attachment_manifest"] = []
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(drawing_service.DrawingAccessError) as unlinked:
+        drawing_service.get_current_choke_drawing("P-100", "PART-200", "run-current")
+    assert unlinked.value.error_code == "DRAWING_NOT_LINKED_TO_PRODUCT"
+
+    unsupported = tmp_path / "current drawing.txt"
+    unsupported.write_bytes(drawing.read_bytes())
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["drawing_file_path"] = str(unsupported)
+    state["customer_input"]["drawing_file_path"] = str(unsupported)
+    state["bom"]["drawing_file_path"] = str(unsupported)
+    state["bom"]["drawing_input_snapshot"]["stored_path"] = str(unsupported)
+    state["customer_input"]["attachment_manifest"] = [{
+        "attachment_id": state["bom"]["drawing_input_snapshot"]["document_id"],
+        "original_filename": unsupported.name,
+        "stored_path": str(unsupported),
+        "checksum_sha256": hashlib.sha256(unsupported.read_bytes()).hexdigest(),
+    }]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(drawing_service.DrawingAccessError) as file_type:
+        drawing_service.get_current_choke_drawing("P-100", "PART-200", "run-current")
+    assert file_type.value.error_code == "UNSUPPORTED_FILE_TYPE"
+
+
+def test_access_failure_and_mcp_error_payload_are_structured(tmp_path, monkeypatch):
+    _workflow(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        drawing_service,
+        "_read_pdf",
+        lambda _path: (_ for _ in ()).throw(
+            drawing_service.DrawingAccessError("DRAWING_ACCESS_FAILED", "read failed")
+        ),
+    )
+    with pytest.raises(drawing_service.DrawingAccessError) as access:
+        drawing_service.get_current_choke_drawing("P-100", "PART-200", "run-current")
+    assert access.value.error_code == "DRAWING_ACCESS_FAILED"
+
+    content = server.get_choke_drawing("P-100", "PART-200", "run-current")
+    payload = json.loads(content[0].text)
+    assert payload["success"] is False
+    assert payload["error_code"] == "DRAWING_ACCESS_FAILED"
+
+
+def test_missing_and_revised_drawings_are_rejected(tmp_path, monkeypatch):
+    drawing = _workflow(tmp_path, monkeypatch)
+    drawing.unlink()
+    with pytest.raises(drawing_service.DrawingAccessError) as missing:
+        drawing_service.get_current_choke_drawing("P-100", "PART-200", "run-current")
+    assert missing.value.error_code == "DRAWING_NOT_FOUND"
+
+    drawing = _workflow(tmp_path, monkeypatch)
+    drawing.write_bytes(b"%PDF-1.7\nrevised drawing\n%%EOF")
+    with pytest.raises(drawing_service.DrawingAccessError) as revised:
+        drawing_service.get_current_choke_drawing("P-100", "PART-200", "run-current")
+    assert revised.value.error_code == "DRAWING_REVISION_MISMATCH"
+
+
+def test_snapshot_capture_is_bound_to_manifest_and_active_trigger(tmp_path, monkeypatch):
+    drawing = _workflow(tmp_path, monkeypatch)
+    snapshot = drawing_service.capture_choke_drawing_snapshot(
+        "P-100", "PART-200", "run-current"
+    )
+    assert snapshot["document_id"] == hashlib.sha256(drawing.read_bytes()).hexdigest()[:16]
+    assert snapshot["stored_path"] == str(drawing)
+    assert snapshot["trigger_run_id"] == "run-current"
+
+
+def test_mcp_drawing_then_bom_writeback_uses_same_trigger_id(tmp_path, monkeypatch):
+    _workflow(tmp_path, monkeypatch)
+    delivered = server.get_choke_drawing("P-100", "PART-200", "run-current")
+    assert isinstance(delivered[1], EmbeddedResource)
+    received = {}
+
+    def fake_save_bom_output(**kwargs):
+        received.update(kwargs)
+        return {"success": True, "status": "saved", **kwargs}
+
+    monkeypatch.setattr(workflow, "save_bom_output", fake_save_bom_output)
+    monkeypatch.setattr(server, "_save_agent_json_traceability", lambda **_kwargs: {})
+    result = server.save_bom_output(
+        "P-100",
+        "PART-200",
+        "run-current",
+        {"bom": []},
+    )
+    assert result["success"] is True
+    assert received["trigger_run_id"] == "run-current"
 
 
 def test_runtime_instruction_forbids_archived_fallback():
