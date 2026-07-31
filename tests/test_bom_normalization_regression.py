@@ -547,6 +547,11 @@ def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
     monkeypatch.setattr(
         workflow, "_write_json", lambda path, value: writes.__setitem__(str(path), value)
     )
+    monkeypatch.setattr(
+        workflow,
+        "_read_json",
+        lambda path, default=None: writes.get(str(path), default),
+    )
     monkeypatch.setattr(workflow, "_save_state", lambda value: value)
     monkeypatch.setattr(workflow, "append_workflow_event", lambda *_a, **_k: {})
 

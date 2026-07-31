@@ -4,6 +4,7 @@ from pathlib import Path
 from services import agent_writeback_service
 from services import choke_component_costing as costing
 from services import choke_sequential_agent_workflow as workflow
+from services import choke_technical_revisions as revisions
 from services.currency_service import (
     convert_currency,
     normalize_currency_code,
@@ -377,7 +378,7 @@ def test_synthetic_kunshan_material_result_is_cny(monkeypatch):
     raw_bom = {
         "bom": [
             {"component_id": "ferrite_core", "component_family": "ferrite", "quantity_per_product": 1, "quantity_unit": "pc"},
-            {"component_id": "magnet_wire", "component_family": "enameled_wire", "quantity_per_product": 0.3369255483441646, "quantity_unit": "m", "diameter_mm": 1.25},
+            {"component_id": "magnet_wire", "component_family": "enameled_wire", "quantity_per_product": 0.3369255483441646, "quantity_unit": "m", "diameter_mm": 1.25, "density_g_cm3": 8.96},
             {"component_id": "lead_tinning", "component_family": "tin", "quantity_per_product": 0.0034998724461757923, "quantity_unit": "g"},
         ]
     }
@@ -391,10 +392,85 @@ def test_synthetic_kunshan_material_result_is_cny(monkeypatch):
         "dl_rate_operating_per_hour": 32, "voh_rate_operating_per_hour": 9.6,
         "open_hours_per_year": 5808, "foh_percent_dc": 77, "fee_percent_dc": 56,
     }
-    monkeypatch.setattr(workflow, "_load_state", lambda *_: {"customer_input": {"currency": "RMB", "annual_quantity": 60000}, "unit_data": unit})
-    monkeypatch.setattr(workflow, "_read_json", lambda *args, **kwargs: raw_bom)
-    monkeypatch.setattr(workflow, "_load_saved_component_outputs", lambda *_: outputs)
-    monkeypatch.setattr(workflow, "_load_saved_most_outputs", lambda *_: [{"work_package_id": "wp", "p_h": 1000, "oee": 1, "operator_percent": 0.1}])
+    normalized_bom = revisions.attach_bom_revisions(
+        raw_bom, workflow.normalize_bom(raw_bom)
+    )
+    process = revisions.attach_process_revisions(
+        {
+            "required_work_package_ids": ["wp"],
+            "work_packages": [{
+                "work_package_id": "wp",
+                "operation_id": "operation",
+                "operation_name": "Operation",
+                "component_ids": [],
+                "status": "confirmed",
+            }],
+        },
+        normalized_bom["technical_revision"],
+        normalized_bom,
+    )
+    component_map = {
+        item["component_id"]: item for item in normalized_bom["components"]
+    }
+    revision_outputs = {
+        item["component_id"]: {
+            **item,
+            "source_bom_revision": normalized_bom["technical_revision"],
+            "source_component_revision": component_map[item["component_id"]][
+                "technical_revision"
+            ],
+            "technical_revision": f"output-{item['component_id']}",
+        }
+        for item in outputs
+    }
+    work_package = process["work_packages"][0]
+    most_output = {
+        "work_package_id": "wp",
+        "p_h": 1000,
+        "oee": 1,
+        "operator_percent": 0.1,
+        "source_bom_revision": normalized_bom["technical_revision"],
+        "source_process_revision": process["technical_revision"],
+        "source_work_package_revision": work_package["technical_revision"],
+        "technical_revision": "most-output",
+    }
+    state = {
+        "project_code": "P",
+        "product_id": "X",
+        "customer_input": {"currency": "RMB", "annual_quantity": 60000},
+        "unit_data": unit,
+        "process_decomposition": process,
+        "components": {
+            component_id: {"status": "received"}
+            for component_id in revision_outputs
+        },
+        "most": {"wp": {"status": "received"}},
+    }
+    monkeypatch.setattr(workflow, "_load_state", lambda *_: state)
+    monkeypatch.setattr(
+        workflow,
+        "_read_json",
+        lambda path, default=None: (
+            normalized_bom
+            if "bom_normalized" in str(path)
+            else raw_bom
+            if "raw_bom_agent_output" in str(path)
+            else default
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_load_revision_bound_component_output",
+        lambda _project, _product, component_id: revision_outputs.get(component_id),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_load_revision_bound_most_output",
+        lambda _project, _product, work_package_id: (
+            most_output if work_package_id == "wp" else None
+        ),
+    )
+    monkeypatch.setattr(workflow, "_write_json", lambda path, _value: str(path))
     result = workflow.calculate_final_choke_costing_from_saved_outputs("P", "X", unit_data_override=unit, fx_rates_override={})
 
     wire_kg = math.pi * (1.25 ** 2) / 4 * 336.9255483441646 * 0.00896 / 1000

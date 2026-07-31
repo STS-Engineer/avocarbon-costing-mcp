@@ -24,6 +24,7 @@ from services.currency_service import normalize_currency_code, resolve_project_c
 from services.choke_financial_calculation import calculate_dl_voh
 from services.choke_orchestrator import run_choke_orchestration
 from services.choke_process_routing import build_choke_process_route
+from services import choke_technical_revisions as technical_revisions
 from services.costing_master_data_service import (
     get_master_manufacturing_strategy,
     get_master_unit_data,
@@ -271,6 +272,28 @@ def _read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _archive_technical_revision(
+    project_code: str,
+    product_id: str,
+    artifact_kind: str,
+    revision: Optional[str],
+    payload: Any,
+) -> Optional[str]:
+    """Persist an immutable audit snapshot without replacing current paths."""
+    if not revision or payload is None:
+        return None
+    safe_revision = re.sub(r"[^A-Za-z0-9._-]+", "_", str(revision))
+    path = (
+        _run_dir(project_code, product_id)
+        / "revisions"
+        / artifact_kind
+        / f"{safe_revision}.json"
+    )
+    if not path.exists():
+        _write_json(path, payload)
+    return _relative(path)
 
 
 def _run_dir(project_code: str, product_id: str) -> Path:
@@ -3760,6 +3783,8 @@ def save_bom_output(
         state_path = _state_path(project_code, product_id).resolve()
         raw_path = _bom_raw_path(project_code, product_id).resolve()
         normalized_path = _bom_normalized_path(project_code, product_id).resolve()
+        previous_normalized_bom = _read_json(normalized_path, {}) or {}
+        previous_process = dict((existing_state or {}).get("process_decomposition") or {})
         canonical_diagnostics = workflow_path_diagnostics(project_code, product_id)
         path_debug = {
             **initial_debug,
@@ -3816,6 +3841,7 @@ def save_bom_output(
             (existing_state or {}).get("customer_input") or {},
             choke_classification,
         )
+        normalized = technical_revisions.attach_bom_revisions(raw_json, normalized)
         _write_json(normalized_path, normalized)
         component_ids = [
             item.get("component_id")
@@ -3867,13 +3893,83 @@ def save_bom_output(
         state.update(classification_trace(choke_classification))
         normalized["choke_classification"] = choke_classification
         normalized.update(classification_trace(choke_classification))
+        normalized = technical_revisions.attach_bom_revisions(raw_json, normalized)
         _write_json(normalized_path, normalized)
         master_data_refresh = _refresh_master_data_for_state(state)
-        state["process_decomposition"] = build_choke_process_route(
+        process_decomposition = build_choke_process_route(
             state.get("customer_input") or {},
             normalized,
             choke_classification,
         )
+        process_decomposition = technical_revisions.attach_process_revisions(
+            process_decomposition,
+            normalized["technical_revision"],
+            normalized,
+        )
+        state["process_decomposition"] = process_decomposition
+        transition = technical_revisions.revision_transition(
+            previous_normalized_bom,
+            normalized,
+            previous_process,
+            process_decomposition,
+        )
+        archive_paths = {
+            "raw_bom": _archive_technical_revision(
+                project_code,
+                product_id,
+                "raw_bom",
+                normalized.get("source_raw_bom_revision"),
+                raw_json,
+            ),
+            "normalized_bom": _archive_technical_revision(
+                project_code,
+                product_id,
+                "normalized_bom",
+                normalized.get("technical_revision"),
+                normalized,
+            ),
+            "process_decomposition": _archive_technical_revision(
+                project_code,
+                product_id,
+                "process_decomposition",
+                process_decomposition.get("technical_revision"),
+                process_decomposition,
+            ),
+        }
+        state["technical_revisions"] = {
+            "raw_bom": normalized.get("source_raw_bom_revision"),
+            "normalized_bom": normalized.get("technical_revision"),
+            "process_decomposition": process_decomposition.get("technical_revision"),
+        }
+        state.setdefault("technical_revision_history", []).append({
+            "accepted_at": _now_iso(),
+            "transition": transition,
+            "archive_paths": archive_paths,
+        })
+        state["technical_revision_transition"] = transition
+
+        # Only dependent outputs are invalidated. Unchanged input revisions are
+        # retained; removed entries remain in state as audit-only obsolete data.
+        for component_id in transition["components"]["changed"]:
+            if component_id in (state.get("components") or {}):
+                state["components"][component_id]["status"] = "stale"
+                state["components"][component_id]["stale_reason"] = "component_input_revision_changed"
+        for component_id in transition["components"]["removed"]:
+            if component_id in (state.get("components") or {}):
+                state["components"][component_id]["status"] = "obsolete_for_current_revision"
+                state["components"][component_id]["preservation_note"] = (
+                    "Preserved for audit; excluded from the current technical revision."
+                )
+        for work_package_id in transition["work_packages"]["changed"]:
+            if work_package_id in (state.get("most") or {}):
+                state["most"][work_package_id]["status"] = "stale"
+                state["most"][work_package_id]["stale_reason"] = "work_package_input_revision_changed"
+        for work_package_id in transition["work_packages"]["removed"]:
+            if work_package_id in (state.get("most") or {}):
+                state["most"][work_package_id]["status"] = "obsolete_for_current_revision"
+                state["most"][work_package_id]["preservation_note"] = (
+                    "Preserved for audit; excluded from the current technical revision."
+                )
         existing_bom = dict(state.get("bom") or {})
         state["bom"] = {
             **existing_bom,
@@ -3889,6 +3985,9 @@ def save_bom_output(
             ),
             "raw_bom_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
             "normalized_bom_sha256": hashlib.sha256(normalized_path.read_bytes()).hexdigest(),
+            "raw_bom_revision": normalized.get("source_raw_bom_revision"),
+            "normalized_bom_revision": normalized.get("technical_revision"),
+            "process_decomposition_revision": process_decomposition.get("technical_revision"),
             "retryable": False,
         }
         _apply_bom_received_precedence(state)
@@ -3900,10 +3999,29 @@ def save_bom_output(
         state["required_external_component_ids"] = [
             item["component_id"] for item in required_external_components
         ]
+        component_reconciliation = technical_revisions.reconcile_component_outputs(
+            normalized,
+            state,
+            lambda component_id: _read_json(
+                _normalized_component_output_path(project_code, product_id, component_id),
+                None,
+            ),
+        )
+        state["component_revision_reconciliation"] = component_reconciliation
+        unresolved_component_ids = {
+            item["component_id"]
+            for key in (
+                "missing_components",
+                "stale_components",
+                "legacy_unverified_components",
+            )
+            for item in component_reconciliation.get(key) or []
+            if item.get("component_id") in state["required_external_component_ids"]
+        }
         state["missing_outputs"] = list(dict.fromkeys(
-            f"component:{item['component_id']}"
-            for item in required_external_components
-            if isinstance(item, dict) and item.get("component_id")
+            f"component:{component_id}"
+            for component_id in state["required_external_component_ids"]
+            if component_id in unresolved_component_ids
         ))
         _save_state(state)
 
@@ -4637,6 +4755,34 @@ def trigger_next_component_costing(
 
     required = _required_external_components(normalized_bom, include_unconfirmed=include_unconfirmed)
     state.setdefault("components", {})
+    component_reconciliation = technical_revisions.reconcile_component_outputs(
+        normalized_bom,
+        state,
+        lambda component_id: _read_json(
+            _normalized_component_output_path(
+                project_code, product_id, component_id
+            ),
+            None,
+        ),
+    )
+    state["component_revision_reconciliation"] = component_reconciliation
+    component_scheduler_policy = (
+        technical_revisions.component_scheduler_eligibility(
+            component_reconciliation
+        )
+    )
+    state["component_scheduler_eligibility"] = component_scheduler_policy
+    schedulable_component_ids = set(
+        component_scheduler_policy["automatic_trigger_ids"]
+    )
+    legacy_component_ids = set(
+        component_scheduler_policy[
+            "explicit_validation_or_regeneration_ids"
+        ]
+    )
+    never_trigger_component_ids = set(
+        component_scheduler_policy["never_trigger_ids"]
+    )
     status_before = state.get("status")
     append_workflow_event(
         project_code, product_id, "component_batch_trigger_requested",
@@ -4656,10 +4802,30 @@ def trigger_next_component_costing(
                 "costing_readiness": "incomplete",
                 "requires_regeneration": True,
             }
+        if not force and component_id in legacy_component_ids:
+            skipped.append({
+                "component_id": component_id,
+                "status": "legacy_unverified",
+                "reason": "compatibility_validation_or_explicit_regeneration_required",
+            })
+            continue
+        if not force and component_id in never_trigger_component_ids:
+            skipped.append({
+                "component_id": component_id,
+                "status": previous.get("status"),
+                "reason": "revision_status_not_triggerable",
+            })
+            continue
         if (
             not force
-            and previous.get("status") in {"triggered", "received", "failed"}
+            and previous.get("status") == "triggered"
             and not requires_regeneration
+        ):
+            skipped.append({"component_id": component_id, "status": previous.get("status"), "reason": "active_trigger_exists"})
+            continue
+        if (
+            not force
+            and component_id not in schedulable_component_ids
         ):
             skipped.append({"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"})
             continue
@@ -4710,6 +4876,11 @@ def trigger_next_component_costing(
             "received_at": previous.get("received_at") if not force else None,
             "costing_readiness": "pending" if accepted else previous.get("costing_readiness"),
             "requires_regeneration": False if accepted else requires_regeneration,
+            "source_bom_revision": normalized_bom.get("technical_revision"),
+            "source_component_revision": (
+                component.get("technical_revision")
+                or technical_revisions.component_input_revision(component)
+            ),
         }
         state["components"][component_id] = entry
         summary = {
@@ -4843,7 +5014,7 @@ def normalize_component_output(
             pricing_missing.append("recommended_offer.pricing_unit")
     if pricing_missing:
         analysis_status = "blocked"
-    return {
+    normalized = {
         "schema_version": "1.0",
         "project_code": state["project_code"],
         "product_id": state["product_id"],
@@ -4883,7 +5054,22 @@ def normalize_component_output(
         "pricing_quantity_basis": canonical.get("pricing_quantity_basis"),
         "fx_resolution": canonical.get("fx"),
         "pricing_warnings": canonical.get("warnings") or [],
+        "source_bom_revision": (
+            bom_component.get("source_bom_revision")
+            or (state.get("technical_revisions") or {}).get("normalized_bom")
+        ),
+        "source_component_revision": (
+            bom_component.get("technical_revision")
+            or technical_revisions.component_input_revision(bom_component)
+        ),
+        "source_component_snapshot": technical_revisions.component_input_projection(
+            bom_component
+        ),
     }
+    normalized["technical_revision"] = technical_revisions.output_revision(
+        "component-output", normalized
+    )
+    return normalized
 
 
 def save_component_output(project_code: str, product_id: str, component_id: str, raw_json: Dict[str, Any]) -> Dict[str, Any]:
@@ -4932,15 +5118,41 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
             "received_at": _now_iso(),
             "costing_readiness": pricing_completeness.get("status") or "complete",
             "requires_regeneration": requires_regeneration,
+            "source_bom_revision": normalized.get("source_bom_revision"),
+            "source_component_revision": normalized.get("source_component_revision"),
+            "output_revision": normalized.get("technical_revision"),
         }
+        _archive_technical_revision(
+            project_code,
+            product_id,
+            "component_outputs",
+            normalized.get("technical_revision"),
+            normalized,
+        )
         required_ids = list(state.get("required_external_component_ids") or [])
         if not required_ids:
             required_ids = [item["component_id"] for item in _required_external_components(normalized_bom)]
-        remaining = [
-            item for item in required_ids
-            if (state["components"].get(item) or {}).get("status") != "received"
-            or (state["components"].get(item) or {}).get("requires_regeneration") is True
-        ]
+        component_reconciliation = technical_revisions.reconcile_component_outputs(
+            normalized_bom,
+            state,
+            lambda current_id: _read_json(
+                _normalized_component_output_path(
+                    project_code, product_id, current_id
+                ),
+                None,
+            ),
+        )
+        state["component_revision_reconciliation"] = component_reconciliation
+        remaining = list(dict.fromkeys(
+            item["component_id"]
+            for key in (
+                "missing_components",
+                "stale_components",
+                "legacy_unverified_components",
+            )
+            for item in component_reconciliation.get(key) or []
+            if item.get("component_id") in required_ids
+        ))
         state["missing_outputs"] = [f"component:{item}" for item in remaining]
         if not remaining:
             state["status"] = "components_received"
@@ -4993,7 +5205,23 @@ def get_component_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
         raise ValueError("Workflow state not found.")
     normalized_bom = _load_normalized_bom(project_code, product_id)
     outputs = [get_component_output(project_code, product_id, item["component_id"]) for item in _required_external_components(normalized_bom, include_unconfirmed=True)]
-    return {"status": "found", "project_code": project_code, "product_id": product_id, "component_outputs": outputs}
+    reconciliation = technical_revisions.reconcile_component_outputs(
+        normalized_bom,
+        state,
+        lambda component_id: _read_json(
+            _normalized_component_output_path(
+                project_code, product_id, component_id
+            ),
+            None,
+        ),
+    )
+    return {
+        "status": "found",
+        "project_code": project_code,
+        "product_id": product_id,
+        "component_outputs": outputs,
+        "revision_reconciliation": reconciliation,
+    }
 
 
 def _most_component_technical_data(project_code: str, product_id: str, component: Dict[str, Any]) -> Dict[str, Any]:
@@ -5172,6 +5400,13 @@ def trigger_most_operations(
     if customer_input.get("annual_quantity") in [None, "", 0]:
         raise ValueError("MOST/component-operation planning needs annual_quantity before operations can be triggered.")
     process = build_most_process_decomposition(state, normalized_bom)
+    source_bom_revision = (
+        normalized_bom.get("technical_revision")
+        or technical_revisions.normalized_bom_revision(normalized_bom)
+    )
+    process = technical_revisions.attach_process_revisions(
+        process, source_bom_revision, normalized_bom
+    )
     eligible_operations = [
         item for item in process.get("operations") or []
         if item.get("status") == "confirmed"
@@ -5188,6 +5423,37 @@ def trigger_most_operations(
     state["process_decomposition"] = process
     state["required_most_work_package_ids"] = process.get("required_work_package_ids") or []
     state.setdefault("most", {})
+    state.setdefault("technical_revisions", {}).update({
+        "normalized_bom": source_bom_revision,
+        "process_decomposition": process.get("technical_revision"),
+    })
+    _archive_technical_revision(
+        project_code,
+        product_id,
+        "process_decomposition",
+        process.get("technical_revision"),
+        process,
+    )
+    most_reconciliation = technical_revisions.reconcile_most_outputs(
+        process,
+        state,
+        lambda work_package_id: _read_json(
+            _normalized_most_output_path(
+                project_code, product_id, work_package_id
+            ),
+            None,
+        ),
+    )
+    state["most_revision_reconciliation"] = most_reconciliation
+    most_scheduler_policy = technical_revisions.most_scheduler_eligibility(
+        most_reconciliation
+    )
+    state["most_scheduler_eligibility"] = most_scheduler_policy
+    schedulable_ids = set(most_scheduler_policy["automatic_trigger_ids"])
+    legacy_or_unverified_ids = set(
+        most_scheduler_policy["explicit_validation_or_regeneration_ids"]
+    )
+    never_trigger_ids = set(most_scheduler_policy["never_trigger_ids"])
 
     if process.get("status") == "blocked":
         blocking_reason = process.get("blocked_reason") or "no_confirmed_operations"
@@ -5275,6 +5541,27 @@ def trigger_most_operations(
             }
             skipped.append({"work_package_id": work_package_id, "status": "blocked", "reason": work_package.get("blocking_reason")})
             continue
+        if not force and work_package_id in legacy_or_unverified_ids:
+            skipped.append({
+                "work_package_id": work_package_id,
+                "status": "legacy_unverified",
+                "reason": "compatibility_validation_or_explicit_regeneration_required",
+            })
+            continue
+        if not force and work_package_id in never_trigger_ids:
+            skipped.append({
+                "work_package_id": work_package_id,
+                "status": previous.get("status"),
+                "reason": "revision_status_not_triggerable",
+            })
+            continue
+        if not force and work_package_id not in schedulable_ids:
+            skipped.append({
+                "work_package_id": work_package_id,
+                "status": "valid",
+                "reason": "current_revision_output_valid",
+            })
+            continue
         if not force and previous.get("status") in {
             "trigger_request_sending",
             "trigger_request_accepted",
@@ -5310,6 +5597,9 @@ def trigger_most_operations(
             "normalized_path": _relative(
                 _normalized_most_output_path(project_code, product_id, work_package_id)
             ),
+            "source_bom_revision": source_bom_revision,
+            "source_process_revision": process.get("technical_revision"),
+            "source_work_package_revision": work_package.get("technical_revision"),
         }
         state["status"] = "most_triggering"
         state["current_step"] = "Step 3 MOST Assemblage"
@@ -5370,6 +5660,9 @@ def trigger_most_operations(
             "save_path": payload["save_address"],
             "normalized_path": _relative(_normalized_most_output_path(project_code, product_id, work_package_id)),
             "received_at": previous.get("received_at") if not force else None,
+            "source_bom_revision": source_bom_revision,
+            "source_process_revision": process.get("technical_revision"),
+            "source_work_package_revision": work_package.get("technical_revision"),
         }
         state["most"][work_package_id] = entry
         _save_state(state)
@@ -5623,7 +5916,7 @@ def normalize_most_output(state: Dict[str, Any], work_package: Dict[str, Any], r
     method = value("method", "most_method") or "engineering_estimate"
     if method not in {"BasicMOST", "MiniMOST", "engineering_estimate"}:
         method = "engineering_estimate"
-    return {
+    normalized = {
         "schema_version": "1.0",
         "project_code": state["project_code"],
         "product_id": state["product_id"],
@@ -5651,7 +5944,30 @@ def normalize_most_output(state: Dict[str, Any], work_package: Dict[str, Any], r
         "assumptions": raw_json.get("assumptions") if isinstance(raw_json.get("assumptions"), list) else [],
         "unconfirmed_values": raw_json.get("unconfirmed_values") if isinstance(raw_json.get("unconfirmed_values"), list) else [],
         "required_confirmations": raw_json.get("required_confirmations") if isinstance(raw_json.get("required_confirmations"), list) else [],
+        "source_bom_revision": (
+            work_package.get("source_bom_revision")
+            or (state.get("technical_revisions") or {}).get("normalized_bom")
+        ),
+        "source_process_revision": (
+            work_package.get("source_process_revision")
+            or (state.get("technical_revisions") or {}).get("process_decomposition")
+        ),
+        "source_work_package_revision": (
+            work_package.get("technical_revision")
+            or technical_revisions.work_package_input_revision(
+                work_package,
+                work_package.get("source_bom_revision")
+                or (state.get("technical_revisions") or {}).get("normalized_bom"),
+            )
+        ),
+        "source_work_package_snapshot": technical_revisions.work_package_projection(
+            work_package
+        ),
     }
+    normalized["technical_revision"] = technical_revisions.output_revision(
+        "most-output", normalized
+    )
+    return normalized
 
 
 def save_most_output(
@@ -5767,6 +6083,31 @@ def save_most_output(
                 "product_id": str(product_id),
                 "work_package_id": work_package_id,
             }
+        if not process.get("technical_revision"):
+            current_bom = _load_normalized_bom(project_code, product_id)
+            if not current_bom.get("technical_revision"):
+                current_bom = technical_revisions.attach_bom_revisions(
+                    current_bom.get("raw_bom") or {},
+                    current_bom,
+                )
+            process = technical_revisions.attach_process_revisions(
+                process,
+                current_bom.get("technical_revision"),
+                current_bom,
+            )
+            state["process_decomposition"] = process
+            state.setdefault("technical_revisions", {}).update({
+                "normalized_bom": current_bom.get("technical_revision"),
+                "process_decomposition": process.get("technical_revision"),
+            })
+            work_package = next(
+                (
+                    item
+                    for item in process.get("work_packages") or []
+                    if item.get("work_package_id") == work_package_id
+                ),
+                work_package,
+            )
         normalized_bom = _load_normalized_bom(project_code, product_id)
         external_ids = {item["component_id"] for item in _required_external_components(normalized_bom, include_unconfirmed=True)}
         applicable = [item for item in work_package.get("component_ids") or [] if item in external_ids]
@@ -5776,8 +6117,21 @@ def save_most_output(
         raw_path = _most_output_path(project_code, product_id, work_package_id)
         normalized_path = _normalized_most_output_path(project_code, product_id, work_package_id)
         normalized = normalize_most_output(state, work_package, raw_json)
+        normalized["trigger_run_id"] = (
+            received_trigger_run_id or expected_trigger_run_id or None
+        )
+        normalized["technical_revision"] = technical_revisions.output_revision(
+            "most-output", normalized
+        )
         _write_json(raw_path, raw_json)
         _write_json(normalized_path, normalized)
+        _archive_technical_revision(
+            project_code,
+            product_id,
+            "most_outputs",
+            normalized.get("technical_revision"),
+            normalized,
+        )
         state.setdefault("most", {})
         existing = state["most"].get(work_package_id, {})
         state["most"][work_package_id] = {
@@ -5791,9 +6145,34 @@ def save_most_output(
             "normalized_path": _relative(normalized_path),
             "received_at": _now_iso(),
             "received_for_trigger_run_id": received_trigger_run_id or expected_trigger_run_id or None,
+            "source_bom_revision": normalized.get("source_bom_revision"),
+            "source_process_revision": normalized.get("source_process_revision"),
+            "source_work_package_revision": normalized.get("source_work_package_revision"),
+            "output_revision": normalized.get("technical_revision"),
         }
         required = list(state.get("required_most_work_package_ids") or process.get("required_work_package_ids") or [])
-        remaining = [item for item in required if (state["most"].get(item) or {}).get("status") != "received"]
+        most_reconciliation = technical_revisions.reconcile_most_outputs(
+            process,
+            state,
+            lambda current_id: _read_json(
+                _normalized_most_output_path(
+                    project_code, product_id, current_id
+                ),
+                None,
+            ),
+        )
+        state["most_revision_reconciliation"] = most_reconciliation
+        remaining = list(dict.fromkeys(
+            item["work_package_id"]
+            for key in (
+                "missing_work_packages",
+                "stale_work_packages",
+                "legacy_unverified_work_packages",
+                "received_not_normalized_work_packages",
+            )
+            for item in most_reconciliation.get(key) or []
+            if item.get("work_package_id") in required
+        ))
         state["missing_outputs"] = [f"most:{item}" for item in remaining]
         if not remaining:
             state["status"] = "most_received"
@@ -5855,7 +6234,23 @@ def get_most_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
         raise ValueError("Workflow state not found.")
     process = state.get("process_decomposition") or {}
     outputs = [get_most_output(project_code, product_id, item["work_package_id"]) for item in process.get("work_packages") or [] if item.get("status") != "blocked"]
-    return {"status": "found", "project_code": project_code, "product_id": product_id, "most_outputs": outputs}
+    reconciliation = technical_revisions.reconcile_most_outputs(
+        process,
+        state,
+        lambda work_package_id: _read_json(
+            _normalized_most_output_path(
+                project_code, product_id, work_package_id
+            ),
+            None,
+        ),
+    )
+    return {
+        "status": "found",
+        "project_code": project_code,
+        "product_id": product_id,
+        "most_outputs": outputs,
+        "revision_reconciliation": reconciliation,
+    }
 
 
 def _get_path(data: Any, path: List[str]) -> Any:
@@ -5970,6 +6365,98 @@ def _load_saved_most_outputs(project_code: str, product_id: str) -> List[Dict[st
     ] if most_dir.exists() else []
 
 
+def _load_revision_bound_component_output(
+    project_code: str,
+    product_id: str,
+    component_id: str,
+) -> Optional[Dict[str, Any]]:
+    raw = _read_json(
+        _component_output_path(project_code, product_id, component_id), None
+    )
+    normalized = _read_json(
+        _normalized_component_output_path(project_code, product_id, component_id),
+        None,
+    )
+    if raw is None and normalized is None:
+        return None
+    return {
+        **(normalized or {}),
+        "component_id": component_id,
+        "agent_raw_output": raw or normalized or {},
+    }
+
+
+def _load_revision_bound_most_output(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+) -> Optional[Dict[str, Any]]:
+    raw_path = _most_output_path(project_code, product_id, work_package_id)
+    normalized_path = _normalized_most_output_path(
+        project_code, product_id, work_package_id
+    )
+    raw = _read_json(raw_path, None)
+    normalized = _read_json(normalized_path, None)
+    if raw is None and normalized is None:
+        return None
+    adapted = _normalize_most_output(raw_path) if raw is not None else dict(normalized)
+    return {
+        **adapted,
+        **(normalized or {}),
+        "work_package_id": work_package_id,
+        "agent_raw_output": raw or normalized or {},
+    }
+
+
+def _ensure_current_technical_revisions(
+    project_code: str,
+    product_id: str,
+    state: Dict[str, Any],
+    raw_bom: Dict[str, Any],
+    normalized_bom: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Migrate BOM/process authority without blessing legacy agent outputs."""
+    changed = False
+    if not normalized_bom.get("technical_revision"):
+        normalized_bom = technical_revisions.attach_bom_revisions(
+            raw_bom, normalized_bom
+        )
+        _write_json(_bom_normalized_path(project_code, product_id), normalized_bom)
+        changed = True
+    process = dict(state.get("process_decomposition") or {})
+    if (
+        not process
+        or not process.get("technical_revision")
+        or process.get("source_bom_revision")
+        != normalized_bom.get("technical_revision")
+    ):
+        if not process:
+            process = build_choke_process_route(
+                state.get("customer_input") or {},
+                normalized_bom,
+                state.get("choke_classification")
+                or normalized_bom.get("choke_classification"),
+            )
+        process = technical_revisions.attach_process_revisions(
+            process, normalized_bom["technical_revision"], normalized_bom
+        )
+        state["process_decomposition"] = process
+        changed = True
+    state.setdefault("technical_revisions", {}).update({
+        "raw_bom": normalized_bom.get("source_raw_bom_revision"),
+        "normalized_bom": normalized_bom.get("technical_revision"),
+        "process_decomposition": process.get("technical_revision"),
+    })
+    if changed:
+        state.setdefault("migration_notes", []).append({
+            "migrated_at": _now_iso(),
+            "status": "technical_revision_metadata_added",
+            "legacy_outputs_policy": "legacy_unverified_until_inputs_match",
+        })
+        _save_state(state)
+    return normalized_bom, process
+
+
 def _unit_data_for_final_calculation(
     state: Dict[str, Any],
     customer_input: Dict[str, Any],
@@ -6016,6 +6503,8 @@ def calculate_final_choke_costing_from_saved_outputs(
     warnings: List[str] = []
     missing_inputs: List[str] = []
     state = _load_state(project_code, product_id)
+    state.setdefault("project_code", project_code)
+    state.setdefault("product_id", product_id)
     input_file = state.get("input_file")
     customer_input = state.get("customer_input") or {}
     if input_file:
@@ -6030,42 +6519,61 @@ def calculate_final_choke_costing_from_saved_outputs(
         missing_inputs.append("bom")
         raw_bom = {}
     normalized_bom = _read_json(_bom_normalized_path(project_code, product_id), {}) or {}
+    process_decomposition: Dict[str, Any] = {}
+    if raw_bom:
+        normalized_bom, process_decomposition = _ensure_current_technical_revisions(
+            project_code,
+            product_id,
+            state,
+            raw_bom,
+            normalized_bom,
+        )
     dimensional_by_component = _saved_bom_dimensional_map(raw_bom)
-    ferrite_fields = dimensional_by_component.get("ferrite_core") or {}
-    ferrite_length_resolution = component_costing.resolve_ferrite_length_mm(
-        normalized_bom, raw_bom
-    )
-    if ferrite_length_resolution.get("status") == "resolved":
-        ferrite_fields["ferrite_length_mm"] = (
-            ferrite_length_resolution["ferrite_length_mm"]
-        )
-    glue_fields = dimensional_by_component.get("glue")
-    provisional_glue = None
-    if glue_fields is not None and not any(
-        glue_fields.get(field) not in (None, "")
-        for field in ("weight_kg_per_product", "physical_mass_g_per_product")
-    ):
-        provisional_glue = component_costing.calculate_provisional_glue_consumption(
-            ferrite_fields.get("ferrite_length_mm"),
-            approved=bool(
-                glue_fields.get("assumption_approved")
-                or customer_input.get("glue_consumption_approved") is True
-            ),
-            source_field_path=ferrite_length_resolution.get(
-                "source_field_path"
-            ),
-            source_evidence=ferrite_length_resolution.get("source_evidence"),
-        )
-        if provisional_glue.get("status") in {
-            "resolved", "resolved_assumption"
-        }:
-            glue_fields["physical_mass_g_per_product"] = (
-                provisional_glue["glue_mass_g_per_product"]
-            )
-            glue_fields["provisional_glue_consumption"] = provisional_glue
+    current_bom_components = {
+        item.get("component_id"): item
+        for item in normalized_bom.get("components") or []
+        if isinstance(item, dict) and item.get("component_id")
+    }
 
-    component_outputs = _load_saved_component_outputs(project_code, product_id)
-    if not component_outputs:
+    component_reconciliation = technical_revisions.reconcile_component_outputs(
+        normalized_bom,
+        state,
+        lambda component_id: _load_revision_bound_component_output(
+            project_code, product_id, component_id
+        ),
+    )
+    valid_component_ids = {
+        item["component_id"]
+        for item in component_reconciliation.get("valid_components") or []
+    }
+    component_outputs = [
+        output
+        for component_id in sorted(valid_component_ids)
+        for output in [
+            _load_revision_bound_component_output(
+                project_code, product_id, component_id
+            )
+        ]
+        if output is not None
+    ]
+    required_external_ids = {
+        item["component_id"]
+        for item in _required_external_components(
+            normalized_bom, include_unconfirmed=True
+        )
+    }
+    component_revision_blockers = []
+    for key, reason in (
+        ("missing_components", "missing"),
+        ("stale_components", "stale"),
+        ("legacy_unverified_components", "legacy_unverified"),
+    ):
+        for item in component_reconciliation.get(key) or []:
+            if item.get("component_id") in required_external_ids:
+                blocker = f"component_outputs:{item['component_id']}:{reason}"
+                component_revision_blockers.append(blocker)
+                missing_inputs.append(blocker)
+    if required_external_ids and not component_outputs:
         missing_inputs.append("component_outputs")
 
     component_breakdown = []
@@ -6088,10 +6596,50 @@ def calculate_final_choke_costing_from_saved_outputs(
         component_id = component.get("component_id") or raw.get("component_id")
         output_component_ids.add(component_id)
         bom_fields = dimensional_by_component.get(component_id, {})
-        pricing_quantity_info = component_costing.resolve_component_pricing_quantity(
-            component_id, bom_fields.get("component_family"), bom_fields, raw,
-        )
         price_info = component_costing.resolve_unit_price(raw, target_currency=project_currency)
+        current_bom_component = current_bom_components.get(component_id) or {}
+        quantity_source = {
+            **current_bom_component,
+            "component_definition": {
+                **(current_bom_component.get("component_definition") or {}),
+                **bom_fields,
+            },
+        }
+        approved_assumption_rules = (
+            (current_bom_component.get("component_definition") or {}).get(
+                "approved_assumption_rules"
+            )
+            or current_bom_component.get("approved_assumption_rules")
+            or []
+        )
+        technical_quantity = technical_revisions.resolve_technical_quantity(
+            quantity_source,
+            price_info.get("unit_price_basis"),
+            mode=result_mode,
+            approved_assumption_rules=approved_assumption_rules,
+        )
+        pricing_unit = technical_revisions.normalize_unit(
+            price_info.get("unit_price_basis")
+        )
+        pricing_quantity_info = {
+            "status": (
+                "resolved"
+                if technical_quantity.get("resolution_status")
+                in {"confirmed", "estimated"}
+                else "blocked"
+            ),
+            "pricing_quantity": technical_quantity.get("quantity"),
+            "pricing_unit": pricing_unit,
+            "pricing_quantity_basis": technical_quantity.get("source"),
+            "warnings": [],
+            "reason": (
+                None
+                if technical_quantity.get("resolution_status")
+                in {"confirmed", "estimated"}
+                else "technical_quantity_unit_unknown"
+            ),
+            "technical_quantity_resolution": technical_quantity,
+        }
         source_material_result = component_costing.compute_component_material_cost(
             component_id, pricing_quantity_info, price_info,
         )
@@ -6234,12 +6782,6 @@ def calculate_final_choke_costing_from_saved_outputs(
             and abs(Decimal(str(reconciliation_difference)))
             <= component_costing.DELIVERED_COST_RECONCILIATION_TOLERANCE
         )
-        uses_provisional_glue = (
-            component_id == "glue"
-            and isinstance(
-                bom_fields.get("provisional_glue_consumption"), dict
-            )
-        )
         component_status = (
             "resolved"
             if not missing_canonical_fields
@@ -6248,17 +6790,11 @@ def calculate_final_choke_costing_from_saved_outputs(
             and reconciliation_valid
             else "blocked"
         )
-        if component_status == "resolved" and uses_provisional_glue:
-            component_status = (
-                "resolved"
-                if bom_fields["provisional_glue_consumption"].get("approved")
-                else "resolved_assumption"
-            )
-            provisional_warning = (
-                bom_fields["provisional_glue_consumption"].get("warning")
-            )
-            if provisional_warning:
-                warnings.append(provisional_warning)
+        if (
+            component_status == "resolved"
+            and technical_quantity.get("resolution_status") == "estimated"
+        ):
+            component_status = "resolved_assumption"
         component_blocking_reason = None
         if component_status == "blocked":
             component_blocking_reason = (
@@ -6281,12 +6817,8 @@ def calculate_final_choke_costing_from_saved_outputs(
                 "component_id": component_id,
                 "reason": component_blocking_reason,
                 "message": (
-                    "Glue consumption per product required."
-                    if component_id == "glue"
-                    and component_blocking_reason
-                    == "technical_quantity_unit_unknown"
-                    else None
-                ),
+                    technical_quantity.get("confirmation_questions") or [None]
+                )[0],
             })
         else:
             material_cost_per_piece += line_material_decimal
@@ -6361,10 +6893,8 @@ def calculate_final_choke_costing_from_saved_outputs(
             "ap_terms": component_costing.resolve_component_ap_terms(raw),
             "fx": price_info.get("fx") or material_result.get("fx"),
             "warnings": pricing_quantity_info.get("warnings") or [],
-            "assumption_details": (
-                bom_fields.get("provisional_glue_consumption")
-                if uses_provisional_glue else None
-            ),
+            "technical_quantity_resolution": technical_quantity,
+            "assumption_details": technical_quantity.get("assumptions") or None,
             "classification": "External",
             "source": "saved_component_json",
             "status": component_status,
@@ -6400,12 +6930,43 @@ def calculate_final_choke_costing_from_saved_outputs(
             "excluded_adders": delivered_result.get("excluded_adders") or [],
         })
 
-    for component_id in dimensional_by_component:
-        if component_id not in output_component_ids and component_id not in {"lead_tin_plating", "tin_plating"}:
+    for component_id in required_external_ids:
+        if component_id not in output_component_ids:
             warnings.append(f"no saved component JSON found for BOM component {component_id}")
 
-    most_outputs = _load_saved_most_outputs(project_code, product_id)
-    if not most_outputs:
+    most_reconciliation = technical_revisions.reconcile_most_outputs(
+        process_decomposition,
+        state,
+        lambda work_package_id: _load_revision_bound_most_output(
+            project_code, product_id, work_package_id
+        ),
+    )
+    valid_work_package_ids = {
+        item["work_package_id"]
+        for item in most_reconciliation.get("valid_work_packages") or []
+    }
+    most_outputs = [
+        output
+        for work_package_id in sorted(valid_work_package_ids)
+        for output in [
+            _load_revision_bound_most_output(
+                project_code, product_id, work_package_id
+            )
+        ]
+        if output is not None
+    ]
+    most_revision_blockers = []
+    for key, reason in (
+        ("missing_work_packages", "missing"),
+        ("stale_work_packages", "stale"),
+        ("legacy_unverified_work_packages", "legacy_unverified"),
+        ("received_not_normalized_work_packages", "received_not_normalized"),
+    ):
+        for item in most_reconciliation.get(key) or []:
+            blocker = f"most_outputs:{item['work_package_id']}:{reason}"
+            most_revision_blockers.append(blocker)
+            missing_inputs.append(blocker)
+    if technical_revisions.required_work_package_ids(process_decomposition) and not most_outputs:
         missing_inputs.append("most_outputs")
 
     if _plant_unit_missing(unit_data):
@@ -6460,6 +7021,11 @@ def calculate_final_choke_costing_from_saved_outputs(
         if item in {"bom", "component_outputs", "most_outputs", "plant_unit_data"}
         or not str(item).startswith("component_outputs:")
     ]
+    core_blockers = list(dict.fromkeys([
+        *core_blockers,
+        *component_revision_blockers,
+        *most_revision_blockers,
+    ]))
     blocking_logistics = [
         item
         for item in unresolved_logistics_adders
@@ -6523,14 +7089,23 @@ def calculate_final_choke_costing_from_saved_outputs(
         "project_code": project_code,
         "product_id": product_id,
         **classification_trace(state.get("choke_classification")),
-        "process_decomposition": state.get("process_decomposition") or {},
+        "process_decomposition": process_decomposition,
+        "technical_revisions": {
+            "raw_bom": normalized_bom.get("source_raw_bom_revision"),
+            "normalized_bom": normalized_bom.get("technical_revision"),
+            "process_decomposition": process_decomposition.get("technical_revision"),
+        },
+        "component_revision_reconciliation": component_reconciliation,
+        "most_revision_reconciliation": most_reconciliation,
+        "excluded_historical_outputs": {
+            "components": component_reconciliation.get("obsolete_components") or [],
+            "most": most_reconciliation.get("obsolete_work_packages") or [],
+        },
         "status": result_status,
         "result_mode": result_mode,
         "technical_preliminary_status": technical_preliminary_status,
         "technical_firm_status": technical_firm_status,
         "technical_firm_blockers": list(dict.fromkeys(technical_firm_blockers)),
-        "ferrite_length_resolution": ferrite_length_resolution,
-        "provisional_glue_consumption": provisional_glue,
         "commercially_usable": (
             result_status == "calculated"
             and all(
@@ -6542,7 +7117,7 @@ def calculate_final_choke_costing_from_saved_outputs(
         "costing_method": "preliminary_plant_percentage_dc",
         "currency": project_currency or "",
         "material_cost_per_piece": (
-            None if not component_outputs else float(material_cost_per_piece)
+            float(material_cost_per_piece) if calculation_permitted else None
         ),
         "calculated_material_cost_for_resolved_components": (
             None if not component_outputs else float(material_cost_per_piece)
@@ -6554,26 +7129,33 @@ def calculate_final_choke_costing_from_saved_outputs(
             None if not component_outputs else float(delivered_material_cost_per_piece)
         ),
         "delivered_material_cost_per_piece": (
-            None if not component_outputs else float(delivered_material_cost_per_piece)
+            float(delivered_material_cost_per_piece)
+            if calculation_permitted else None
         ),
         "calculated_delivered_material_cost_exact": (
             None if not component_outputs
             else format(delivered_material_cost_per_piece, "f")
         ),
         "transport_cost_per_piece": (
-            None if not component_outputs else float(transport_cost_per_piece)
+            float(transport_cost_per_piece) if calculation_permitted else None
         ),
         "transport_cost_per_piece_exact": (
             None if not component_outputs else format(transport_cost_per_piece, "f")
         ),
         "base_material_cost_per_piece": (
-            None if not component_outputs else float(material_cost_per_piece)
+            float(material_cost_per_piece) if calculation_permitted else None
         ),
         "logistics_cost_per_piece": (
-            None if not component_outputs else float(transport_cost_per_piece)
+            float(transport_cost_per_piece) if calculation_permitted else None
         ),
         "dl_cost_per_piece": dl_cost,
         "voh_cost_per_piece": voh_cost,
+        "tooling_adder_per_piece": dl_voh.get("tooling_adder_per_piece"),
+        "capex_tooling_treatment": {
+            "tooling_adder_per_piece": dl_voh.get("tooling_adder_per_piece"),
+            "basis": "current_valid_most_work_packages_only",
+            "included_in_voh_where_reported_by_most": True,
+        },
         "direct_cost_per_piece": direct_cost,
         "added_value_direct_cost_per_piece": direct_cost,
         "foh_percent_dc": foh_percent,
@@ -6606,7 +7188,19 @@ def calculate_final_choke_costing_from_saved_outputs(
         ])),
     }
     output_path = _run_dir(project_code, product_id) / "final_choke_costing_result.json"
+    result["source_bom_revision"] = normalized_bom.get("technical_revision")
+    result["source_process_revision"] = process_decomposition.get("technical_revision")
+    result["technical_revision"] = technical_revisions.output_revision(
+        "final-technical-calculation", result
+    )
     result["save_path"] = _write_json(output_path, result)
+    _archive_technical_revision(
+        project_code,
+        product_id,
+        "final_calculations",
+        result.get("technical_revision"),
+        result,
+    )
     if _state_path(project_code, product_id).exists():
         state["workflow_status"] = state.get("status")
         state["bom_status"] = (state.get("bom") or {}).get("status")
@@ -6622,6 +7216,9 @@ def calculate_final_choke_costing_from_saved_outputs(
         )
         state["most_status"] = (state.get("most") or {}).get("status")
         state["final_calculation_status"] = result_status
+        state["final_calculation_revision"] = result.get("technical_revision")
+        state["component_revision_reconciliation"] = component_reconciliation
+        state["most_revision_reconciliation"] = most_reconciliation
         state.setdefault("financial_status", "not_calculated")
         _save_state(state)
     return result

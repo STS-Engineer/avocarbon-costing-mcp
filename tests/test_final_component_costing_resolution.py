@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from services import choke_component_costing as costing
 from services import choke_sequential_agent_workflow as workflow
+from services import choke_technical_revisions as revisions
 
 
 def _live_bom():
@@ -197,29 +198,93 @@ def _unit_data():
     }
 
 
-def _run_final(monkeypatch, result_mode):
+def _run_final(monkeypatch, result_mode, raw_outputs=None):
     unit = _unit_data()
+    raw_bom = _live_bom()
+    normalized_bom = revisions.attach_bom_revisions(
+        raw_bom, workflow.normalize_bom(raw_bom)
+    )
+    process = revisions.attach_process_revisions(
+        {
+            "required_work_package_ids": ["wp_10_wire_winding"],
+            "work_packages": [{
+                "work_package_id": "wp_10_wire_winding",
+                "operation_id": "winding",
+                "operation_name": "Winding",
+                "component_ids": ["magnet_wire"],
+                "status": "confirmed",
+            }],
+        },
+        normalized_bom["technical_revision"],
+        normalized_bom,
+    )
+    component_map = {
+        item["component_id"]: item for item in normalized_bom["components"]
+    }
+    outputs = {}
+    for output in raw_outputs or _live_outputs():
+        component_id = output["component_id"]
+        outputs[component_id] = {
+            **output,
+            "source_bom_revision": normalized_bom["technical_revision"],
+            "source_component_revision": component_map[component_id][
+                "technical_revision"
+            ],
+            "technical_revision": f"output-{component_id}",
+        }
+    work_package = process["work_packages"][0]
+    most_output = {
+        "work_package_id": "wp_10_wire_winding",
+        "p_h": 288,
+        "oee": 0.8,
+        "operator_percent": 100,
+        "source_bom_revision": normalized_bom["technical_revision"],
+        "source_process_revision": process["technical_revision"],
+        "source_work_package_revision": work_package["technical_revision"],
+        "technical_revision": "most-output-winding",
+    }
+    state = {
+        "project_code": "24018-CHO-00",
+        "product_id": "300440157",
+        "customer_input": {"currency": "INR", "annual_quantity": 360000},
+        "unit_data": unit,
+        "process_decomposition": process,
+        "technical_revisions": {
+            "normalized_bom": normalized_bom["technical_revision"],
+            "process_decomposition": process["technical_revision"],
+        },
+        "components": {
+            key: {"status": "received"} for key in outputs
+        },
+        "most": {"wp_10_wire_winding": {"status": "received"}},
+    }
     monkeypatch.setattr(
         workflow,
         "_load_state",
-        lambda *_: {
-            "customer_input": {"currency": "INR", "annual_quantity": 360000},
-            "unit_data": unit,
-        },
+        lambda *_: state,
     )
-    monkeypatch.setattr(workflow, "_read_json", lambda *_args, **_kwargs: _live_bom())
-    monkeypatch.setattr(workflow, "_load_saved_component_outputs", lambda *_: _live_outputs())
     monkeypatch.setattr(
         workflow,
-        "_load_saved_most_outputs",
-        lambda *_: [
-            {
-                "work_package_id": "wp_10_wire_winding",
-                "p_h": 288,
-                "oee": 0.8,
-                "operator_percent": 100,
-            }
-        ],
+        "_read_json",
+        lambda path, default=None: (
+            normalized_bom
+            if "bom_normalized" in str(path)
+            else raw_bom
+            if "raw_bom_agent_output" in str(path)
+            else default
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_load_revision_bound_component_output",
+        lambda _project, _product, component_id: outputs.get(component_id),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_load_revision_bound_most_output",
+        lambda _project, _product, work_package_id: (
+            most_output if work_package_id == "wp_10_wire_winding" else None
+        ),
     )
     monkeypatch.setattr(workflow, "_write_json", lambda path, _value: str(path))
     return workflow.calculate_final_choke_costing_from_saved_outputs(
@@ -303,7 +368,8 @@ def test_firm_result_keeps_resolved_material_subtotal_but_blocks_for_glue(monkey
     result = _run_final(monkeypatch, "firm")
     rows = {item["component_id"]: item for item in result["component_breakdown"]}
     assert result["status"] == "blocked"
-    assert result["material_cost_per_piece"] > 0
+    assert result["material_cost_per_piece"] is None
+    assert result["calculated_material_cost_for_resolved_components"] > 0
     assert result["direct_cost_per_piece"] is None
     assert rows["ferrite_core"]["fx"]["status"] == "already_converted"
     assert math.isclose(rows["ferrite_core"]["material_cost_per_piece"], 2 * 1.137144)
@@ -311,7 +377,7 @@ def test_firm_result_keeps_resolved_material_subtotal_but_blocks_for_glue(monkey
     assert math.isclose(rows["lead_tinning"]["technical_quantity"], 0.00000424)
     assert rows["glue"]["blocking_reason"] == "technical_quantity_unit_unknown"
     assert result["unresolved_material_components"][0]["message"] == (
-        "Glue consumption per product required."
+        "Confirm a technical quantity compatible with kg/product."
     )
 
 
@@ -337,7 +403,7 @@ def test_preliminary_result_calculates_resolved_subtotal_and_labels_incomplete(m
     assert result["unresolved_material_components"] == [{
         "component_id": "glue",
         "reason": "technical_quantity_unit_unknown",
-        "message": "Glue consumption per product required.",
+        "message": "Confirm a technical quantity compatible with kg/product.",
     }]
 
 
@@ -352,9 +418,7 @@ def test_descriptive_wire_basis_uses_canonical_normalized_pricing_unit(monkeypat
     assert wire["blocking_reason"] is None
     assert wire["material_cost_per_piece"] == 1.33988
     assert wire["delivered_material_cost_per_piece"] == 1.36494043
-    assert wire["warnings"] == [
-        "Final wire cut length and mass remain unconfirmed."
-    ]
+    assert wire["warnings"] == []
 
 
 def test_subtotals_and_logistics_use_exactly_the_resolved_component_set(monkeypatch):
@@ -461,34 +525,7 @@ def test_final_result_blocks_when_one_delivered_total_does_not_reconcile(monkeyp
     outputs[1]["agent_raw_output"]["recommended_offer"]["supply_chain"][
         "delivered_cost"
     ] = 1800
-    unit = _unit_data()
-    monkeypatch.setattr(
-        workflow,
-        "_load_state",
-        lambda *_: {
-            "customer_input": {"currency": "INR", "annual_quantity": 360000},
-            "unit_data": unit,
-        },
-    )
-    monkeypatch.setattr(workflow, "_read_json", lambda *_args, **_kwargs: _live_bom())
-    monkeypatch.setattr(workflow, "_load_saved_component_outputs", lambda *_: outputs)
-    monkeypatch.setattr(
-        workflow,
-        "_load_saved_most_outputs",
-        lambda *_: [{
-            "work_package_id": "wp_10_wire_winding",
-            "p_h": 288,
-            "oee": 0.8,
-            "operator_percent": 100,
-        }],
-    )
-    monkeypatch.setattr(workflow, "_write_json", lambda path, _value: str(path))
-    result = workflow.calculate_final_choke_costing_from_saved_outputs(
-        "24018-CHO-00",
-        "300440157",
-        unit_data_override=unit,
-        result_mode="preliminary",
-    )
+    result = _run_final(monkeypatch, "preliminary", raw_outputs=outputs)
     wire = next(
         item for item in result["component_breakdown"]
         if item["component_id"] == "magnet_wire"
