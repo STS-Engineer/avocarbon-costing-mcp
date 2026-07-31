@@ -94,6 +94,40 @@ def test_confirmed_glue_and_curing_create_operations_but_unconfirmed_glue_does_n
     assert "curing_baking" not in operation_keys(result)
 
 
+def test_explicit_glue_material_and_strength_requirement_needs_confirmation():
+    customer = {"product": "Fuse Choke", "part_number": "NEW-FUSE-GLUE-STRENGTH"}
+    result = route({
+        "product_name": "Fuse Choke",
+        "adhesive_requirement": "Adhesive strength / push-out requirement applies",
+        "components": [
+            component("glue", "Epoxy glue", 0.001, status="to_confirm"),
+        ],
+    }, customer)
+
+    glue = next(item for item in result["operations"] if item["operation_key"] == "glue_application")
+    assert glue["status"] == "needs_confirmation"
+    assert glue["evidence"][0]["confidence"] == "medium"
+    assert "glue_application" not in {
+        item["operation_key"] for item in result["work_packages"]
+    }
+
+
+def test_ambiguous_tinning_language_is_not_confirmed():
+    customer = {"product": "Fuse Choke", "part_number": "NEW-FUSE-TIN-AMBIGUOUS"}
+    result = route({
+        "product_name": "Fuse Choke",
+        "process_note": "Lead tinning may require confirmation after drawing review",
+        "components": [component("lead_tinning", "Tin material", 0.003)],
+    }, customer)
+
+    tinning = next(item for item in result["operations"] if item["operation_key"] == "soldering_tinning")
+    assert tinning["status"] == "needs_confirmation"
+    assert tinning["evidence"][0]["confidence"] == "medium"
+    assert "soldering_tinning" not in {
+        item["operation_key"] for item in result["work_packages"]
+    }
+
+
 def test_explicit_inductance_test_is_selected_and_absence_does_not_invent_it():
     customer = {"product": "Fuse Choke", "part_number": "NEW-FUSE-TEST"}
     base_components = [

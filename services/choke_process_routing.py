@@ -117,6 +117,13 @@ def _component_usable(component: Dict[str, Any]) -> bool:
     return certainty not in {"not_confirmed", "unconfirmed", "to_confirm", "pending_confirmation"}
 
 
+def _component_present(component: Dict[str, Any]) -> bool:
+    if component.get("excluded_not_required") is True:
+        return False
+    quantity = _number(component.get("quantity_per_product"))
+    return quantity is not None and quantity > 0
+
+
 def _evidence(source_type: str, reference: str, text: str, confidence: str) -> Dict[str, str]:
     return {
         "source_type": source_type,
@@ -183,6 +190,22 @@ def _contains(text: str, terms: Iterable[str]) -> bool:
     return any(term in text for term in terms)
 
 
+def _operation_language_is_ambiguous(text: str, terms: Iterable[str]) -> bool:
+    uncertainty_terms = (
+        "ambiguous", "to confirm", "not confirmed", "unconfirmed",
+        "may require", "might require", "if required", "possibly",
+        "possible process", "a confirmer", "a confirm",
+    )
+    for term in terms:
+        start = text.find(term)
+        while start >= 0:
+            context = text[max(0, start - 100): start + len(term) + 100]
+            if _contains(context, uncertainty_terms):
+                return True
+            start = text.find(term, start + len(term))
+    return False
+
+
 def build_choke_process_route(
     customer_input: Optional[Dict[str, Any]],
     normalized_bom: Optional[Dict[str, Any]],
@@ -195,8 +218,17 @@ def build_choke_process_route(
     classification = classification or normalized_bom.get("choke_classification") or classify_choke(customer_input, raw_bom)
     trace = classification_trace(classification)
     subtype = trace["choke_subtype"]
-    components = [item for item in normalized_bom.get("components") or [] if _component_usable(item)]
+    all_components = [
+        item for item in normalized_bom.get("components") or []
+        if _component_present(item)
+    ]
+    components = [item for item in all_components if _component_usable(item)]
     by_kind: Dict[str, List[Dict[str, Any]]] = {kind: [] for kind in _COMPONENT_ALIASES}
+    present_by_kind: Dict[str, List[Dict[str, Any]]] = {kind: [] for kind in _COMPONENT_ALIASES}
+    for component in all_components:
+        kind = _component_kind(component)
+        if kind:
+            present_by_kind[kind].append(component)
     for component in components:
         kind = _component_kind(component)
         if kind:
@@ -276,9 +308,24 @@ def build_choke_process_route(
 
         tin_internal_terms = ["auto solder", "automatic solder", "internal solder", "lead tinning", "tin the lead", "etamage", "etamer"]
         if by_kind["tin"] and _contains(raw_text, tin_internal_terms):
-            add("soldering_tinning", "Tin/solder is applied by an explicitly described internal operation.", [
-                _evidence("drawing", "BOM/drawing text", "Internal soldering or tinning requirement is explicit.", "high")
-            ], selected_components=by_kind["tin"])
+            ambiguous = _operation_language_is_ambiguous(raw_text, tin_internal_terms)
+            add(
+                "soldering_tinning",
+                (
+                    "Tin/solder application is mentioned, but the process language is ambiguous."
+                    if ambiguous
+                    else "Tin/solder is applied by an explicitly described internal operation."
+                ),
+                [_evidence(
+                    "drawing", "BOM/drawing text",
+                    "Internal soldering or tinning language requires confirmation."
+                    if ambiguous else "Internal soldering or tinning requirement is explicit.",
+                    "medium" if ambiguous else "high",
+                )],
+                "needs_confirmation" if ambiguous else "confirmed",
+                questions=["Confirm whether tinning/soldering is an internal manufacturing operation."] if ambiguous else None,
+                selected_components=by_kind["tin"],
+            )
         elif by_kind["tin"]:
             add(
                 "soldering_tinning", "Tin/solder material exists but internal application is not confirmed.",
@@ -303,6 +350,29 @@ def build_choke_process_route(
                     "needs_confirmation", questions=["Does the glue require curing or baking, and under what conditions?"],
                     selected_components=by_kind["glue"],
                 )
+        elif present_by_kind["glue"] and _contains(
+            raw_text,
+            [
+                "adhesive strength", "bond strength", "glue strength",
+                "fixation strength", "push out", "push-out", "pull-out",
+                "adhesive requirement", "glue requirement",
+            ],
+        ):
+            add(
+                "glue_application",
+                "An explicit glue material and product fixation requirement support an operation requiring confirmation.",
+                [
+                    _evidence(
+                        "bom_and_requirement",
+                        "normalized BOM and product requirement",
+                        "Glue material is explicit and a fixation/adhesive-strength requirement exists, but application details are unconfirmed.",
+                        "medium",
+                    )
+                ],
+                "needs_confirmation",
+                questions=["Confirm the glue application method, quantity, and operation sequence."],
+                selected_components=present_by_kind["glue"],
+            )
 
         explicit_operations = [
             ("incoming_component_handling", ["separate incoming handling", "incoming component handling"]),

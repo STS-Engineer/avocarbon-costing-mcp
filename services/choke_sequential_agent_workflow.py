@@ -12,7 +12,7 @@ from decimal import Decimal
 from urllib.parse import quote, urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from services import choke_component_costing as component_costing
 from services.choke_classification import classify_choke, classification_trace
 from services.bom_invocation_identity import (
@@ -606,6 +606,370 @@ def _save_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+def _callback_deadline(requested_at: Optional[str] = None) -> str:
+    try:
+        timeout_seconds = max(
+            60, int(os.getenv("AGENT_CALLBACK_TIMEOUT_SECONDS", "900"))
+        )
+    except (TypeError, ValueError):
+        timeout_seconds = 900
+    base = _parse_iso_datetime(requested_at) if requested_at else None
+    base = base or datetime.now(timezone.utc)
+    return (base + timedelta(seconds=timeout_seconds)).isoformat()
+
+
+def _begin_orchestration_invocation(
+    state: Dict[str, Any],
+    *,
+    trigger_scope: str,
+    requested_by: str,
+    force: bool,
+) -> Dict[str, Any]:
+    state.setdefault("status", "created")
+    state.setdefault("components", {})
+    state.setdefault("most", {})
+    invocation = {
+        "orchestration_invocation_id": str(uuid.uuid4()),
+        "requested_at": _now_iso(),
+        "requested_by": str(requested_by or "system"),
+        "project_code": state["project_code"],
+        "product_id": state["product_id"],
+        "trigger_scope": trigger_scope,
+        "force": bool(force),
+        "source_bom_revision": (
+            (state.get("technical_revisions") or {}).get("normalized_bom")
+            or (state.get("bom") or {}).get("normalized_bom_revision")
+        ),
+        "source_process_revision": (
+            (state.get("technical_revisions") or {}).get("process_decomposition")
+            or (state.get("process_decomposition") or {}).get("technical_revision")
+        ),
+        "status": "eligibility_processing",
+        "items": [],
+    }
+    state.setdefault("orchestration_invocations", []).append(invocation)
+    state["latest_orchestration_invocation"] = invocation
+    _save_state(state)
+    append_workflow_event(
+        state["project_code"],
+        state["product_id"],
+        "orchestration_invocation_started",
+        orchestration_invocation_id=invocation["orchestration_invocation_id"],
+        requested_by=invocation["requested_by"],
+        trigger_scope=trigger_scope,
+        force=bool(force),
+        source_bom_revision=invocation["source_bom_revision"],
+        source_process_revision=invocation["source_process_revision"],
+    )
+    return invocation
+
+
+def _append_invocation_item(
+    invocation: Dict[str, Any],
+    *,
+    item_type: str,
+    item_id: str,
+    revision_status: str,
+    eligibility_decision: str,
+    decision_reason: str,
+    scheduler_action: str,
+    **details: Any,
+) -> Dict[str, Any]:
+    item = {
+        "item_type": item_type,
+        "item_id": item_id,
+        "revision_status": revision_status,
+        "eligibility_decision": eligibility_decision,
+        "decision_reason": decision_reason,
+        "scheduler_action": scheduler_action,
+        "action": scheduler_action,
+        "http_request_attempted": bool(details.pop("http_request_attempted", False)),
+        **{key: value for key, value in details.items() if value is not None},
+    }
+    invocation.setdefault("items", []).append(item)
+    return item
+
+
+def _finalize_orchestration_invocation(
+    state: Dict[str, Any], invocation: Dict[str, Any]
+) -> Dict[str, Any]:
+    items = invocation.get("items") or []
+    invocation.update({
+        "completed_at": _now_iso(),
+        "status": "completed",
+        "candidate_count": len(items),
+        "triggered_count": sum(item.get("scheduler_action") == "triggered" for item in items),
+        "skipped_count": sum(item.get("scheduler_action") == "skipped" for item in items),
+        "blocked_count": sum(item.get("scheduler_action") == "blocked" for item in items),
+        "failed_count": sum(
+            item.get("scheduler_action") in {"failed", "failed_before_http"}
+            for item in items
+        ),
+    })
+    state["latest_orchestration_invocation"] = invocation
+    _save_state(state)
+    append_workflow_event(
+        state["project_code"],
+        state["product_id"],
+        "orchestration_invocation_completed",
+        orchestration_invocation_id=invocation["orchestration_invocation_id"],
+        trigger_scope=invocation["trigger_scope"],
+        candidate_count=invocation["candidate_count"],
+        triggered_count=invocation["triggered_count"],
+        skipped_count=invocation["skipped_count"],
+        blocked_count=invocation["blocked_count"],
+        failed_count=invocation["failed_count"],
+    )
+    return invocation
+
+
+def _revision_statuses(
+    reconciliation: Mapping[str, Any],
+    groups: Mapping[str, str],
+    id_field: str,
+) -> Dict[str, Dict[str, Any]]:
+    return {
+        str(item[id_field]): {**item, "status": status}
+        for key, status in groups.items()
+        for item in reconciliation.get(key) or []
+        if item.get(id_field)
+    }
+
+
+def _historical_trigger_result(previous: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    history = list(previous.get("trigger_history") or [])
+    old_result = previous.get("trigger_result")
+    if old_result and not history:
+        history.append({
+            "status": "historical_trigger_result",
+            "trigger_run_id": previous.get("trigger_run_id") or previous.get("correlation_id"),
+            "conversation_key": previous.get("conversation_key"),
+            "trigger_result": old_result,
+            "conversation_url": (
+                (old_result.get("response") or {}).get("conversation_url")
+                if isinstance(old_result, Mapping)
+                and isinstance(old_result.get("response"), Mapping)
+                else None
+            ),
+        })
+    return history
+
+
+def _conversation_url(trigger_result: Mapping[str, Any]) -> Optional[str]:
+    response = trigger_result.get("response")
+    return response.get("conversation_url") if isinstance(response, Mapping) else None
+
+
+def _derive_revision_aware_status(state: Dict[str, Any]) -> Dict[str, Any]:
+    bom_status = str((state.get("bom") or {}).get("status") or "missing")
+    if bom_status != "received":
+        bom_summary = "trigger_pending" if bom_status in {
+            "trigger_request_sending", "trigger_request_accepted",
+            "awaiting_bom_callback", "triggered",
+        } else "blocked" if "blocked" in bom_status or "failed" in bom_status else "missing"
+        state.update({
+            "bom_status": bom_summary,
+            "component_status": "pending",
+            "most_status": "not_ready",
+            "workflow_status": "awaiting_bom" if bom_summary == "trigger_pending" else "bom_required",
+        })
+        return state
+
+    state["bom_status"] = "received"
+    try:
+        normalized_bom = _load_normalized_bom(state["project_code"], state["product_id"])
+    except Exception:
+        normalized_bom = {}
+    required_components = [
+        item["component_id"] for item in _required_external_components(normalized_bom)
+    ] if normalized_bom else []
+    component_reconciliation = technical_revisions.reconcile_component_outputs(
+        normalized_bom,
+        state,
+        lambda item_id: _read_json(
+            _normalized_component_output_path(state["project_code"], state["product_id"], item_id),
+            None,
+        ),
+    ) if normalized_bom else {
+        "valid_components": [], "missing_components": [], "stale_components": [],
+        "blocked_components": [], "legacy_unverified_components": [], "obsolete_components": [],
+    }
+    state["component_revision_reconciliation"] = component_reconciliation
+    component_statuses = _revision_statuses(component_reconciliation, {
+        "valid_components": "valid",
+        "missing_components": "missing",
+        "stale_components": "stale",
+        "blocked_components": "blocked",
+        "legacy_unverified_components": "legacy_unverified",
+        "obsolete_components": "obsolete_for_current_revision",
+    }, "component_id")
+    for item_id, revision in component_statuses.items():
+        if item_id in (state.get("components") or {}):
+            state["components"][item_id]["revision_status"] = revision["status"]
+            state["components"][item_id]["revision_status_reason"] = revision.get("status_reason")
+    valid_components = {item["component_id"] for item in component_reconciliation.get("valid_components") or []}
+    stale_components = {item["component_id"] for item in component_reconciliation.get("stale_components") or []}
+    blocked_components = {item["component_id"] for item in component_reconciliation.get("blocked_components") or []}
+    active_component_ids = {
+        item_id for item_id in required_components
+        if str(((state.get("components") or {}).get(item_id) or {}).get("status") or "") in {
+            "trigger_request_sending", "trigger_request_accepted", "awaiting_component_callback", "triggered",
+        }
+    }
+    if not required_components:
+        component_summary = "not_required"
+    elif blocked_components:
+        component_summary = "blocked"
+    elif set(required_components) <= valid_components:
+        component_summary = "received"
+    elif active_component_ids:
+        component_summary = "partially_received" if valid_components else "pending"
+    elif stale_components:
+        component_summary = "stale"
+    elif valid_components:
+        component_summary = "partially_received"
+    else:
+        component_summary = "pending"
+    state["component_status"] = component_summary
+
+    process = state.get("process_decomposition") or {}
+    required_most = technical_revisions.required_work_package_ids(process)
+    most_reconciliation = technical_revisions.reconcile_most_outputs(
+        process,
+        state,
+        lambda item_id: _read_json(
+            _normalized_most_output_path(state["project_code"], state["product_id"], item_id),
+            None,
+        ),
+    ) if process else {
+        "valid_work_packages": [], "missing_work_packages": [], "stale_work_packages": [],
+        "blocked_work_packages": [], "legacy_unverified_work_packages": [],
+        "received_not_normalized_work_packages": [], "obsolete_work_packages": [],
+    }
+    state["most_revision_reconciliation"] = most_reconciliation
+    most_statuses = _revision_statuses(most_reconciliation, {
+        "valid_work_packages": "valid",
+        "missing_work_packages": "missing",
+        "stale_work_packages": "stale",
+        "blocked_work_packages": "blocked",
+        "legacy_unverified_work_packages": "legacy_unverified",
+        "received_not_normalized_work_packages": "received_not_normalized",
+        "obsolete_work_packages": "obsolete_for_current_revision",
+    }, "work_package_id")
+    for item_id, revision in most_statuses.items():
+        if item_id in (state.get("most") or {}):
+            state["most"][item_id]["revision_status"] = revision["status"]
+            state["most"][item_id]["revision_status_reason"] = revision.get("status_reason")
+    valid_most = {item["work_package_id"] for item in most_reconciliation.get("valid_work_packages") or []}
+    stale_most = {item["work_package_id"] for item in most_reconciliation.get("stale_work_packages") or []}
+    blocked_most = {item["work_package_id"] for item in most_reconciliation.get("blocked_work_packages") or []}
+    active_most = {
+        item_id for item_id in required_most
+        if str(((state.get("most") or {}).get(item_id) or {}).get("status") or "") in {
+            "trigger_request_sending", "trigger_request_accepted", "awaiting_most_callback", "triggered",
+        }
+    }
+    if process.get("status") == "blocked":
+        most_summary = "blocked"
+    elif component_summary not in {"received", "not_required"}:
+        most_summary = "stale" if stale_most else "not_ready"
+    elif not required_most:
+        most_summary = "not_ready"
+    elif blocked_most:
+        most_summary = "blocked"
+    elif set(required_most) <= valid_most:
+        most_summary = "received"
+    elif active_most:
+        most_summary = "partially_received" if valid_most else "pending"
+    elif stale_most:
+        most_summary = "stale"
+    elif valid_most:
+        most_summary = "partially_received"
+    else:
+        most_summary = "pending"
+    state["most_status"] = most_summary
+
+    if component_summary == "blocked" or most_summary == "blocked":
+        workflow_summary = "blocked"
+    elif component_summary not in {"received", "not_required"}:
+        workflow_summary = "awaiting_components" if active_component_ids else "component_costing_required"
+    elif most_summary != "received":
+        workflow_summary = "awaiting_most" if active_most else "most_required"
+    else:
+        workflow_summary = "ready_for_calculation"
+    state["workflow_status"] = workflow_summary
+    state["current_revision_status"] = {
+        "bom": state["bom_status"],
+        "components": component_summary,
+        "most": most_summary,
+        "workflow": workflow_summary,
+    }
+    return state
+
+
+def _update_invocation_callback(
+    state: Dict[str, Any],
+    *,
+    item_type: str,
+    item_id: str,
+    trigger_run_id: Optional[str],
+    callback_status: str,
+) -> None:
+    if not trigger_run_id:
+        return
+    for invocation in reversed(state.get("orchestration_invocations") or []):
+        for item in invocation.get("items") or []:
+            if (
+                item.get("item_type") == item_type
+                and item.get("item_id") == item_id
+                and item.get("trigger_run_id") == trigger_run_id
+            ):
+                item["callback_status"] = callback_status
+                item["callback_updated_at"] = _now_iso()
+                return
+
+
+def _apply_agent_callback_timeouts(state: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    for item_type, entries in (
+        ("component", state.get("components") or {}),
+        ("most", state.get("most") or {}),
+    ):
+        for item_id, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            attempt = dict(entry.get("latest_trigger_attempt") or {})
+            if attempt.get("final_outcome") != "waiting_for_callback":
+                continue
+            deadline = _parse_iso_datetime(attempt.get("callback_deadline"))
+            if deadline is None or now < deadline:
+                continue
+            attempt.update({
+                "callback_status": "callback_timeout",
+                "final_outcome": "callback_timeout",
+                "timed_out_at": _now_iso(),
+            })
+            history = list(entry.get("trigger_history") or [])
+            if history:
+                history[-1] = dict(attempt)
+            else:
+                history.append(dict(attempt))
+            entry.update({
+                "latest_trigger_attempt": attempt,
+                "trigger_history": history,
+                "lifecycle_status": "callback_timeout",
+                "retryable": True,
+            })
+            _update_invocation_callback(
+                state,
+                item_type=item_type,
+                item_id=str(item_id),
+                trigger_run_id=attempt.get("trigger_run_id"),
+                callback_status="callback_timeout",
+            )
+    return state
+
+
 def _is_resolved_bom_trigger_error(error: Any) -> bool:
     if not isinstance(error, dict) or error.get("stage") != "bom":
         return False
@@ -825,28 +1189,33 @@ def get_workflow_state(project_code: str, product_id: str) -> Dict[str, Any]:
         )
     if (state.get("bom") or {}).get("status") != "received":
         state["missing_outputs"] = ["bom"]
-    most_semantics_before = json.dumps(
+    revision_semantics_before = json.dumps(
         {
-            "status": state.get("status"),
-            "current_step": state.get("current_step"),
-            "missing_outputs": state.get("missing_outputs"),
-            "most": state.get("most"),
+            "workflow_status": state.get("workflow_status"),
+            "bom_status": state.get("bom_status"),
+            "component_status": state.get("component_status"),
+            "most_status": state.get("most_status"),
+            "component_revision_reconciliation": state.get("component_revision_reconciliation"),
+            "most_revision_reconciliation": state.get("most_revision_reconciliation"),
         },
         sort_keys=True,
         default=str,
     )
-    _apply_most_received_precedence(state)
-    most_semantics_after = json.dumps(
+    _apply_agent_callback_timeouts(state)
+    _derive_revision_aware_status(state)
+    revision_semantics_after = json.dumps(
         {
-            "status": state.get("status"),
-            "current_step": state.get("current_step"),
-            "missing_outputs": state.get("missing_outputs"),
-            "most": state.get("most"),
+            "workflow_status": state.get("workflow_status"),
+            "bom_status": state.get("bom_status"),
+            "component_status": state.get("component_status"),
+            "most_status": state.get("most_status"),
+            "component_revision_reconciliation": state.get("component_revision_reconciliation"),
+            "most_revision_reconciliation": state.get("most_revision_reconciliation"),
         },
         sort_keys=True,
         default=str,
     )
-    if most_semantics_after != most_semantics_before:
+    if revision_semantics_after != revision_semantics_before:
         _save_state(state)
     state["canonical_data_root"] = path_diagnostics["resolved_data_root"]
     state["canonical_workflow_state_path"] = path_diagnostics["resolved_workflow_state_path"]
@@ -4739,19 +5108,61 @@ def trigger_next_component_costing(
     dry_run: bool = False,
     force: bool = False,
     include_unconfirmed: bool = False,
+    requested_by: str = "system",
 ) -> Dict[str, Any]:
     state, _ = _existing_state(project_code, product_id)
     if state is None:
         raise ValueError("Workflow state not found. Start the workflow before triggering components.")
+    invocation = _begin_orchestration_invocation(
+        state,
+        trigger_scope="component",
+        requested_by=requested_by,
+        force=force,
+    )
     if (state.get("bom") or {}).get("status") != "received":
+        _append_invocation_item(
+            invocation,
+            item_type="component_stage",
+            item_id="component_costing",
+            revision_status="not_ready",
+            eligibility_decision="blocked",
+            decision_reason="bom_output_not_received",
+            scheduler_action="blocked",
+        )
+        _finalize_orchestration_invocation(state, invocation)
         raise ValueError("BOM output must be received before triggering component costing.")
     normalized_bom = _load_normalized_bom(project_code, product_id)
+    invocation["source_bom_revision"] = normalized_bom.get("technical_revision")
+    invocation["source_process_revision"] = (
+        (state.get("process_decomposition") or {}).get("technical_revision")
+    )
     state["customer_input_validation"] = _refresh_resolved_customer_context(state)
     state["master_data_refresh"] = _refresh_master_data_for_state(state)
     validation = _component_validation_response(state)
     if validation:
-        _save_state(state)
-        return {**validation, "project_code": project_code, "product_id": product_id, "state": state}
+        _append_invocation_item(
+            invocation,
+            item_type="component_stage",
+            item_id="component_costing",
+            revision_status="not_evaluated",
+            eligibility_decision="blocked",
+            decision_reason=str(validation.get("message") or validation.get("status") or "input_validation_failed"),
+            scheduler_action="blocked",
+        )
+        _finalize_orchestration_invocation(state, invocation)
+        return {
+            **validation,
+            "orchestration_invocation_id": invocation["orchestration_invocation_id"],
+            "requested_scope": "component",
+            "candidate_count": invocation["candidate_count"],
+            "triggered_count": invocation["triggered_count"],
+            "skipped_count": invocation["skipped_count"],
+            "failed_count": invocation["failed_count"],
+            "items": invocation["items"],
+            "project_code": project_code,
+            "product_id": product_id,
+            "state": state,
+        }
 
     required = _required_external_components(normalized_bom, include_unconfirmed=include_unconfirmed)
     state.setdefault("components", {})
@@ -4783,6 +5194,14 @@ def trigger_next_component_costing(
     never_trigger_component_ids = set(
         component_scheduler_policy["never_trigger_ids"]
     )
+    revision_by_id = _revision_statuses(component_reconciliation, {
+        "valid_components": "valid",
+        "missing_components": "missing",
+        "stale_components": "stale",
+        "blocked_components": "blocked",
+        "legacy_unverified_components": "legacy_unverified",
+        "obsolete_components": "obsolete_for_current_revision",
+    }, "component_id")
     status_before = state.get("status")
     append_workflow_event(
         project_code, product_id, "component_batch_trigger_requested",
@@ -4803,36 +5222,103 @@ def trigger_next_component_costing(
                 "requires_regeneration": True,
             }
         if not force and component_id in legacy_component_ids:
-            skipped.append({
+            decision = {
                 "component_id": component_id,
                 "status": "legacy_unverified",
                 "reason": "compatibility_validation_or_explicit_regeneration_required",
-            })
+            }
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="component", item_id=component_id,
+                revision_status="legacy_unverified", eligibility_decision="not_eligible",
+                decision_reason=decision["reason"], scheduler_action="skipped",
+            )
             continue
         if not force and component_id in never_trigger_component_ids:
-            skipped.append({
+            revision_status = (revision_by_id.get(component_id) or {}).get("status") or "blocked"
+            decision = {
                 "component_id": component_id,
                 "status": previous.get("status"),
                 "reason": "revision_status_not_triggerable",
-            })
+            }
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="component", item_id=component_id,
+                revision_status=revision_status, eligibility_decision="not_eligible",
+                decision_reason=decision["reason"], scheduler_action="blocked",
+            )
             continue
         if (
             not force
-            and previous.get("status") == "triggered"
+            and previous.get("status") in {
+                "trigger_request_sending",
+                "trigger_request_accepted",
+                "awaiting_component_callback",
+                "triggered",
+            }
             and not requires_regeneration
         ):
-            skipped.append({"component_id": component_id, "status": previous.get("status"), "reason": "active_trigger_exists"})
+            decision = {"component_id": component_id, "status": previous.get("status"), "reason": "active_trigger_exists"}
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="component", item_id=component_id,
+                revision_status=(revision_by_id.get(component_id) or {}).get("status") or "missing",
+                eligibility_decision="not_eligible", decision_reason=decision["reason"],
+                scheduler_action="skipped",
+            )
             continue
         if (
             not force
             and component_id not in schedulable_component_ids
         ):
-            skipped.append({"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"})
+            decision = {"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"}
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="component", item_id=component_id,
+                revision_status=(revision_by_id.get(component_id) or {}).get("status") or "valid",
+                eligibility_decision="reuse", decision_reason=decision["reason"],
+                scheduler_action="skipped",
+            )
             continue
         correlation_id = str(uuid.uuid4())
         payload = _component_trigger_payload(state, component)
         payload["trigger_run_id"] = correlation_id
         conversation_key = f"{project_code}:{product_id}:component:{component_id}:v1"
+        requested_at = _now_iso()
+        attempt = {
+            "trigger_run_id": correlation_id,
+            "requested_at": requested_at,
+            "source_component_input_revision": (
+                component.get("technical_revision")
+                or technical_revisions.component_input_revision(component)
+            ),
+            "request_correlation_id": correlation_id,
+            "conversation_key": conversation_key,
+            "http_request_attempted": False,
+            "http_status": None,
+            "conversation_url": None,
+            "conversation_url_verified": False,
+            "callback_deadline": _callback_deadline(requested_at),
+            "callback_status": "not_requested",
+            "final_outcome": "trigger_request_sending",
+        }
+        history = _historical_trigger_result(previous)
+        history.append(dict(attempt))
+        state["components"][component_id] = {
+            **previous,
+            "status": "trigger_request_sending",
+            "lifecycle_status": "trigger_request_sending",
+            "component_id": component_id,
+            "trigger_result": None,
+            "trigger_run_id": correlation_id,
+            "conversation_key": conversation_key,
+            "latest_trigger_attempt": dict(attempt),
+            "trigger_history": history,
+            "latest_successful_output": previous.get("latest_successful_output"),
+            "source_bom_revision": normalized_bom.get("technical_revision"),
+            "source_component_revision": attempt["source_component_input_revision"],
+        }
+        _save_state(state)
         append_workflow_event(
             project_code, product_id, "component_trigger_requested",
             component_id=component_id,
@@ -4840,21 +5326,57 @@ def trigger_next_component_costing(
             status_before=previous.get("status"),
             save_path=payload["save_address"],
         )
-        trigger_result = _trigger(
-            "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID",
-            "External Component Costing Agent",
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
-            conversation_key,
-            correlation_id,
-            dry_run=dry_run,
-        )
+        try:
+            trigger_result = _trigger(
+                "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID",
+                "External Component Costing Agent",
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                conversation_key,
+                correlation_id,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            attempt.update({
+                "http_request_attempted": False,
+                "callback_status": "not_requested",
+                "final_outcome": "failed_before_http",
+                "error": str(exc),
+            })
+            state["components"][component_id].update({
+                "status": "failed",
+                "lifecycle_status": "failed_before_http",
+                "latest_trigger_attempt": dict(attempt),
+                "trigger_history": [*history[:-1], dict(attempt)],
+            })
+            _save_state(state)
+            summary = {"component_id": component_id, "status": "failed_before_http", "correlation_id": correlation_id}
+            failed.append(summary)
+            _append_invocation_item(
+                invocation, item_type="component", item_id=component_id,
+                revision_status=(revision_by_id.get(component_id) or {}).get("status") or "missing",
+                eligibility_decision="eligible", decision_reason="revision_requires_trigger",
+                scheduler_action="failed_before_http", trigger_run_id=correlation_id,
+                conversation_key=conversation_key, http_request_attempted=False,
+                request_correlation_id=correlation_id,
+            )
+            continue
         conversation_key = (
             trigger_result.get("conversation_key") or conversation_key
         )
         accepted = trigger_result.get("status") in {"accepted", "dry_run"}
+        attempt.update({
+            "http_request_attempted": True,
+            "http_status": trigger_result.get("http_status"),
+            "openai_request_id": trigger_result.get("request_correlation_id"),
+            "conversation_url": _conversation_url(trigger_result),
+            "conversation_url_verified": bool(trigger_result.get("conversation_url_verified")),
+            "callback_status": "waiting_for_callback" if accepted else "not_requested",
+            "final_outcome": "waiting_for_callback" if accepted else "trigger_request_failed",
+        })
         entry = {
             **previous,
-            "status": "triggered" if accepted else "failed",
+            "status": "trigger_request_accepted" if accepted else "failed",
+            "lifecycle_status": "awaiting_component_callback" if accepted else "trigger_request_failed",
             "component_id": component_id,
             "component_name": component.get("component"),
             "component_family": component.get("external_component_type") or component.get("category"),
@@ -4871,6 +5393,9 @@ def trigger_next_component_costing(
                 "component_id": component_id,
             },
             "trigger_result": trigger_result,
+            "latest_trigger_attempt": dict(attempt),
+            "trigger_history": [*history[:-1], dict(attempt)],
+            "latest_successful_output": previous.get("latest_successful_output"),
             "save_path": payload["save_address"],
             "normalized_path": _relative(_normalized_component_output_path(project_code, product_id, component_id)),
             "received_at": previous.get("received_at") if not force else None,
@@ -4890,6 +5415,8 @@ def trigger_next_component_costing(
             "conversation_url": (trigger_result.get("response") or {}).get("conversation_url")
             if isinstance(trigger_result.get("response"), dict) else None,
             "correlation_id": correlation_id,
+            "trigger_run_id": correlation_id,
+            "callback_status": attempt["callback_status"],
         }
         if accepted:
             triggered.append(summary)
@@ -4897,6 +5424,23 @@ def trigger_next_component_costing(
         else:
             failed.append(summary)
             append_workflow_event(project_code, product_id, "component_trigger_failed", component_id=component_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="failed", http_status=trigger_result.get("http_status"))
+        _append_invocation_item(
+            invocation,
+            item_type="component",
+            item_id=component_id,
+            revision_status=(revision_by_id.get(component_id) or {}).get("status") or "missing",
+            eligibility_decision="eligible",
+            decision_reason="revision_requires_trigger",
+            scheduler_action="triggered" if accepted else "failed",
+            trigger_run_id=correlation_id,
+            conversation_key=conversation_key,
+            http_request_attempted=True,
+            http_status=trigger_result.get("http_status"),
+            request_correlation_id=trigger_result.get("request_correlation_id") or correlation_id,
+            conversation_url=attempt.get("conversation_url"),
+            conversation_url_verified=attempt.get("conversation_url_verified"),
+            callback_status=attempt["callback_status"],
+        )
 
     required_ids = [item["component_id"] for item in required]
     state["required_external_component_ids"] = required_ids
@@ -4908,11 +5452,19 @@ def trigger_next_component_costing(
     if triggered:
         state["status"] = "components_triggered"
         state["current_step"] = "Step 2 External Component Costing Agent"
-    _save_state(state)
+    _derive_revision_aware_status(state)
+    _finalize_orchestration_invocation(state, invocation)
     return {
         "status": "component_agents_triggered" if triggered else ("component_agents_failed" if failed else "no_components_triggered"),
         "project_code": project_code,
         "product_id": product_id,
+        "orchestration_invocation_id": invocation["orchestration_invocation_id"],
+        "requested_scope": "component",
+        "candidate_count": invocation["candidate_count"],
+        "triggered_count": invocation["triggered_count"],
+        "skipped_count": invocation["skipped_count"],
+        "failed_count": invocation["failed_count"],
+        "items": invocation["items"],
         "triggered_components": triggered,
         "skipped_components": skipped,
         "failed_components": failed,
@@ -5105,6 +5657,26 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
         _write_json(normalized_path, normalized)
         state.setdefault("components", {})
         existing = state["components"].get(component_id, {})
+        latest_attempt = dict(existing.get("latest_trigger_attempt") or {})
+        if latest_attempt:
+            latest_attempt.update({
+                "callback_status": "received",
+                "callback_received_at": _now_iso(),
+                "final_outcome": "received",
+            })
+        trigger_history = list(existing.get("trigger_history") or [])
+        if latest_attempt:
+            if trigger_history:
+                trigger_history[-1] = dict(latest_attempt)
+            else:
+                trigger_history.append(dict(latest_attempt))
+            _update_invocation_callback(
+                state,
+                item_type="component",
+                item_id=component_id,
+                trigger_run_id=latest_attempt.get("trigger_run_id"),
+                callback_status="received",
+            )
         pricing_completeness = normalized.get("pricing_completeness") or {}
         requires_regeneration = pricing_completeness.get("requires_regeneration") is True
         state["components"][component_id] = {
@@ -5121,6 +5693,15 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
             "source_bom_revision": normalized.get("source_bom_revision"),
             "source_component_revision": normalized.get("source_component_revision"),
             "output_revision": normalized.get("technical_revision"),
+            "latest_trigger_attempt": latest_attempt or existing.get("latest_trigger_attempt"),
+            "trigger_history": trigger_history,
+            "latest_successful_output": {
+                "received_at": _now_iso(),
+                "source_bom_revision": normalized.get("source_bom_revision"),
+                "source_component_revision": normalized.get("source_component_revision"),
+                "output_revision": normalized.get("technical_revision"),
+                "normalized_path": _relative(normalized_path),
+            },
         }
         _archive_technical_revision(
             project_code,
@@ -5160,6 +5741,7 @@ def save_component_output(project_code: str, product_id: str, component_id: str,
         elif state.get("status") not in {"components_triggered", "components_received"}:
             state["status"] = "components_triggered"
             state["current_step"] = "Step 2 External Component Costing Agent"
+        _derive_revision_aware_status(state)
         _save_state(state)
         append_workflow_event(project_code, product_id, "save_component_output_completed", component_id=component_id, correlation_id=correlation_id, status_before=status_before, status_after=state.get("status"), raw_path=_relative(raw_path), normalized_path=_relative(normalized_path))
         if not remaining:
@@ -5378,13 +5960,26 @@ def trigger_most_operations(
     force: bool = False,
     only_work_package_id: Optional[str] = None,
     active_trigger_run_id: Optional[str] = None,
+    requested_by: str = "system",
 ) -> Dict[str, Any]:
     product_id = str(product_id)
     state, _ = _existing_state(project_code, product_id)
     if state is None:
         raise ValueError("Workflow state not found. Start the workflow before triggering MOST.")
     state["product_id"] = product_id
+    invocation = _begin_orchestration_invocation(
+        state,
+        trigger_scope="most",
+        requested_by=requested_by,
+        force=force,
+    )
     if (state.get("bom") or {}).get("status") != "received":
+        _append_invocation_item(
+            invocation, item_type="most_stage", item_id="most",
+            revision_status="not_ready", eligibility_decision="blocked",
+            decision_reason="bom_output_not_received", scheduler_action="blocked",
+        )
+        _finalize_orchestration_invocation(state, invocation)
         raise ValueError("BOM output must be received before triggering MOST.")
     normalized_bom = _load_normalized_bom(project_code, product_id)
     required_component_ids = list(state.get("required_external_component_ids") or [
@@ -5395,9 +5990,22 @@ def trigger_most_operations(
         if (state.get("components", {}).get(item) or {}).get("status") != "received"
     ]
     if missing_components:
+        _append_invocation_item(
+            invocation, item_type="most_stage", item_id="most",
+            revision_status="not_ready", eligibility_decision="blocked",
+            decision_reason=f"current_component_outputs_missing:{','.join(missing_components)}",
+            scheduler_action="blocked",
+        )
+        _finalize_orchestration_invocation(state, invocation)
         raise ValueError(f"Component outputs must be received before MOST: {', '.join(missing_components)}")
     customer_input = state.get("customer_input") or {}
     if customer_input.get("annual_quantity") in [None, "", 0]:
+        _append_invocation_item(
+            invocation, item_type="most_stage", item_id="most",
+            revision_status="not_ready", eligibility_decision="blocked",
+            decision_reason="annual_quantity_missing", scheduler_action="blocked",
+        )
+        _finalize_orchestration_invocation(state, invocation)
         raise ValueError("MOST/component-operation planning needs annual_quantity before operations can be triggered.")
     process = build_most_process_decomposition(state, normalized_bom)
     source_bom_revision = (
@@ -5407,6 +6015,8 @@ def trigger_most_operations(
     process = technical_revisions.attach_process_revisions(
         process, source_bom_revision, normalized_bom
     )
+    invocation["source_bom_revision"] = source_bom_revision
+    invocation["source_process_revision"] = process.get("technical_revision")
     eligible_operations = [
         item for item in process.get("operations") or []
         if item.get("status") == "confirmed"
@@ -5454,6 +6064,15 @@ def trigger_most_operations(
         most_scheduler_policy["explicit_validation_or_regeneration_ids"]
     )
     never_trigger_ids = set(most_scheduler_policy["never_trigger_ids"])
+    revision_by_id = _revision_statuses(most_reconciliation, {
+        "valid_work_packages": "valid",
+        "missing_work_packages": "missing",
+        "stale_work_packages": "stale",
+        "blocked_work_packages": "blocked",
+        "legacy_unverified_work_packages": "legacy_unverified",
+        "received_not_normalized_work_packages": "received_not_normalized",
+        "obsolete_work_packages": "obsolete_for_current_revision",
+    }, "work_package_id")
 
     if process.get("status") == "blocked":
         blocking_reason = process.get("blocked_reason") or "no_confirmed_operations"
@@ -5473,7 +6092,15 @@ def trigger_most_operations(
             f"most:{item}" for item in state["required_most_work_package_ids"]
             if (state["most"].get(item) or {}).get("status") != "received"
         ]
-        _save_state(state)
+        for work_package in process.get("work_packages") or []:
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package.get("work_package_id") or "unknown",
+                revision_status=(revision_by_id.get(work_package.get("work_package_id")) or {}).get("status") or "blocked",
+                eligibility_decision="blocked", decision_reason=blocking_reason,
+                scheduler_action="blocked",
+            )
+        _derive_revision_aware_status(state)
+        _finalize_orchestration_invocation(state, invocation)
         logger.warning(
             "trigger_most_operations blocked for %s/%s: blocked_reason=%s missing_inputs=%s",
             project_code, product_id, process.get("blocked_reason"), process.get("missing_inputs"),
@@ -5489,6 +6116,13 @@ def trigger_most_operations(
             "missing_inputs": process.get("missing_inputs") or [],
             "project_code": project_code,
             "product_id": product_id,
+            "orchestration_invocation_id": invocation["orchestration_invocation_id"],
+            "requested_scope": "most",
+            "candidate_count": invocation["candidate_count"],
+            "triggered_count": invocation["triggered_count"],
+            "skipped_count": invocation["skipped_count"],
+            "failed_count": invocation["failed_count"],
+            "items": invocation["items"],
             "triggered_work_packages": [],
             "skipped_work_packages": [],
             "failed_work_packages": [],
@@ -5540,46 +6174,92 @@ def trigger_most_operations(
                 "status": "blocked",
             }
             skipped.append({"work_package_id": work_package_id, "status": "blocked", "reason": work_package.get("blocking_reason")})
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package_id,
+                revision_status="blocked", eligibility_decision="blocked",
+                decision_reason=work_package.get("blocking_reason") or "work_package_blocked",
+                scheduler_action="blocked",
+            )
             continue
         if not force and work_package_id in legacy_or_unverified_ids:
-            skipped.append({
+            decision = {
                 "work_package_id": work_package_id,
                 "status": "legacy_unverified",
                 "reason": "compatibility_validation_or_explicit_regeneration_required",
-            })
+            }
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package_id,
+                revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "legacy_unverified",
+                eligibility_decision="not_eligible", decision_reason=decision["reason"],
+                scheduler_action="skipped",
+            )
             continue
         if not force and work_package_id in never_trigger_ids:
-            skipped.append({
+            decision = {
                 "work_package_id": work_package_id,
                 "status": previous.get("status"),
                 "reason": "revision_status_not_triggerable",
-            })
+            }
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package_id,
+                revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "blocked",
+                eligibility_decision="not_eligible", decision_reason=decision["reason"],
+                scheduler_action="blocked",
+            )
             continue
         if not force and work_package_id not in schedulable_ids:
-            skipped.append({
+            decision = {
                 "work_package_id": work_package_id,
                 "status": "valid",
                 "reason": "current_revision_output_valid",
-            })
+            }
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package_id,
+                revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "valid",
+                eligibility_decision="reuse", decision_reason=decision["reason"],
+                scheduler_action="skipped",
+            )
             continue
         if not force and previous.get("status") in {
             "trigger_request_sending",
             "trigger_request_accepted",
             "awaiting_most_callback",
             "triggered",
-            "received",
         }:
-            skipped.append({"work_package_id": work_package_id, "status": previous.get("status"), "reason": "already_processed"})
+            decision = {"work_package_id": work_package_id, "status": previous.get("status"), "reason": "already_processed"}
+            skipped.append(decision)
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package_id,
+                revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "missing",
+                eligibility_decision="not_eligible", decision_reason=decision["reason"],
+                scheduler_action="skipped",
+            )
             continue
         trigger_run_id = str(active_trigger_run_id or uuid.uuid4())
         correlation_id = str(uuid.uuid4())
         payload = _most_trigger_payload(state, work_package, trigger_run_id)
         conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
+        requested_at = _now_iso()
         sending_attempt = {
             "status": "trigger_request_sending",
-            "requested_at": _now_iso(),
+            "requested_at": requested_at,
             "trigger_run_id": trigger_run_id,
+            "source_work_package_revision": work_package.get("technical_revision"),
+            "request_correlation_id": correlation_id,
+            "conversation_key": conversation_key,
+            "http_request_attempted": False,
+            "http_status": None,
+            "conversation_url": None,
+            "conversation_url_verified": False,
+            "callback_deadline": _callback_deadline(requested_at),
+            "callback_status": "not_requested",
+            "final_outcome": "trigger_request_sending",
         }
+        history = _historical_trigger_result(previous)
+        history.append(dict(sending_attempt))
         state["most"][work_package_id] = {
             **previous,
             **work_package,
@@ -5589,6 +6269,10 @@ def trigger_most_operations(
             "conversation_key": conversation_key,
             "correlation_id": correlation_id,
             "trigger_payload": payload,
+            "trigger_result": None,
+            "latest_trigger_attempt": dict(sending_attempt),
+            "trigger_history": history,
+            "latest_successful_output": previous.get("latest_successful_output"),
             "trigger_attempts": [
                 *(previous.get("trigger_attempts") or []),
                 sending_attempt,
@@ -5615,14 +6299,45 @@ def trigger_most_operations(
         })
         _save_state(state)
         append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="trigger_request_sending", save_path=payload["save_address"])
-        trigger_result = _trigger(
-            "CHATGPT_MOST_AGENT_ID",
-            "MOST Assemblage",
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
-            conversation_key,
-            correlation_id,
-            dry_run=dry_run,
-        )
+        try:
+            trigger_result = _trigger(
+                "CHATGPT_MOST_AGENT_ID",
+                "MOST Assemblage",
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                conversation_key,
+                correlation_id,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            failed_attempt = {
+                **sending_attempt,
+                "status": "failed_before_http",
+                "callback_status": "not_requested",
+                "final_outcome": "failed_before_http",
+                "error": str(exc),
+            }
+            state["most"][work_package_id].update({
+                "status": "failed",
+                "lifecycle_status": "failed_before_http",
+                "latest_trigger_attempt": failed_attempt,
+                "trigger_history": [*history[:-1], failed_attempt],
+            })
+            _save_state(state)
+            failed.append({
+                "work_package_id": work_package_id,
+                "status": "failed_before_http",
+                "trigger_run_id": trigger_run_id,
+                "correlation_id": correlation_id,
+            })
+            _append_invocation_item(
+                invocation, item_type="most", item_id=work_package_id,
+                revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "missing",
+                eligibility_decision="eligible", decision_reason="revision_requires_trigger",
+                scheduler_action="failed_before_http", trigger_run_id=trigger_run_id,
+                conversation_key=conversation_key, http_request_attempted=False,
+                request_correlation_id=correlation_id,
+            )
+            continue
         conversation_key = (
             trigger_result.get("conversation_key") or conversation_key
         )
@@ -5633,6 +6348,14 @@ def trigger_most_operations(
             "trigger_run_id": trigger_run_id,
             "http_status": trigger_result.get("http_status"),
             "request_correlation_id": trigger_result.get("request_correlation_id"),
+            "source_work_package_revision": work_package.get("technical_revision"),
+            "conversation_key": conversation_key,
+            "http_request_attempted": True,
+            "conversation_url": _conversation_url(trigger_result),
+            "conversation_url_verified": bool(trigger_result.get("conversation_url_verified")),
+            "callback_deadline": sending_attempt["callback_deadline"],
+            "callback_status": "waiting_for_callback" if accepted else "not_requested",
+            "final_outcome": "waiting_for_callback" if accepted else "trigger_request_failed",
         }
         entry = {
             **previous,
@@ -5652,6 +6375,9 @@ def trigger_most_operations(
             },
             "trigger_payload": payload,
             "trigger_result": trigger_result,
+            "latest_trigger_attempt": dict(completed_attempt),
+            "trigger_history": [*history[:-1], dict(completed_attempt)],
+            "latest_successful_output": previous.get("latest_successful_output"),
             "trigger_attempts": [
                 *(previous.get("trigger_attempts") or []),
                 sending_attempt,
@@ -5673,6 +6399,18 @@ def trigger_most_operations(
         else:
             failed.append(summary)
             append_workflow_event(project_code, product_id, "most_trigger_failed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="failed", http_status=trigger_result.get("http_status"))
+        _append_invocation_item(
+            invocation, item_type="most", item_id=work_package_id,
+            revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "missing",
+            eligibility_decision="eligible", decision_reason="revision_requires_trigger",
+            scheduler_action="triggered" if accepted else "failed",
+            trigger_run_id=trigger_run_id, conversation_key=conversation_key,
+            http_request_attempted=True, http_status=trigger_result.get("http_status"),
+            request_correlation_id=trigger_result.get("request_correlation_id") or correlation_id,
+            conversation_url=completed_attempt.get("conversation_url"),
+            conversation_url_verified=completed_attempt.get("conversation_url_verified"),
+            callback_status=completed_attempt["callback_status"],
+        )
     required_ids = state["required_most_work_package_ids"]
     state["missing_outputs"] = [f"most:{item}" for item in required_ids if (state["most"].get(item) or {}).get("status") != "received"]
     awaiting_existing = any(
@@ -5680,10 +6418,11 @@ def trigger_most_operations(
         in {"trigger_request_sending", "trigger_request_accepted", "awaiting_most_callback", "triggered"}
         for item in required_ids
     )
-    all_received = bool(required_ids) and all(
-        (state["most"].get(item) or {}).get("status") == "received"
-        for item in required_ids
-    )
+    valid_work_package_ids = {
+        item["work_package_id"]
+        for item in most_reconciliation.get("valid_work_packages") or []
+    }
+    all_received = bool(required_ids) and set(required_ids) <= valid_work_package_ids
     if triggered:
         accepted_results = [
             (state["most"].get(summary["work_package_id"]) or {}).get("trigger_result")
@@ -5758,7 +6497,8 @@ def trigger_most_operations(
             "status": "most_received",
             "lifecycle_status": "most_received",
         })
-    _save_state(state)
+    _derive_revision_aware_status(state)
+    _finalize_orchestration_invocation(state, invocation)
     if triggered:
         success, reason = True, None
     elif failed:
@@ -5792,6 +6532,13 @@ def trigger_most_operations(
         "reason": reason,
         "project_code": project_code,
         "product_id": product_id,
+        "orchestration_invocation_id": invocation["orchestration_invocation_id"],
+        "requested_scope": "most",
+        "candidate_count": invocation["candidate_count"],
+        "triggered_count": invocation["triggered_count"],
+        "skipped_count": invocation["skipped_count"],
+        "failed_count": invocation["failed_count"],
+        "items": invocation["items"],
         "triggered_work_packages": triggered,
         "skipped_work_packages": skipped,
         "failed_work_packages": failed,
@@ -6134,6 +6881,26 @@ def save_most_output(
         )
         state.setdefault("most", {})
         existing = state["most"].get(work_package_id, {})
+        latest_attempt = dict(existing.get("latest_trigger_attempt") or {})
+        if latest_attempt:
+            latest_attempt.update({
+                "callback_status": "received",
+                "callback_received_at": _now_iso(),
+                "final_outcome": "received",
+            })
+        trigger_history = list(existing.get("trigger_history") or [])
+        if latest_attempt:
+            if trigger_history:
+                trigger_history[-1] = dict(latest_attempt)
+            else:
+                trigger_history.append(dict(latest_attempt))
+            _update_invocation_callback(
+                state,
+                item_type="most",
+                item_id=work_package_id,
+                trigger_run_id=received_trigger_run_id or expected_trigger_run_id,
+                callback_status="received",
+            )
         state["most"][work_package_id] = {
             **existing,
             **work_package,
@@ -6149,6 +6916,15 @@ def save_most_output(
             "source_process_revision": normalized.get("source_process_revision"),
             "source_work_package_revision": normalized.get("source_work_package_revision"),
             "output_revision": normalized.get("technical_revision"),
+            "latest_trigger_attempt": latest_attempt or existing.get("latest_trigger_attempt"),
+            "trigger_history": trigger_history,
+            "latest_successful_output": {
+                "received_at": _now_iso(),
+                "source_process_revision": normalized.get("source_process_revision"),
+                "source_work_package_revision": normalized.get("source_work_package_revision"),
+                "output_revision": normalized.get("technical_revision"),
+                "normalized_path": _relative(normalized_path),
+            },
         }
         required = list(state.get("required_most_work_package_ids") or process.get("required_work_package_ids") or [])
         most_reconciliation = technical_revisions.reconcile_most_outputs(
@@ -6190,6 +6966,7 @@ def save_most_output(
                 "status": "trigger_request_accepted",
                 "lifecycle_status": "awaiting_most_callback",
             })
+        _derive_revision_aware_status(state)
         _save_state(state)
         append_workflow_event(project_code, product_id, "save_most_output_completed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, status_after=state.get("status"), raw_path=_relative(raw_path), normalized_path=_relative(normalized_path))
         if not remaining:

@@ -74,6 +74,7 @@ class TriggerStageRequest(BaseModel):
     dry_run: bool = False
     force: bool = False
     include_unconfirmed: bool = False
+    requested_by: str = "api"
 
 
 class RetryBomRequest(BaseModel):
@@ -394,6 +395,7 @@ def trigger_components(request: TriggerStageRequest):
         dry_run=request.dry_run,
         force=request.force,
         include_unconfirmed=request.include_unconfirmed,
+        requested_by=request.requested_by,
     ))
 
 
@@ -424,6 +426,7 @@ def trigger_most(request: TriggerStageRequest):
         product_id=request.product_id,
         dry_run=request.dry_run,
         force=request.force,
+        requested_by=request.requested_by,
     ))
 
 
