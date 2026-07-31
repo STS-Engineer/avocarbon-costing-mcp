@@ -97,7 +97,7 @@ MOST_WRITEBACK_INSTRUCTION = (
 )
 
 COMPONENT_COSTING_INSTRUCTION = (
-    "Cost only this component. Return one complete JSON and call save_component_output. "
+    "Cost only this component. Return one complete JSON and call save_component_output exactly once. "
     "A usable recommended_offer must contain unit_price as a JSON number, currency, "
     "pricing_unit (pc, kg, g, or m), supplier_name, payment_days as a JSON number, "
     "incoterm, origin, origin_zone, and ap_value_basis explicitly set to "
@@ -5162,6 +5162,76 @@ def _component_trigger_payload(
     }
 
 
+def _component_source_revision_metadata(
+    state: Mapping[str, Any],
+    normalized_bom: Mapping[str, Any],
+    component: Mapping[str, Any],
+) -> Dict[str, Any]:
+    bom_state = state.get("bom") or {}
+    process = state.get("process_decomposition") or {}
+    technical = state.get("technical_revisions") or {}
+    drawing_snapshot = bom_state.get("drawing_input_snapshot") or {}
+    return {
+        "raw_bom_revision": (
+            normalized_bom.get("source_raw_bom_revision")
+            or technical.get("raw_bom")
+            or bom_state.get("raw_bom_revision")
+        ),
+        "normalized_bom_revision": (
+            normalized_bom.get("technical_revision")
+            or technical.get("normalized_bom")
+            or bom_state.get("normalized_bom_revision")
+        ),
+        "process_decomposition_revision": (
+            process.get("technical_revision")
+            or technical.get("process_decomposition")
+            or bom_state.get("process_decomposition_revision")
+        ),
+        "drawing_document_revision_hash": (
+            drawing_snapshot.get("document_revision_hash")
+            or drawing_snapshot.get("checksum_sha256")
+            or bom_state.get("drawing_document_revision_hash")
+        ),
+        "upstream_bom_trigger_run_id": (
+            bom_state.get("received_for_trigger_run_id")
+            or bom_state.get("trigger_run_id")
+        ),
+        "component_input_revision": (
+            component.get("technical_revision")
+            or technical_revisions.component_input_revision(component)
+        ),
+    }
+
+
+def _archive_previous_component_output(
+    project_code: str,
+    product_id: str,
+    component_id: str,
+    raw_output: Mapping[str, Any],
+    normalized_output: Mapping[str, Any],
+) -> Dict[str, Optional[str]]:
+    """Preserve the prior output before a current-revision regeneration."""
+    archive_paths: Dict[str, Optional[str]] = {"raw": None, "normalized": None}
+    for kind, payload in (("raw", raw_output), ("normalized", normalized_output)):
+        if not payload:
+            continue
+        revision = (
+            payload.get("technical_revision")
+            or payload.get("output_revision")
+            or hashlib.sha256(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+        )
+        archive_paths[kind] = _archive_technical_revision(
+            project_code,
+            product_id,
+            f"component_outputs_previous_{component_id}_{kind}",
+            revision,
+            dict(payload),
+        )
+    return archive_paths
+
+
 def _component_validation_response(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     customer_input = state.get("customer_input") or {}
     resolution = state.get("resolved_customer_context") or state.get("customer_input_resolution") or {}
@@ -5241,6 +5311,7 @@ def trigger_next_component_costing(
     force: bool = False,
     include_unconfirmed: bool = False,
     requested_by: str = "system",
+    explicit_regeneration: bool = False,
 ) -> Dict[str, Any]:
     state, _ = _existing_state(project_code, product_id)
     if state is None:
@@ -5343,8 +5414,14 @@ def trigger_next_component_costing(
     triggered, skipped, failed = [], [], []
     for component in required:
         component_id = component["component_id"]
+        explicitly_regenerable = (
+            explicit_regeneration and component_id in legacy_component_ids
+        )
         previous = state["components"].get(component_id) or {}
         saved_raw = _read_json(_component_output_path(project_code, product_id, component_id), {}) or {}
+        saved_normalized = _read_json(
+            _normalized_component_output_path(project_code, product_id, component_id), {}
+        ) or {}
         saved_price_incomplete = component_costing.component_offer_requires_regeneration(saved_raw) if saved_raw else False
         requires_regeneration = previous.get("requires_regeneration") is True or saved_price_incomplete
         if saved_price_incomplete:
@@ -5353,7 +5430,7 @@ def trigger_next_component_costing(
                 "costing_readiness": "incomplete",
                 "requires_regeneration": True,
             }
-        if not force and component_id in legacy_component_ids:
+        if not force and not explicit_regeneration and component_id in legacy_component_ids:
             decision = {
                 "component_id": component_id,
                 "status": "legacy_unverified",
@@ -5366,7 +5443,7 @@ def trigger_next_component_costing(
                 decision_reason=decision["reason"], scheduler_action="skipped",
             )
             continue
-        if not force and component_id in never_trigger_component_ids:
+        if component_id in never_trigger_component_ids:
             revision_status = (revision_by_id.get(component_id) or {}).get("status") or "blocked"
             decision = {
                 "component_id": component_id,
@@ -5402,6 +5479,7 @@ def trigger_next_component_costing(
         if (
             not force
             and component_id not in schedulable_component_ids
+            and not explicitly_regenerable
         ):
             decision = {"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"}
             skipped.append(decision)
@@ -5415,6 +5493,18 @@ def trigger_next_component_costing(
         correlation_id = str(uuid.uuid4())
         payload = _component_trigger_payload(state, component)
         payload["trigger_run_id"] = correlation_id
+        source_revision_metadata = _component_source_revision_metadata(
+            state, normalized_bom, component
+        )
+        payload.update(source_revision_metadata)
+        payload["source_revision_metadata"] = dict(source_revision_metadata)
+        previous_output_archive = _archive_previous_component_output(
+            project_code,
+            product_id,
+            component_id,
+            saved_raw,
+            saved_normalized,
+        )
         conversation_key = f"{project_code}:{product_id}:component:{component_id}:v1"
         requested_at = _now_iso()
         attempt = {
@@ -5424,6 +5514,7 @@ def trigger_next_component_costing(
                 component.get("technical_revision")
                 or technical_revisions.component_input_revision(component)
             ),
+            "source_revision_metadata": dict(source_revision_metadata),
             "request_correlation_id": correlation_id,
             "conversation_key": conversation_key,
             "http_request_attempted": False,
@@ -5449,6 +5540,8 @@ def trigger_next_component_costing(
             "latest_successful_output": previous.get("latest_successful_output"),
             "source_bom_revision": normalized_bom.get("technical_revision"),
             "source_component_revision": attempt["source_component_input_revision"],
+            "source_revision_metadata": dict(source_revision_metadata),
+            "previous_output_archive": previous_output_archive,
         }
         _save_state(state)
         append_workflow_event(
@@ -5538,6 +5631,8 @@ def trigger_next_component_costing(
                 component.get("technical_revision")
                 or technical_revisions.component_input_revision(component)
             ),
+            "source_revision_metadata": dict(source_revision_metadata),
+            "previous_output_archive": previous_output_archive,
         }
         state["components"][component_id] = entry
         summary = {
@@ -5698,6 +5793,17 @@ def normalize_component_output(
             pricing_missing.append("recommended_offer.pricing_unit")
     if pricing_missing:
         analysis_status = "blocked"
+    source_revision_metadata = _component_source_revision_metadata(
+        state,
+        {
+            "source_raw_bom_revision": (state.get("technical_revisions") or {}).get("raw_bom"),
+            "technical_revision": (
+                bom_component.get("source_bom_revision")
+                or (state.get("technical_revisions") or {}).get("normalized_bom")
+            ),
+        },
+        bom_component,
+    )
     normalized = {
         "schema_version": "1.0",
         "project_code": state["project_code"],
@@ -5749,6 +5855,13 @@ def normalize_component_output(
         "source_component_snapshot": technical_revisions.component_input_projection(
             bom_component
         ),
+        "source_revision_metadata": source_revision_metadata,
+        "raw_bom_revision": source_revision_metadata.get("raw_bom_revision"),
+        "normalized_bom_revision": source_revision_metadata.get("normalized_bom_revision"),
+        "process_decomposition_revision": source_revision_metadata.get("process_decomposition_revision"),
+        "drawing_document_revision_hash": source_revision_metadata.get("drawing_document_revision_hash"),
+        "upstream_bom_trigger_run_id": source_revision_metadata.get("upstream_bom_trigger_run_id"),
+        "component_input_revision": source_revision_metadata.get("component_input_revision"),
     }
     normalized["technical_revision"] = technical_revisions.output_revision(
         "component-output", normalized
@@ -5815,6 +5928,38 @@ def save_component_output(
         if bom_component.get("costing_route") != "external_component_costing_agent":
             raise ValueError(f"component_id {component_id} is not routed to external component costing.")
 
+        active_source_metadata = existing.get("source_revision_metadata") or {}
+        current_source_metadata = _component_source_revision_metadata(
+            state, normalized_bom, bom_component
+        )
+        revision_mismatches = {
+            key: {"expected": expected_value, "current": current_source_metadata.get(key)}
+            for key, expected_value in active_source_metadata.items()
+            if expected_value not in [None, ""]
+            and current_source_metadata.get(key) != expected_value
+        }
+        if revision_mismatches:
+            stale_callback = {
+                "received_at": _now_iso(),
+                "received_trigger_run_id": received_trigger_run_id,
+                "expected_trigger_run_id": expected_trigger_run_id,
+                "reason": "component_source_revision_changed",
+                "revision_mismatches": revision_mismatches,
+            }
+            existing.setdefault("stale_callback_history", []).append(stale_callback)
+            state.setdefault("components", {})[component_id] = existing
+            _save_state(state)
+            return {
+                "success": False,
+                "status": "stale_callback",
+                "error_code": "component_source_revision_changed",
+                "message": "Component callback inputs no longer match the active trigger revision.",
+                "project_code": project_code,
+                "product_id": str(product_id),
+                "component_id": component_id,
+                "revision_mismatches": revision_mismatches,
+            }
+
         raw_path = _component_output_path(project_code, product_id, component_id)
         normalized_path = _normalized_component_output_path(project_code, product_id, component_id)
         normalized = normalize_component_output(state, bom_component, raw_json)
@@ -5858,6 +6003,7 @@ def save_component_output(
             "requires_regeneration": requires_regeneration,
             "source_bom_revision": normalized.get("source_bom_revision"),
             "source_component_revision": normalized.get("source_component_revision"),
+            "source_revision_metadata": normalized.get("source_revision_metadata") or {},
             "output_revision": normalized.get("technical_revision"),
             "latest_trigger_attempt": latest_attempt or existing.get("latest_trigger_attempt"),
             "trigger_history": trigger_history,

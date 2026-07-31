@@ -404,6 +404,7 @@ def trigger_components(request: TriggerStageRequest):
         force=request.force,
         include_unconfirmed=request.include_unconfirmed,
         requested_by=request.requested_by,
+        explicit_regeneration=True,
     ))
 
 
