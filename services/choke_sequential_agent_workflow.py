@@ -5970,6 +5970,23 @@ def normalize_component_output(
         raw_json,
         target_currency=reporting_currency,
     )
+    delivered = component_costing.reconcile_delivered_unit_cost(
+        raw_json, reporting_currency,
+    )
+    purchasing_quantity = canonical.get("purchasing_quantity_per_product")
+    delivered_unit_cost = delivered.get("delivered_cost_per_pricing_unit")
+    delivered_material_cost = (
+        float(
+            Decimal(str(purchasing_quantity))
+            * Decimal(str(delivered_unit_cost))
+        )
+        if purchasing_quantity is not None
+        and delivered_unit_cost is not None
+        else None
+    )
+    capital_audit = (
+        delivered.get("adjustment_details") or {}
+    ).get("capital_cost") or {}
     normalized_offer.update(resolved_offer)
     normalized_offer.update({
         "unit_price": resolved_offer.get("unit_price"),
@@ -6061,6 +6078,33 @@ def normalize_component_output(
         "pricing_unit": canonical.get("pricing_unit"),
         "currency": canonical.get("currency"),
         "material_cost_per_piece": canonical.get("material_cost_per_piece"),
+        "delivered_material_unit_cost": delivered_unit_cost,
+        "delivered_material_unit_cost_basis": (
+            f"{delivered.get('delivered_cost_currency')}/"
+            f"{delivered.get('pricing_unit')}"
+            if delivered.get("delivered_cost_currency")
+            and delivered.get("pricing_unit")
+            else None
+        ),
+        "delivered_material_cost_per_piece": delivered_material_cost,
+        "delivered_cost_reconciliation": delivered,
+        "capital_cost": capital_audit.get("converted_value"),
+        "capital_cost_included_in_delivered_material": False,
+        "reconciliation_residual": delivered.get(
+            "reconciliation_difference"
+        ),
+        "logistics_adders_unresolved": bool(
+            delivered.get("excluded_adders")
+        ),
+        "delivered_cost_adjustments_unresolved": (
+            delivered.get("status") != "calculated"
+        ),
+        "costing_resolution_status": (
+            "resolved"
+            if canonical.get("status") == "calculated"
+            and delivered.get("status") == "calculated"
+            else "blocked"
+        ),
         "source_quantity": canonical.get("source_quantity"),
         "conversion": canonical.get("conversion"),
         "provisional_consumption": glue_consumption,
@@ -6332,6 +6376,188 @@ def get_component_output(project_code: str, product_id: str, component_id: str) 
         "normalized_component": _read_json(normalized_path, None),
         "paths": {"raw": _relative(raw_path), "normalized": _relative(normalized_path)},
     }
+
+
+def _json_artifact_bytes(payload: Any) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    ).encode("utf-8")
+
+
+def _artifact_metadata(path: Path) -> Dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {
+            "exists": False,
+            "path": _relative(path),
+            "sha256": None,
+            "modified_at": None,
+            "size": None,
+        }
+    stat = path.stat()
+    content = path.read_bytes()
+    return {
+        "exists": True,
+        "path": _relative(path),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "modified_at": datetime.fromtimestamp(
+            stat.st_mtime, timezone.utc
+        ).isoformat(),
+        "size": stat.st_size,
+    }
+
+
+def renormalize_component_output(
+    project_code: str,
+    product_id: str,
+    component_id: str,
+    *,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Rebuild one persisted normalized artifact without invoking an Agent."""
+    component_id = _safe_part(component_id, "component_id")
+    if component_id not in {"glue", "magnet_wire"}:
+        raise ValueError(
+            "Targeted re-normalization currently supports only glue and "
+            "magnet_wire."
+        )
+    state, _ = _existing_state(project_code, product_id)
+    if state is None:
+        raise ValueError("Workflow state not found.")
+    raw_path = _component_output_path(project_code, product_id, component_id)
+    normalized_path = _normalized_component_output_path(
+        project_code, product_id, component_id,
+    )
+    if not raw_path.exists():
+        raise FileNotFoundError(
+            f"Raw component output not found for {component_id}."
+        )
+    raw_before = _artifact_metadata(raw_path)
+    old_normalized = _read_json(normalized_path, None)
+    old_metadata = _artifact_metadata(normalized_path)
+    raw_json = _read_json(raw_path, None)
+    if not isinstance(raw_json, dict):
+        raise ValueError("Raw component output must contain one JSON object.")
+
+    normalized_bom = _load_normalized_bom(project_code, product_id)
+    bom_component = next((
+        item
+        for item in normalized_bom.get("components") or []
+        if item.get("component_id") == component_id
+    ), None)
+    if not bom_component:
+        raise ValueError(
+            f"component_id {component_id} is not present in the current BOM."
+        )
+    candidate = normalize_component_output(state, bom_component, raw_json)
+    candidate_bytes = _json_artifact_bytes(candidate)
+    candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+    changed = old_metadata.get("sha256") != candidate_sha256
+    result = {
+        "status": "dry_run" if dry_run else "applied",
+        "project_code": project_code,
+        "product_id": str(product_id),
+        "component_id": component_id,
+        "dry_run": dry_run,
+        "agent_triggered": False,
+        "raw_artifact": raw_before,
+        "old_normalized_artifact": old_metadata,
+        "new_normalized_artifact": {
+            "path": _relative(normalized_path),
+            "sha256": candidate_sha256,
+            "size": len(candidate_bytes),
+        },
+        "changed": changed,
+        "archive_path": None,
+        "normalized_preview": {
+            key: candidate.get(key)
+            for key in (
+                "technical_quantity",
+                "technical_quantity_unit",
+                "technical_quantity_status",
+                "purchasing_quantity_per_product",
+                "purchasing_quantity_unit",
+                "annual_purchasing_quantity",
+                "annual_purchasing_unit",
+                "unit_price",
+                "pricing_unit",
+                "currency",
+                "delivered_material_unit_cost",
+                "delivered_material_unit_cost_basis",
+                "delivered_material_cost_per_piece",
+                "capital_cost",
+                "capital_cost_included_in_delivered_material",
+                "reconciliation_residual",
+                "logistics_adders_unresolved",
+                "delivered_cost_adjustments_unresolved",
+                "costing_resolution_status",
+            )
+        },
+    }
+    if dry_run:
+        return result
+
+    if changed and old_normalized is not None:
+        old_revision = (
+            old_normalized.get("technical_revision")
+            or f"normalized-sha256:{old_metadata['sha256']}"
+        )
+        result["archive_path"] = _archive_technical_revision(
+            project_code,
+            product_id,
+            f"component_outputs_normalized_previous_{component_id}",
+            old_revision,
+            old_normalized,
+        )
+    if changed:
+        _write_json(normalized_path, candidate)
+    raw_after = _artifact_metadata(raw_path)
+    if raw_after.get("sha256") != raw_before.get("sha256"):
+        raise RuntimeError(
+            "Raw component output changed during re-normalization."
+        )
+    new_metadata = _artifact_metadata(normalized_path)
+    result["new_normalized_artifact"] = new_metadata
+    result["raw_artifact_after"] = raw_after
+
+    component_state = dict(
+        (state.get("components") or {}).get(component_id) or {}
+    )
+    component_state.update({
+        "normalized_path": _relative(normalized_path),
+        "output_revision": candidate.get("technical_revision"),
+        "costing_readiness": (
+            "complete"
+            if candidate.get("costing_resolution_status") == "resolved"
+            else "incomplete"
+        ),
+        "requires_regeneration": False,
+        "renormalized_at": _now_iso(),
+        "renormalization": {
+            "old_sha256": old_metadata.get("sha256"),
+            "new_sha256": new_metadata.get("sha256"),
+            "archive_path": result.get("archive_path"),
+            "raw_sha256": raw_after.get("sha256"),
+        },
+    })
+    state.setdefault("components", {})[component_id] = component_state
+    _save_state(state)
+    append_workflow_event(
+        project_code,
+        product_id,
+        "component_output_renormalized",
+        component_id=component_id,
+        status_before=component_state.get("status"),
+        status_after=component_state.get("status"),
+        raw_path=_relative(raw_path),
+        normalized_path=_relative(normalized_path),
+        old_sha256=old_metadata.get("sha256"),
+        new_sha256=new_metadata.get("sha256"),
+        archive_path=result.get("archive_path"),
+    )
+    return result
 
 
 def get_component_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
