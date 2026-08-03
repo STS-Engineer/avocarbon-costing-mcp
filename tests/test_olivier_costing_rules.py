@@ -37,9 +37,12 @@ def test_glue_geometry_uses_one_mm_diameter_and_density_1_5():
     )
     assert result["strip_diameter_mm"] == 1
     assert result["density_g_cm3"] == 1.5
-    assert result["glue_mass_g_per_product"] == pytest.approx(float(expected_g))
+    assert result["glue_mass_g_per_strip"] == pytest.approx(float(expected_g))
+    assert result["glue_mass_g_per_product"] == pytest.approx(
+        float(expected_g * Decimal("2"))
+    )
     assert result["glue_mass_kg_per_product"] == pytest.approx(
-        float(expected_g / Decimal("1000"))
+        float(expected_g * Decimal("2") / Decimal("1000"))
     )
 
 
@@ -60,7 +63,7 @@ def test_missing_ferrite_length_does_not_create_glue_quantity():
     assert result["missing_inputs"] == ["confirmed_ferrite_length_mm"]
 
 
-def test_thirteen_mm_ferrite_uses_one_provisional_strip_with_provenance():
+def test_thirteen_mm_ferrite_uses_two_provisional_zones_with_provenance():
     result = calculate_provisional_glue_consumption(
         13,
         source_field_path="normalized_bom.components[0].length_mm",
@@ -68,10 +71,14 @@ def test_thirteen_mm_ferrite_uses_one_provisional_strip_with_provenance():
     )
     assert result["glue_length_mm"] == pytest.approx(10.4)
     assert result["glue_mass_kg_per_product"] == pytest.approx(
-        0.000012252211349000193
+        0.000024504422698000386
     )
-    assert result["application_count"] == 1
-    assert result["application_count_status"] == "provisional_one_strip"
+    assert result["glue_mass_g_per_strip"] == pytest.approx(
+        0.012252211349000193
+    )
+    assert result["application_count"] == 2
+    assert result["application_count_status"] == "provisional_two_zones"
+    assert result["technical_quantity_unit"] == "g/product"
     assert result["source_field_path"].startswith("normalized_bom")
 
 

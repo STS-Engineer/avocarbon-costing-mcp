@@ -22,6 +22,12 @@ def complete_offer(price, currency, unit):
             "pricing_basis": f"{currency}/{unit}",
             "incoterm": "DAP",
             "origin": "China",
+            "transport_cost": 0,
+            "transport_basis": f"{currency}/{unit}",
+            "customs_cost": 0,
+            "customs_basis": f"{currency}/{unit}",
+            "forwarder_fee": 0,
+            "forwarder_basis": f"{currency}/{unit}",
         }
     }
 
@@ -123,8 +129,14 @@ def test_writeback_canonicalizes_structured_bom_wire_mass_and_legacy_offer_basis
         },
     }
     normalized = workflow.normalize_component_output(state, component, raw)
-    assert math.isclose(normalized["technical_quantity"], 0.003704689896196591, rel_tol=1e-12)
-    assert normalized["technical_quantity_unit"] == "kg/product"
+    assert math.isclose(normalized["technical_quantity"], 3.704689896196591, rel_tol=1e-12)
+    assert normalized["technical_quantity_unit"] == "g/product"
+    assert math.isclose(
+        normalized["purchasing_quantity_per_product"],
+        0.003704689896196591,
+        rel_tol=1e-12,
+    )
+    assert normalized["purchasing_quantity_unit"] == "kg/product"
     assert normalized["pricing_unit"] == "kg"
     assert normalized["currency"] == "CNY"
     assert normalized["conversion"]["method"] == "wire_length_diameter_density_to_mass"

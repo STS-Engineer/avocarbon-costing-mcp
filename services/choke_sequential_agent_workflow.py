@@ -5935,8 +5935,27 @@ def normalize_component_output(
         "forwarder_cost_per_piece_basis": _output_value(offer, "forwarder_cost_basis", "forwarder_cost_per_piece_basis"),
     }
     resolved_offer = component_costing.resolve_component_offer(raw_json)
-    dimensional_source = dict(bom_component.get("component_definition") or {})
+    dimensional_source = {
+        **bom_component,
+        **(bom_component.get("component_definition") or {}),
+    }
     dimensional_source.setdefault("quantity_per_product", bom_component.get("quantity_per_product"))
+    glue_consumption = None
+    if bom_component["component_id"] == "glue":
+        ferrite = component_costing.resolve_ferrite_length_mm(
+            _read_json(_bom_normalized_path(state["project_code"], state["product_id"]), {}),
+            _read_json(_bom_raw_path(state["project_code"], state["product_id"]), {}),
+        )
+        glue_consumption = component_costing.calculate_provisional_glue_consumption(
+            ferrite.get("ferrite_length_mm"),
+            application_count=2,
+            source_field_path=ferrite.get("source_field_path"),
+            source_evidence=ferrite.get("source_evidence"),
+        )
+        if glue_consumption.get("status") != "blocked":
+            dimensional_source["physical_mass_g_per_product"] = (
+                glue_consumption["glue_mass_g_per_product"]
+            )
     bom_fields = component_costing.extract_bom_dimensional_fields(
         bom_component["component_id"], dimensional_source,
     )
@@ -6013,12 +6032,38 @@ def normalize_component_output(
         "quantity_per_product": bom_component.get("quantity_per_product"),
         "technical_quantity": canonical.get("technical_quantity"),
         "technical_quantity_unit": canonical.get("technical_quantity_unit"),
+        "technical_quantity_status": (
+            "provisional"
+            if glue_consumption
+            and glue_consumption.get("status") != "blocked"
+            else "resolved"
+        ),
+        "purchasing_quantity_per_product": canonical.get(
+            "purchasing_quantity_per_product"
+        ),
+        "purchasing_quantity_unit": canonical.get("purchasing_quantity_unit"),
+        "annual_purchasing_quantity": (
+            float(
+                Decimal(str(canonical["purchasing_quantity_per_product"]))
+                * Decimal(str(customer_input["annual_quantity"]))
+            )
+            if canonical.get("purchasing_quantity_per_product") is not None
+            and customer_input.get("annual_quantity") not in (None, "")
+            else None
+        ),
+        "annual_purchasing_unit": (
+            (canonical.get("purchasing_quantity_unit") or "").replace(
+                "/product", "/year"
+            )
+            or None
+        ),
         "unit_price": canonical.get("unit_price"),
         "pricing_unit": canonical.get("pricing_unit"),
         "currency": canonical.get("currency"),
         "material_cost_per_piece": canonical.get("material_cost_per_piece"),
         "source_quantity": canonical.get("source_quantity"),
         "conversion": canonical.get("conversion"),
+        "provisional_consumption": glue_consumption,
         "annual_quantity": customer_input.get("annual_quantity"),
         "destination_zone": customer_input.get("customer_delivery_zone"),
         "reporting_currency": reporting_currency,
@@ -8092,6 +8137,15 @@ def calculate_final_choke_costing_from_saved_outputs(
             normalized_bom,
         )
     dimensional_by_component = _saved_bom_dimensional_map(raw_bom)
+    ferrite_length = component_costing.resolve_ferrite_length_mm(
+        normalized_bom, raw_bom,
+    )
+    provisional_glue = component_costing.calculate_provisional_glue_consumption(
+        ferrite_length.get("ferrite_length_mm"),
+        application_count=2,
+        source_field_path=ferrite_length.get("source_field_path"),
+        source_evidence=ferrite_length.get("source_evidence"),
+    )
     current_bom_components = {
         item.get("component_id"): item
         for item in normalized_bom.get("components") or []
@@ -8175,6 +8229,25 @@ def calculate_final_choke_costing_from_saved_outputs(
             or current_bom_component.get("approved_assumption_rules")
             or []
         )
+        if (
+            component_id == "glue"
+            and result_mode == "preliminary"
+            and provisional_glue.get("status") != "blocked"
+        ):
+            approved_assumption_rules = [
+                *approved_assumption_rules,
+                {
+                    "approved": True,
+                    "assumption_status": "provisional",
+                    "value": provisional_glue["glue_mass_g_per_product"],
+                    "unit": "g",
+                    "source": "Olivier Spicker provisional glue rule",
+                    "formula": provisional_glue["formula"],
+                    "confirmation_questions": [
+                        "Confirm dispensed glue mass through a production trial."
+                    ],
+                },
+            ]
         technical_quantity = technical_revisions.resolve_technical_quantity(
             quantity_source,
             price_info.get("unit_price_basis"),
@@ -8251,7 +8324,9 @@ def calculate_final_choke_costing_from_saved_outputs(
             line_delivered_decimal = (
                 Decimal(str(pricing_quantity))
                 * Decimal(
-                    delivered_result.get("reported_delivered_unit_cost_exact")
+                    delivered_result.get(
+                        "delivered_cost_per_pricing_unit_exact"
+                    )
                     or delivered_result.get("calculated_delivered_unit_cost_exact")
                     or str(delivered_result["delivered_cost_per_pricing_unit"])
                 )
@@ -8321,11 +8396,21 @@ def calculate_final_choke_costing_from_saved_outputs(
             delivered_result.get("delivered_cost_currency")
             if delivered_basis_compatible else material_result.get("currency")
         )
+        source_quantity = technical_quantity.get("source_quantity") or {}
+        display_quantity = pricing_quantity
+        display_quantity_unit = (
+            f"{pricing_unit}/product" if pricing_unit else None
+        )
+        if (
+            component_id in {"magnet_wire", "glue"}
+            and technical_revisions.normalize_unit(source_quantity.get("unit"))
+            == "g"
+        ):
+            display_quantity = source_quantity.get("value")
+            display_quantity_unit = "g/product"
         canonical_fields = {
-            "technical_quantity": pricing_quantity,
-            "technical_quantity_unit": (
-                f"{pricing_unit}/product" if pricing_unit else None
-            ),
+            "technical_quantity": display_quantity,
+            "technical_quantity_unit": display_quantity_unit,
             "pricing_quantity": pricing_quantity,
             "pricing_unit": pricing_unit,
             "unit_cost": price_info.get("unit_price"),
@@ -8391,10 +8476,28 @@ def calculate_final_choke_costing_from_saved_outputs(
 
         component_breakdown.append({
             "component_id": component_id,
-            "technical_quantity": pricing_quantity_info.get("pricing_quantity"),
-            "technical_quantity_unit": (
-                f"{pricing_quantity_info['pricing_unit']}/product"
-                if pricing_quantity_info.get("pricing_unit") else None
+            "technical_quantity": display_quantity,
+            "technical_quantity_unit": display_quantity_unit,
+            "technical_quantity_status": (
+                "provisional"
+                if technical_quantity.get("resolution_status") == "estimated"
+                else "resolved"
+            ),
+            "purchasing_quantity_per_product": pricing_quantity,
+            "purchasing_quantity_unit": (
+                f"{pricing_unit}/product" if pricing_unit else None
+            ),
+            "annual_purchasing_quantity": (
+                float(
+                    Decimal(str(pricing_quantity))
+                    * Decimal(str(customer_input.get("annual_quantity")))
+                )
+                if pricing_quantity is not None
+                and customer_input.get("annual_quantity") not in (None, "")
+                else None
+            ),
+            "annual_purchasing_unit": (
+                f"{pricing_unit}/year" if pricing_unit else None
             ),
             "pricing_quantity": pricing_quantity_info.get("pricing_quantity"),
             "pricing_unit": pricing_quantity_info.get("pricing_unit"),

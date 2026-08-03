@@ -365,8 +365,15 @@ def quantity_candidates(component: Mapping[str, Any]) -> List[Dict[str, Any]]:
     definitions = (
         ("count_per_product", ("count_per_product", "bom_count_per_product", "piece_count_per_product"), "pc"),
         ("mass_kg_per_product", ("mass_kg_per_product", "weight_kg_per_product"), "kg"),
-        ("mass_g_per_product", ("mass_g_per_product", "physical_mass_g_per_product", "weight_g_per_product"), "g"),
-        ("length_m_per_product", ("length_m_per_product", "physical_length_m_per_product", "developed_length_m"), "m"),
+        ("mass_g_per_product", (
+            "mass_g_per_product", "physical_mass_g_per_product",
+            "weight_g_per_product", "line_weight_g_per_product",
+            "line_weight_g", "estimated_total_weight_g_per_product",
+        ), "g"),
+        ("length_m_per_product", (
+            "length_m_per_product", "physical_length_m_per_product",
+            "developed_length_m", "developed_length_m_per_product",
+        ), "m"),
         ("length_mm_per_product", ("length_mm_per_product", "physical_length_mm_per_product", "developed_length_mm"), "mm"),
         ("volume_l_per_product", ("volume_l_per_product", "volume_l"), "l"),
         ("volume_ml_per_product", ("volume_ml_per_product", "volume_ml"), "ml"),

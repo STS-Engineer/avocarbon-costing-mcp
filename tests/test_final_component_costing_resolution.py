@@ -339,9 +339,10 @@ def test_delivered_cost_uses_offer_currency_inheritance_and_is_not_double_counte
     raw = _live_outputs()[1]["agent_raw_output"]
     delivered = costing.resolve_delivered_unit_cost(raw, "INR")
     assert delivered["status"] == "calculated"
-    assert delivered["delivered_cost_per_pricing_unit"] == 1752.17
-    assert delivered["reported_delivered_cost_used"] is True
-    assert delivered["calculated_delivered_unit_cost"] == 1752.17
+    assert delivered["delivered_cost_per_pricing_unit"] == 1743
+    assert delivered["reported_delivered_cost_used"] is False
+    assert delivered["calculated_delivered_unit_cost"] == 1743
+    assert delivered["reported_adjustment_correction"] == -9.17
     assert delivered["reconciliation_difference"] == 0
 
 
@@ -373,7 +374,11 @@ def test_firm_result_keeps_resolved_material_subtotal_but_blocks_for_glue(monkey
     assert result["direct_cost_per_piece"] is None
     assert rows["ferrite_core"]["fx"]["status"] == "already_converted"
     assert math.isclose(rows["ferrite_core"]["material_cost_per_piece"], 2 * 1.137144)
-    assert math.isclose(rows["magnet_wire"]["technical_quantity"], 0.000779)
+    assert math.isclose(rows["magnet_wire"]["technical_quantity"], 0.779)
+    assert rows["magnet_wire"]["technical_quantity_unit"] == "g/product"
+    assert math.isclose(
+        rows["magnet_wire"]["purchasing_quantity_per_product"], 0.000779
+    )
     assert math.isclose(rows["lead_tinning"]["technical_quantity"], 0.00000424)
     assert rows["glue"]["blocking_reason"] == "technical_quantity_unit_unknown"
     assert result["unresolved_material_components"][0]["message"] == (
@@ -417,7 +422,7 @@ def test_descriptive_wire_basis_uses_canonical_normalized_pricing_unit(monkeypat
     assert wire["status"] == "resolved"
     assert wire["blocking_reason"] is None
     assert wire["material_cost_per_piece"] == 1.33988
-    assert wire["delivered_material_cost_per_piece"] == 1.36494043
+    assert wire["delivered_material_cost_per_piece"] == 1.357797
     assert wire["warnings"] == []
 
 
@@ -472,10 +477,13 @@ def test_all_live_delivered_costs_have_traceable_decimal_formulas():
         audit = costing.reconcile_delivered_unit_cost(raw, "INR")
         assert audit["status"] == "calculated"
         assert audit["reconciliation_difference"] == 0
-        assert audit["reported_delivered_cost_used"] is True
-        assert audit["delivered_cost_formula"].endswith(
-            str(audit["calculated_delivered_unit_cost"])
-        )
+        if raw["component_id"] in {"magnet_wire", "glue"}:
+            assert audit["reported_delivered_cost_used"] is False
+        else:
+            assert audit["reported_delivered_cost_used"] is True
+        assert Decimal(
+            audit["delivered_cost_formula"].rsplit("=", 1)[1].strip()
+        ) == Decimal(str(audit["calculated_delivered_unit_cost"]))
         assert audit["rounding_policy"]["intermediate_rounding"] == "none"
         assert audit["rounding_policy"]["decimal_context_precision"] == 28
 
@@ -516,7 +524,7 @@ def test_currency_less_root_adder_is_excluded_from_delivered_reconciliation():
     }
     audit = costing.reconcile_delivered_unit_cost(raw, "INR")
     assert audit["status"] == "blocked"
-    assert audit["reason"] == "delivered_cost_reconciliation_mismatch"
+    assert audit["reason"] == "delivered_cost_adjustments_unresolved"
     assert audit["excluded_adders"][0]["reason"] == "currency_missing"
 
 
@@ -540,13 +548,13 @@ def test_decimal_material_subtotal_matches_reconciled_live_values(monkeypatch):
     result = _run_final(monkeypatch, "preliminary")
     expected = (
         Decimal("2") * Decimal("1.369142")
-        + Decimal("0.000779") * Decimal("1752.17")
+        + Decimal("0.000779") * Decimal("1743")
         + Decimal("0.00000424") * Decimal("6857.285819265275")
     )
     assert Decimal(result["calculated_delivered_material_cost_exact"]) == expected
     assert round(
         result["calculated_delivered_material_cost_for_resolved_components"], 6
-    ) == 4.132299
+    ) == 4.125156
 
 
 def test_external_material_classification_is_not_changed_by_most_participation():

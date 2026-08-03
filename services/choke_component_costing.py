@@ -178,7 +178,11 @@ def extract_bom_dimensional_fields(component_id: str, component: Dict[str, Any])
     quantity_unit = quantity_unit or _unit_from_text(quantity_value)
 
     weight_kg = _coerce_number(value("weight_kg_per_product", "weight_kg", "part_weight_kg", "mass_kg_per_product"))
-    mass_g = _coerce_number(value("mass_g_per_product", "physical_mass_g_per_product", "weight_g_per_product"))
+    mass_g = _coerce_number(value(
+        "mass_g_per_product", "physical_mass_g_per_product",
+        "weight_g_per_product", "line_weight_g_per_product", "line_weight_g",
+        "estimated_total_weight_g_per_product",
+    ))
     raw_weight_value = value("weight_per_piece", "poids_par_piece", "mass_per_product")
     raw_weight_unit = _normalized_quantity_unit(value("weight_unit", "unite_poids", "mass_unit"))
     if isinstance(raw_weight_value, dict):
@@ -210,7 +214,10 @@ def extract_bom_dimensional_fields(component_id: str, component: Dict[str, Any])
     length_mm = _coerce_number(value(
         "developed_length_mm", "wire_length_mm", "total_length_mm", "physical_length_mm_per_product",
     ))
-    length_m = _coerce_number(value("developed_length_m", "wire_length_m", "physical_length_m_per_product"))
+    length_m = _coerce_number(value(
+        "developed_length_m", "developed_length_m_per_product",
+        "wire_length_m", "physical_length_m_per_product",
+    ))
     normalized_quantity_unit = _normalized_quantity_unit(quantity_unit)
     quantity = _coerce_number(quantity_value)
     if length_mm is None and length_m is not None:
@@ -395,6 +402,7 @@ def resolve_ferrite_length_mm(
 def calculate_provisional_glue_consumption(
     ferrite_length_mm: Any,
     *,
+    application_count: Any = 2,
     approved: bool = False,
     source_field_path: Optional[str] = None,
     source_evidence: Any = None,
@@ -406,6 +414,12 @@ def calculate_provisional_glue_consumption(
             "status": "blocked",
             "missing_inputs": ["confirmed_ferrite_length_mm"],
         }
+    count = _decimal(application_count)
+    if count is None or count <= 0:
+        return {
+            "status": "blocked",
+            "missing_inputs": ["glue_application_count"],
+        }
     length_factor = Decimal("0.80")
     strip_diameter_mm = Decimal("1")
     radius_mm = strip_diameter_mm / Decimal("2")
@@ -414,7 +428,8 @@ def calculate_provisional_glue_consumption(
     glue_length_mm = length * length_factor
     volume_mm3 = pi_decimal * radius_mm * radius_mm * glue_length_mm
     volume_cm3 = volume_mm3 / Decimal("1000")
-    mass_g = volume_cm3 * density_g_cm3
+    mass_per_strip_g = volume_cm3 * density_g_cm3
+    mass_g = mass_per_strip_g * count
     mass_kg = mass_g / Decimal("1000")
     return {
         "status": "resolved" if approved else "resolved_assumption",
@@ -432,21 +447,29 @@ def calculate_provisional_glue_consumption(
         "volume_mm3_exact": _decimal_text(volume_mm3),
         "volume_cm3": _decimal_float(volume_cm3),
         "volume_cm3_exact": _decimal_text(volume_cm3),
+        "glue_mass_g_per_strip": _decimal_float(mass_per_strip_g),
+        "glue_mass_g_per_strip_exact": _decimal_text(mass_per_strip_g),
         "glue_mass_g_per_product": _decimal_float(mass_g),
         "glue_mass_g_per_product_exact": _decimal_text(mass_g),
         "glue_mass_kg_per_product": _decimal_float(mass_kg),
         "glue_mass_kg_per_product_exact": _decimal_text(mass_kg),
-        "application_count": 1,
-        "application_count_status": "provisional_one_strip",
+        "application_count": _decimal_float(count),
+        "application_count_status": "provisional_two_zones",
+        "technical_quantity": _decimal_float(mass_g),
+        "technical_quantity_unit": "g/product",
+        "purchasing_quantity_per_product": _decimal_float(mass_kg),
+        "purchasing_quantity_unit": "kg/product",
         "formula": (
             "length=ferrite_length*0.80; radius=1mm/2; "
             "volume_mm3=pi*radius^2*length; volume_cm3=volume_mm3/1000; "
-            "mass_g=volume_cm3*1.5; mass_kg=mass_g/1000"
+            "mass_per_strip_g=volume_cm3*1.5; "
+            "mass_per_product_g=mass_per_strip_g*application_count; "
+            "mass_kg=mass_per_product_g/1000"
         ),
         "warning": (
             None if approved else
             "Provisional consumption calculated from 80% of ferrite length, "
-            "1 mm strip diameter and 1.5 g/cm3 density. "
+            "1 mm strip diameter, 1.5 g/cm3 density and two glue zones. "
             "Technical validation required."
         ),
     }
@@ -721,7 +744,13 @@ def resolve_component_pricing_quantity(
                 result["pricing_quantity_basis"] = "estimated_bom_mass"
                 result["warnings"] = ["Final wire cut length and mass remain unconfirmed."]
             elif is_wire and kg is not None and bom_fields.get("weight_kg_per_product") in (None, ""):
-                if _coerce_number(technical_specification.get("estimated_mass_per_piece_g")):
+                if mass_g is not None and bom_fields.get(
+                    "physical_mass_g_per_product"
+                ) not in (None, ""):
+                    result["pricing_quantity_basis"] = (
+                        "explicit_bom_mass_g_to_kg"
+                    )
+                elif _coerce_number(technical_specification.get("estimated_mass_per_piece_g")):
                     result["pricing_quantity_basis"] = "estimated_bom_mass"
                     result["warnings"] = ["Final wire cut length and mass remain unconfirmed."]
                 else:
@@ -1273,6 +1302,9 @@ def reconcile_delivered_unit_cost(
     currency- and basis-compatible terms.
     """
     agent_raw = agent_raw or {}
+    component_id = str(agent_raw.get("component_id") or "").strip().lower()
+    olivier_four_term_scope = component_id in {"glue", "magnet_wire"}
+    delivered_term_names = {"transport", "customs", "forwarder_fee"}
     target = normalize_currency_code(target_currency)
     offer = resolve_component_offer(agent_raw)
     price_info = resolve_unit_price(agent_raw, target_currency=target)
@@ -1309,6 +1341,7 @@ def reconcile_delivered_unit_cost(
 
     included: List[Dict[str, Any]] = []
     excluded: List[Dict[str, Any]] = []
+    non_delivered_adjustments: List[Dict[str, Any]] = []
     adjustment_details: Dict[str, Any] = {}
     adjustment_total = Decimal("0")
     for name, spec in _DELIVERED_ADJUSTMENT_SPECS.items():
@@ -1316,7 +1349,15 @@ def reconcile_delivered_unit_cost(
             agent_raw, spec["fields"],
         )
         if value is None:
-            adjustment_details[name] = {"status": "absent"}
+            detail = {"status": "absent"}
+            if olivier_four_term_scope and name in delivered_term_names:
+                detail = {
+                    "name": name,
+                    "status": "excluded",
+                    "reason": "logistics_value_missing",
+                }
+                excluded.append(detail)
+            adjustment_details[name] = detail
             continue
         metadata = _adjustment_currency_and_basis(
             agent_raw,
@@ -1372,6 +1413,14 @@ def reconcile_delivered_unit_cost(
             "converted_value": _decimal_float(converted_value),
             "converted_currency": target or currency,
         })
+        if olivier_four_term_scope and name not in delivered_term_names:
+            term.update({
+                "status": "excluded_from_delivered_formula",
+                "reason": "outside_olivier_four_term_delivered_cost",
+            })
+            non_delivered_adjustments.append(term)
+            adjustment_details[name] = term
+            continue
         included.append(term)
         adjustment_details[name] = term
         adjustment_total += converted_value
@@ -1391,12 +1440,37 @@ def reconcile_delivered_unit_cost(
         }
 
     calculated = base + adjustment_total
-    difference = reported - calculated if reported is not None else Decimal("0")
+    reported_for_reconciliation = reported
+    reported_adjustment_correction = Decimal("0")
+    if olivier_four_term_scope and reported is not None:
+        outside_formula_total = sum(
+            (
+                _decimal(item.get("converted_value")) or Decimal("0")
+                for item in non_delivered_adjustments
+            ),
+            Decimal("0"),
+        )
+        raw_difference = reported - calculated
+        if (
+            outside_formula_total
+            and abs(raw_difference - outside_formula_total)
+            <= DELIVERED_COST_RECONCILIATION_TOLERANCE
+        ):
+            reported_adjustment_correction = -outside_formula_total
+            reported_for_reconciliation = reported + reported_adjustment_correction
+    difference = (
+        reported_for_reconciliation - calculated
+        if reported_for_reconciliation is not None else Decimal("0")
+    )
     reconciled = (
         reported is None
         or abs(difference) <= DELIVERED_COST_RECONCILIATION_TOLERANCE
     )
-    selected = reported if reported is not None and reconciled else calculated
+    selected = (
+        calculated
+        if olivier_four_term_scope
+        else reported if reported is not None and reconciled else calculated
+    )
     formula_terms = [_decimal_text(base)] + [
         _decimal_text(_decimal(item["converted_value"]) or Decimal("0"))
         for item in included
@@ -1404,10 +1478,10 @@ def reconcile_delivered_unit_cost(
     formula = " + ".join(formula_terms) + f" = {_decimal_text(calculated)}"
     status = "calculated" if reconciled and not excluded else "blocked"
     reason = None
-    if not reconciled:
-        reason = "delivered_cost_reconciliation_mismatch"
-    elif excluded:
+    if excluded:
         reason = "delivered_cost_adjustments_unresolved"
+    elif not reconciled:
+        reason = "delivered_cost_reconciliation_mismatch"
 
     return {
         **base_audit,
@@ -1416,6 +1490,12 @@ def reconcile_delivered_unit_cost(
         "pricing_unit": pricing_unit,
         "delivered_cost_currency": target or delivered_currency or offer_currency,
         "reported_delivered_unit_cost": _decimal_float(reported),
+        "reported_delivered_unit_cost_for_formula": _decimal_float(
+            reported_for_reconciliation
+        ),
+        "reported_adjustment_correction": _decimal_float(
+            reported_adjustment_correction
+        ),
         "calculated_delivered_unit_cost": _decimal_float(calculated),
         "reported_delivered_unit_cost_exact": (
             _decimal_text(reported) if reported is not None else None
@@ -1424,6 +1504,9 @@ def reconcile_delivered_unit_cost(
         "delivered_cost_per_pricing_unit": (
             _decimal_float(selected) if status == "calculated" else None
         ),
+        "delivered_cost_per_pricing_unit_exact": (
+            _decimal_text(selected) if status == "calculated" else None
+        ),
         "reconciliation_difference": _decimal_float(difference),
         "reconciliation_difference_exact": _decimal_text(difference),
         "reconciliation_tolerance": _decimal_float(
@@ -1431,17 +1514,25 @@ def reconcile_delivered_unit_cost(
         ),
         "delivered_cost_formula": formula,
         "calculation_source": (
-            "agent_precomputed_delivered_cost_reconciled"
+            "backend_rebuilt_olivier_four_term_delivered_cost"
+            if olivier_four_term_scope and reconciled
+            else "agent_precomputed_delivered_cost_reconciled"
             if reported is not None and reconciled
             else "backend_rebuilt_from_base_and_adders"
         ),
-        "reported_delivered_cost_used": bool(reported is not None and reconciled),
+        "reported_delivered_cost_used": bool(
+            reported is not None
+            and reconciled
+            and not olivier_four_term_scope
+        ),
         "backend_recalculated_for_audit": True,
         "included_adders": included,
         "excluded_adders": excluded,
+        "non_delivered_adjustments": non_delivered_adjustments,
         "adjustments": [
             *base_audit["base_cost_adjustments"],
             *included,
+            *non_delivered_adjustments,
         ],
         "adjustment_details": adjustment_details,
         "rounding_policy": {
@@ -1812,11 +1903,31 @@ def build_canonical_component_costing(
             "conditional": True,
         }
 
+    technical_quantity = quantity.get("pricing_quantity")
+    technical_unit = quantity.get("pricing_unit")
+    physical_mass_g = _coerce_number(
+        bom_fields.get("physical_mass_g_per_product")
+    )
+    if (
+        component_id in {"magnet_wire", "glue"}
+        and physical_mass_g is not None
+        and physical_mass_g > 0
+    ):
+        technical_quantity = physical_mass_g
+        technical_unit = "g"
+        source_value = physical_mass_g
+        source_unit = "g"
+
     return {
         "component_id": component_id,
-        "technical_quantity": quantity.get("pricing_quantity"),
+        "technical_quantity": technical_quantity,
         "technical_quantity_unit": (
-            f"{quantity['pricing_unit']}/product" if quantity.get("pricing_unit") else None
+            f"{technical_unit}/product" if technical_unit else None
+        ),
+        "purchasing_quantity_per_product": quantity.get("pricing_quantity"),
+        "purchasing_quantity_unit": (
+            f"{quantity['pricing_unit']}/product"
+            if quantity.get("pricing_unit") else None
         ),
         "unit_price": price_info.get("unit_price"),
         "pricing_unit": offer.get("pricing_unit"),
