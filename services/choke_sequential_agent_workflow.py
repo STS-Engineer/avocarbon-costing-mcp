@@ -897,9 +897,42 @@ def _derive_revision_aware_status(state: Dict[str, Any]) -> Dict[str, Any]:
         "obsolete_work_packages": "obsolete_for_current_revision",
     }, "work_package_id")
     required_most_set = set(required_most)
+    for item_id in required_most_set:
+        current_entry = (state.get("most") or {}).get(item_id)
+        if (
+            isinstance(current_entry, dict)
+            and current_entry.get("revision_status") == "obsolete_for_current_revision"
+        ):
+            current_entry["revision_status"] = (
+                "current_revision_failed"
+                if current_entry.get("status") in {
+                    "trigger_request_failed", "failed", "failed_before_http",
+                    "writeback_failed",
+                }
+                else "current_revision_pending"
+            )
+            current_entry["revision_status_reason"] = (
+                "required_work_package_trigger_failed"
+                if current_entry["revision_status"] == "current_revision_failed"
+                else "required_by_current_process"
+            )
     for item_id, revision in most_statuses.items():
         if item_id in (state.get("most") or {}):
             current_entry = state["most"][item_id]
+            if (
+                item_id in required_most_set
+                and current_entry.get("status") in {
+                    "trigger_request_failed", "failed", "failed_before_http",
+                    "writeback_failed",
+                }
+                and current_entry.get("revision_status")
+                == "current_revision_failed"
+                and revision["status"] in {
+                    "missing", "stale", "legacy_unverified",
+                    "received_not_normalized",
+                }
+            ):
+                continue
             if (
                 item_id in required_most_set
                 and revision["status"] == "obsolete_for_current_revision"
@@ -1465,6 +1498,21 @@ def get_most_agent_configuration_health() -> Dict[str, Any]:
             and raw_agent_id
             == str(os.getenv("CHATGPT_EXTERNAL_COMPONENT_AGENT_ID") or "").strip()
         ),
+        "transport_comparison": {
+            "trigger_helper": "_trigger -> trigger_workspace_agent",
+            "request_envelope_version": "workspace-agent-trigger-v1",
+            "endpoint": "/v1/workspace_agents/{agent_id}/trigger",
+            "method": "POST",
+            "content_type": "application/json",
+            "body_fields": ["input", "conversation_key"],
+            "conversation_mode_sent_in_body": False,
+            "continuation_identifiers_supported": False,
+            "paths": {
+                "bom": {"preserve_request_identifiers": True},
+                "external_component": {"preserve_request_identifiers": False},
+                "most": {"preserve_request_identifiers": True},
+            },
+        },
         "missing_configuration": missing_configuration,
     }
 
@@ -6338,6 +6386,14 @@ def _most_trigger_payload(
     }
 
 
+def _most_conversation_key(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+) -> str:
+    return f"{project_code}:{product_id}:most:{work_package_id}:v1"
+
+
 def _most_eligibility_report(
     normalized_bom: Dict[str, Any],
     process: Dict[str, Any],
@@ -6734,6 +6790,9 @@ def trigger_most_operations(
         )
         payload_bytes = payload_text.encode("utf-8")
         trigger_diagnostic = {
+            "trigger_helper_name": "_trigger -> trigger_workspace_agent",
+            "request_envelope_version": "workspace-agent-trigger-v1",
+            "agent_type": "most",
             "agent_id_configured": most_agent_configuration.get("agent_id_configured"),
             "agent_id_prefix": most_agent_configuration.get("agent_id_prefix"),
             "agent_id_suffix": most_agent_configuration.get("agent_id_suffix"),
@@ -6742,8 +6801,20 @@ def trigger_most_operations(
             "access_token_source": most_agent_configuration.get("access_token_source"),
             "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
             "payload_size_bytes": len(payload_bytes),
+            "conversation_mode": "new",
+            "conversation_mode_sent_in_body": False,
         }
-        conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
+        conversation_key = _most_conversation_key(
+            project_code, product_id, work_package_id
+        )
+        trigger_diagnostic.update({
+            "conversation_key_sha256": hashlib.sha256(
+                conversation_key.encode("utf-8")
+            ).hexdigest(),
+            "idempotency_key_sha256": hashlib.sha256(
+                correlation_id.encode("utf-8")
+            ).hexdigest(),
+        })
         requested_at = _now_iso()
         sending_attempt = {
             "status": "trigger_request_sending",
@@ -6818,6 +6889,17 @@ def trigger_most_operations(
             trigger_diagnostic["payload_sha256"],
             trigger_diagnostic["payload_size_bytes"],
         )
+        logger.info(
+            "MOST transport envelope helper=%s version=%s agent_type=%s "
+            "conversation_mode_sent_in_body=%s conversation_key_sha256=%s "
+            "idempotency_key_sha256=%s",
+            trigger_diagnostic["trigger_helper_name"],
+            trigger_diagnostic["request_envelope_version"],
+            trigger_diagnostic["agent_type"],
+            trigger_diagnostic["conversation_mode_sent_in_body"],
+            trigger_diagnostic["conversation_key_sha256"],
+            trigger_diagnostic["idempotency_key_sha256"],
+        )
         try:
             if most_agent_configuration.get("status") != "configured":
                 trigger_result = {
@@ -6835,6 +6917,7 @@ def trigger_most_operations(
                     conversation_key,
                     correlation_id,
                     dry_run=dry_run,
+                    preserve_request_identifiers=True,
                     agent_id_override=clean_agent_id(
                         str(os.getenv("CHATGPT_MOST_AGENT_ID") or "")
                         .strip()
@@ -6893,7 +6976,18 @@ def trigger_most_operations(
             "trigger_diagnostic": dict(trigger_diagnostic),
         }
         failure = {} if accepted else _most_trigger_failure(trigger_result)
+        trigger_diagnostic.update({
+            "http_status": trigger_result.get("http_status"),
+            "upstream_request_id": trigger_result.get("request_correlation_id"),
+            "failure_before_agent_execution": (
+                failure.get("failure_before_agent_execution") if failure else False
+            ),
+            "returned_conversation_id_audit": trigger_result.get(
+                "returned_conversation_id_audit"
+            ),
+        })
         completed_attempt.update(failure)
+        completed_attempt["trigger_diagnostic"] = dict(trigger_diagnostic)
         entry = {
             **previous,
             **work_package,
@@ -6928,14 +7022,12 @@ def trigger_most_operations(
             "source_process_revision": process.get("technical_revision"),
             "source_work_package_revision": work_package.get("technical_revision"),
             "revision_status": (
-                "current_revision_pending"
-                if explicitly_regenerable
-                else (revision_by_id.get(work_package_id) or {}).get("status")
+                "current_revision_pending" if accepted else "current_revision_failed"
             ),
             "revision_status_reason": (
-                "legacy_output_archived_and_current_input_rebuilt"
-                if explicitly_regenerable
-                else (revision_by_id.get(work_package_id) or {}).get("status_reason")
+                "trigger_request_accepted"
+                if accepted
+                else "required_work_package_trigger_failed"
             ),
             "legacy_output_archive": legacy_output_archive,
             "regenerated_for_current_revision": explicitly_regenerable,

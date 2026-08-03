@@ -129,12 +129,29 @@ def test_explicit_most_trigger_regenerates_legacy_and_classifies_409(monkeypatch
     state = _state()
     _patch_context(monkeypatch, state)
     calls = []
+    trigger_kwargs = {}
 
     def trigger(_env, _name, input_text, *_args, **_kwargs):
         payload = json.loads(input_text)
         calls.append(payload)
+        trigger_kwargs[payload["work_package_id"]] = _kwargs
         if payload["work_package_id"] == WINDING:
-            return {"status": "accepted", "http_status": 202, "request_correlation_id": "req-w"}
+            return {
+                "status": "accepted",
+                "http_status": 202,
+                "request_correlation_id": "req-w",
+                "response": {"conversation_id": "conversation-winding"},
+                "returned_conversation_id_audit": {
+                    "sha256_prefix": "safe",
+                    "safe_suffix": "winding",
+                },
+                "invocation_audit": {
+                    "returned_conversation_id": {
+                        "sha256_prefix": "safe",
+                        "safe_suffix": "winding",
+                    },
+                },
+            }
         return {
             "status": "failed",
             "http_status": 409,
@@ -163,6 +180,14 @@ def test_explicit_most_trigger_regenerates_legacy_and_classifies_409(monkeypatch
     assert winding["regenerated_for_current_revision"] is True
     assert winding["revision_status"] == "current_revision_pending"
     assert winding["legacy_output_archive"]["normalized"]
+    assert trigger_kwargs[WINDING]["preserve_request_identifiers"] is True
+    assert trigger_kwargs[GLUE]["preserve_request_identifiers"] is True
+    assert winding["trigger_result"]["response"]["conversation_id"] == (
+        "conversation-winding"
+    )
+    assert winding["invocation_audit"]["returned_conversation_id"][
+        "safe_suffix"
+    ] == "winding"
     glue = state["most"][GLUE]
     assert glue["status"] == "trigger_request_failed"
     assert glue["failure_code"] == "workspace_agent_unavailable"
@@ -176,6 +201,8 @@ def test_explicit_most_trigger_regenerates_legacy_and_classifies_409(monkeypatch
         "The workspace agent trigger is not currently available."
     )
     assert glue["source_work_package_revision"] == "wp-glue-current"
+    assert glue["revision_status"] == "current_revision_failed"
+    assert glue["revision_status_reason"] == "required_work_package_trigger_failed"
     glue_payload = next(
         item for item in calls if item["work_package_id"] == GLUE
     )
@@ -243,6 +270,148 @@ def test_retry_keeps_package_id_and_uses_a_new_trigger_run_id(monkeypatch):
     assert captured["active_trigger_run_id"] != "old-run"
     assert captured["explicit_regeneration"] is True
     assert state["most"][WINDING]["retry_history"][0]["previous_trigger_run_id"] == "old-run"
+
+
+def test_most_conversation_identity_is_stable_while_callback_run_changes():
+    initial_trigger_run_id = "run-initial"
+    retry_trigger_run_id = "run-retry"
+
+    initial_key = workflow._most_conversation_key(
+        "24018-CHO-00", "300440157", WINDING
+    )
+    retry_key = workflow._most_conversation_key(
+        "24018-CHO-00", "300440157", WINDING
+    )
+
+    assert initial_key == retry_key
+    assert initial_trigger_run_id != retry_trigger_run_id
+    assert initial_trigger_run_id not in initial_key
+    assert retry_trigger_run_id not in retry_key
+
+
+def test_required_failed_package_clears_historical_obsolete_annotation(monkeypatch):
+    state = _state()
+    state["process_decomposition"] = _process()
+    state["required_most_work_package_ids"] = [WINDING, GLUE]
+    state["most"][WINDING].update({
+        "status": "trigger_request_failed",
+        "revision_status": "obsolete_for_current_revision",
+        "revision_status_reason": "work_package_not_required_by_current_process",
+    })
+    monkeypatch.setattr(workflow, "_load_normalized_bom", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        workflow.technical_revisions,
+        "reconcile_component_outputs",
+        lambda *_a, **_k: {
+            "valid_components": [],
+            "missing_components": [],
+            "stale_components": [],
+            "blocked_components": [],
+            "legacy_unverified_components": [],
+            "obsolete_components": [],
+        },
+    )
+    monkeypatch.setattr(
+        workflow.technical_revisions,
+        "reconcile_most_outputs",
+        lambda *_a, **_k: _reconciliation(),
+    )
+
+    workflow._derive_revision_aware_status(state)
+
+    assert state["most"][WINDING]["revision_status"] == "current_revision_failed"
+    assert state["most"][WINDING]["revision_status_reason"] == (
+        "required_work_package_trigger_failed"
+    )
+
+
+def test_received_glue_is_not_retriggered_when_only_winding_is_missing(monkeypatch):
+    state = _state()
+    state["most"] = {
+        GLUE: {
+            **_process()["work_packages"][1],
+            "status": "received",
+            "revision_status": "valid",
+        },
+    }
+    _patch_context(monkeypatch, state)
+    monkeypatch.setattr(
+        workflow.technical_revisions,
+        "reconcile_most_outputs",
+        lambda *_a, **_k: {
+            "process_revision": "process-current",
+            "required_work_packages": [WINDING, GLUE],
+            "valid_work_packages": [{"work_package_id": GLUE, "status": "valid"}],
+            "missing_work_packages": [{"work_package_id": WINDING, "status": "missing"}],
+            "stale_work_packages": [],
+            "blocked_work_packages": [],
+            "received_not_normalized_work_packages": [],
+            "legacy_unverified_work_packages": [],
+            "obsolete_work_packages": [],
+        },
+    )
+    calls = []
+
+    def trigger(_env, _name, input_text, *_args, **kwargs):
+        calls.append((json.loads(input_text), kwargs))
+        return {"status": "accepted", "http_status": 202}
+
+    monkeypatch.setattr(workflow, "_trigger", trigger)
+    result = workflow.trigger_most_operations(
+        "24018-CHO-00", "300440157", explicit_regeneration=True
+    )
+
+    assert [item[0]["work_package_id"] for item in calls] == [WINDING]
+    assert calls[0][1]["preserve_request_identifiers"] is True
+    assert state["most"][GLUE]["status"] == "received"
+    assert result["triggered_work_packages"][0]["work_package_id"] == WINDING
+
+
+def test_shared_trigger_helper_keeps_one_http_contract(monkeypatch):
+    calls = []
+
+    def shared_client(**kwargs):
+        calls.append(kwargs)
+        return {"status": "dry_run"}
+
+    monkeypatch.setattr(workflow, "trigger_workspace_agent", shared_client)
+    monkeypatch.setenv("CHATGPT_EXTERNAL_COMPONENT_AGENT_ID", "agtch_external")
+    monkeypatch.setenv("CHATGPT_MOST_AGENT_ID", "agtch_most")
+    monkeypatch.setenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN", "token")
+
+    workflow._trigger(
+        "CHATGPT_EXTERNAL_COMPONENT_AGENT_ID",
+        "External Component Costing Agent",
+        '{"component_id":"glue"}',
+        "P:X:component:glue:v1",
+        "component-run",
+        dry_run=True,
+    )
+    workflow._trigger(
+        "CHATGPT_MOST_AGENT_ID",
+        "MOST Assemblage",
+        '{"work_package_id":"wp_glue"}',
+        "P:X:most:wp_glue:v1",
+        "most-run",
+        dry_run=True,
+        preserve_request_identifiers=True,
+    )
+
+    assert len(calls) == 2
+    for call in calls:
+        assert set(call) == {
+            "agent_id",
+            "access_token",
+            "input_text",
+            "conversation_key",
+            "idempotency_key",
+            "dry_run",
+            "conversation_mode",
+            "preserve_request_identifiers",
+        }
+        assert call["conversation_mode"] == "new"
+    assert calls[0]["preserve_request_identifiers"] is False
+    assert calls[1]["preserve_request_identifiers"] is True
 
 
 def test_most_configuration_is_secret_safe(monkeypatch):
