@@ -115,8 +115,12 @@ def _patch_context(monkeypatch, state):
     monkeypatch.setattr(workflow, "get_most_agent_configuration_health", lambda: {
         "status": "configured",
         "token_present": True,
+        "access_token_present": True,
         "agent_id_prefix": "agtch_test",
         "agent_id_suffix": "test",
+        "agent_id_configured": True,
+        "agent_id_source": "process_environment",
+        "access_token_source": "process_environment",
         "agent_id_matches_external_component": False,
     })
 
@@ -135,7 +139,13 @@ def test_explicit_most_trigger_regenerates_legacy_and_classifies_409(monkeypatch
             "status": "failed",
             "http_status": 409,
             "request_correlation_id": "req-g",
-            "error": "The workspace agent trigger is not currently available.",
+            "response": {
+                "error": {
+                    "type": "conflict_error",
+                    "code": "workspace_agent_unavailable",
+                    "message": "The workspace agent trigger is not currently available.",
+                },
+            },
         }
 
     monkeypatch.setattr(workflow, "_trigger", trigger)
@@ -157,7 +167,26 @@ def test_explicit_most_trigger_regenerates_legacy_and_classifies_409(monkeypatch
     assert glue["status"] == "trigger_request_failed"
     assert glue["failure_code"] == "workspace_agent_unavailable"
     assert glue["retryable"] is True
+    assert glue["failure_before_agent_execution"] is True
+    assert glue["upstream_http_status"] == 409
+    assert glue["upstream_request_id"] == "req-g"
+    assert glue["upstream_error_type"] == "conflict_error"
+    assert glue["upstream_error_code"] == "workspace_agent_unavailable"
+    assert glue["upstream_error_message"] == (
+        "The workspace agent trigger is not currently available."
+    )
     assert glue["source_work_package_revision"] == "wp-glue-current"
+    glue_payload = next(
+        item for item in calls if item["work_package_id"] == GLUE
+    )
+    payload_bytes = json.dumps(
+        glue_payload, ensure_ascii=False, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    assert glue["trigger_payload"] == glue_payload
+    assert glue["trigger_diagnostic"]["payload_sha256"] == workflow.hashlib.sha256(
+        payload_bytes
+    ).hexdigest()
+    assert glue["trigger_diagnostic"]["payload_size_bytes"] == len(payload_bytes)
     assert all(
         item.get("revision_status") != "obsolete_for_current_revision"
         for item in result["items"]
@@ -227,5 +256,42 @@ def test_most_configuration_is_secret_safe(monkeypatch):
     assert result["agent_id_prefix"].startswith("agtch_")
     assert result["agent_id_suffix"] == "1234"
     assert result["token_present"] is True
+    assert result["agent_id_source"] == "process_environment"
+    assert result["access_token_source"] == "process_environment"
     assert "secret-token" not in json.dumps(result)
 
+
+def test_raw_most_completeness_verifier_is_read_only(monkeypatch, tmp_path):
+    raw_path = tmp_path / "raw_most_agent_output.json"
+    raw_json = {
+        field: [] if field in {
+            "previous_operations",
+            "components_by_operation",
+            "quality_controls",
+            "assumptions",
+            "validation_questions",
+        } else 1
+        for field in workflow.MOST_NATIVE_EXPECTED_FIELDS
+    }
+    raw_json.update({
+        "operation_name": "Glue application",
+        "description": "Apply glue to the current choke assembly.",
+        "tooling_cost_eur": 100,
+        "tooling_life_pieces": 100000,
+    })
+    raw_path.write_text(json.dumps(raw_json, ensure_ascii=False), encoding="utf-8")
+    before = raw_path.read_bytes()
+    monkeypatch.setattr(workflow, "_most_output_path", lambda *_a, **_k: raw_path)
+
+    result = workflow.verify_most_raw_output_completeness(
+        "24018-CHO-00", "300440157", GLUE
+    )
+
+    assert result["status"] == "complete"
+    assert result["complete"] is True
+    assert result["missing_fields"] == []
+    assert set(result["tooling_fields_present"]) == {
+        "tooling_cost_eur",
+        "tooling_life_pieces",
+    }
+    assert raw_path.read_bytes() == before

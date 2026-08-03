@@ -1431,6 +1431,8 @@ def get_bom_agent_configuration_health() -> Dict[str, Any]:
 
 def get_most_agent_configuration_health() -> Dict[str, Any]:
     """Return a secret-safe view of the exact MOST trigger configuration."""
+    agent_was_configured = bool(os.getenv("CHATGPT_MOST_AGENT_ID"))
+    token_was_configured = bool(os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN"))
     _load_env()
     raw_agent_id = clean_agent_id(
         str(os.getenv("CHATGPT_MOST_AGENT_ID") or "").strip().strip('"').strip("'")
@@ -1452,6 +1454,10 @@ def get_most_agent_configuration_health() -> Dict[str, Any]:
             "access_token": "CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN",
         },
         "configuration_source": "process environment, with mcp_server/.env local fallback",
+        "agent_id_source": "process_environment" if agent_was_configured else "dotenv_fallback",
+        "access_token_source": "process_environment" if token_was_configured else "dotenv_fallback",
+        "agent_id_configured": bool(raw_agent_id),
+        "access_token_present": bool(token),
         "agent_id_prefix": raw_agent_id[:10] or None,
         "agent_id_suffix": raw_agent_id[-4:] if raw_agent_id else None,
         "agent_id_matches_external_component": bool(
@@ -1476,6 +1482,8 @@ def _most_trigger_failure(trigger_result: Mapping[str, Any]) -> Dict[str, Any]:
         http_status == 409
         and "workspace agent trigger is not currently available" in text.lower()
     )
+    response_error = response.get("error") if isinstance(response, Mapping) else None
+    response_error = response_error if isinstance(response_error, Mapping) else {}
     return {
         "failure_code": (
             "workspace_agent_unavailable" if unavailable else "workspace_agent_trigger_failed"
@@ -1492,6 +1500,10 @@ def _most_trigger_failure(trigger_result: Mapping[str, Any]) -> Dict[str, Any]:
         ),
         "upstream_http_status": http_status,
         "upstream_request_id": trigger_result.get("request_correlation_id"),
+        "upstream_error_type": response_error.get("type") or trigger_result.get("error_type"),
+        "upstream_error_code": response_error.get("code") or trigger_result.get("error_code"),
+        "upstream_error_message": response_error.get("message") or str(error or text or "") or None,
+        "failure_before_agent_execution": True,
     }
 
 
@@ -6717,6 +6729,20 @@ def trigger_most_operations(
         trigger_run_id = str(active_trigger_run_id or uuid.uuid4())
         correlation_id = str(uuid.uuid4())
         payload = _most_trigger_payload(state, work_package, trigger_run_id)
+        payload_text = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), default=str
+        )
+        payload_bytes = payload_text.encode("utf-8")
+        trigger_diagnostic = {
+            "agent_id_configured": most_agent_configuration.get("agent_id_configured"),
+            "agent_id_prefix": most_agent_configuration.get("agent_id_prefix"),
+            "agent_id_suffix": most_agent_configuration.get("agent_id_suffix"),
+            "access_token_present": most_agent_configuration.get("access_token_present"),
+            "agent_id_source": most_agent_configuration.get("agent_id_source"),
+            "access_token_source": most_agent_configuration.get("access_token_source"),
+            "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+            "payload_size_bytes": len(payload_bytes),
+        }
         conversation_key = f"{project_code}:{product_id}:most:{work_package_id}:v1"
         requested_at = _now_iso()
         sending_attempt = {
@@ -6733,6 +6759,7 @@ def trigger_most_operations(
             "callback_deadline": _callback_deadline(requested_at),
             "callback_status": "not_requested",
             "final_outcome": "trigger_request_sending",
+            "trigger_diagnostic": dict(trigger_diagnostic),
         }
         history = _historical_trigger_result(previous)
         history.append(dict(sending_attempt))
@@ -6745,6 +6772,7 @@ def trigger_most_operations(
             "conversation_key": conversation_key,
             "correlation_id": correlation_id,
             "trigger_payload": payload,
+            "trigger_diagnostic": dict(trigger_diagnostic),
             "trigger_result": None,
             "latest_trigger_attempt": dict(sending_attempt),
             "trigger_history": history,
@@ -6777,6 +6805,19 @@ def trigger_most_operations(
         })
         _save_state(state)
         append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="trigger_request_sending", save_path=payload["save_address"])
+        logger.info(
+            "MOST trigger request project=%s product=%s work_package=%s trigger_run_id=%s "
+            "agent_prefix=%s agent_suffix=%s token_present=%s payload_sha256=%s payload_size=%s",
+            project_code,
+            product_id,
+            work_package_id,
+            trigger_run_id,
+            trigger_diagnostic["agent_id_prefix"],
+            trigger_diagnostic["agent_id_suffix"],
+            trigger_diagnostic["access_token_present"],
+            trigger_diagnostic["payload_sha256"],
+            trigger_diagnostic["payload_size_bytes"],
+        )
         try:
             if most_agent_configuration.get("status") != "configured":
                 trigger_result = {
@@ -6790,7 +6831,7 @@ def trigger_most_operations(
                 trigger_result = _trigger(
                     "CHATGPT_MOST_AGENT_ID",
                     "MOST Assemblage",
-                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                    payload_text,
                     conversation_key,
                     correlation_id,
                     dry_run=dry_run,
@@ -6849,6 +6890,7 @@ def trigger_most_operations(
             "callback_deadline": sending_attempt["callback_deadline"],
             "callback_status": "waiting_for_callback" if accepted else "not_requested",
             "final_outcome": "waiting_for_callback" if accepted else "trigger_request_failed",
+            "trigger_diagnostic": dict(trigger_diagnostic),
         }
         failure = {} if accepted else _most_trigger_failure(trigger_result)
         completed_attempt.update(failure)
@@ -6870,6 +6912,7 @@ def trigger_most_operations(
             },
             "trigger_payload": payload,
             "trigger_result": trigger_result,
+            "trigger_diagnostic": dict(trigger_diagnostic),
             "latest_trigger_attempt": dict(completed_attempt),
             "trigger_history": [*history[:-1], dict(completed_attempt)],
             "latest_successful_output": previous.get("latest_successful_output"),
@@ -6906,6 +6949,7 @@ def trigger_most_operations(
             "http_status": trigger_result.get("http_status"),
             "correlation_id": correlation_id,
             "trigger_run_id": trigger_run_id,
+            "trigger_diagnostic": dict(trigger_diagnostic),
             **failure,
         }
         if accepted:
@@ -7502,15 +7546,24 @@ def save_most_output(
         append_workflow_event(project_code, product_id, "save_most_output_completed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, status_after=state.get("status"), raw_path=_relative(raw_path), normalized_path=_relative(normalized_path))
         if not remaining:
             append_workflow_event(project_code, product_id, "all_most_outputs_received", work_package_id=work_package_id, correlation_id=correlation_id, status_before=status_before, status_after="most_received")
+        received_count = sum(
+            1
+            for current_id in required
+            if (state.get("most", {}).get(current_id) or {}).get("status") == "received"
+        )
         return {
             "success": True,
             "status": "saved",
             "project_code": project_code,
             "product_id": product_id,
             "work_package_id": work_package_id,
+            "most_scope_id": most_scope_id,
+            "trigger_run_id": received_trigger_run_id,
             "raw_most_saved": raw_path.exists(),
             "normalized_most_saved": normalized_path.exists(),
             "state_status_after": state.get("status"),
+            "received_count": received_count,
+            "required_count": len(required),
             "remaining_work_packages": remaining,
             "state": state,
         }
@@ -7533,6 +7586,116 @@ def get_most_output(project_code: str, product_id: str, work_package_id: str) ->
         "raw_most": _read_json(raw_path, None),
         "normalized_most": _read_json(normalized_path, None),
         "paths": {"raw": _relative(raw_path), "normalized": _relative(normalized_path)},
+    }
+
+
+MOST_NATIVE_EXPECTED_FIELDS = (
+    "product_description",
+    "operation_id",
+    "operation_name",
+    "operation_type",
+    "type_of_operation",
+    "previous_operations",
+    "parts_per_cycle",
+    "oee",
+    "rate_per_hour_instantaneous",
+    "rate_per_hour_real",
+    "operator_required",
+    "operator_can_do_other_task",
+    "operator_percent",
+    "bottleneck",
+    "cycle_time_seconds",
+    "components_by_operation",
+    "quality_controls",
+    "capex",
+    "assumptions",
+    "validation_questions",
+    "description",
+    "type",
+    "mode",
+    "p_h",
+    "generic_capex_eur",
+    "specific_capex_eur",
+)
+
+MOST_NATIVE_TOOLING_FIELDS = (
+    "tooling_adder_per_piece_eur",
+    "tooling_cost_eur",
+    "tooling_life_pieces",
+    "tooling",
+)
+
+
+def _json_key_exists(value: Any, expected_key: str) -> bool:
+    if isinstance(value, Mapping):
+        return expected_key in value or any(
+            _json_key_exists(item, expected_key) for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(_json_key_exists(item, expected_key) for item in value)
+    return False
+
+
+def verify_most_raw_output_completeness(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+) -> Dict[str, Any]:
+    """Inspect a stored native MOST JSON without modifying workflow artifacts."""
+    work_package_id = _safe_part(work_package_id, "work_package_id")
+    raw_path = _most_output_path(project_code, product_id, work_package_id)
+    if not raw_path.exists():
+        return {
+            "status": "missing",
+            "project_code": project_code,
+            "product_id": str(product_id),
+            "work_package_id": work_package_id,
+            "raw_most_available": False,
+            "complete": False,
+            "missing_fields": list(MOST_NATIVE_EXPECTED_FIELDS),
+            "tooling_fields_present": [],
+        }
+    raw_bytes = raw_path.read_bytes()
+    raw_json = _read_json(raw_path, None)
+    if not isinstance(raw_json, dict):
+        return {
+            "status": "invalid",
+            "project_code": project_code,
+            "product_id": str(product_id),
+            "work_package_id": work_package_id,
+            "raw_most_available": True,
+            "complete": False,
+            "missing_fields": list(MOST_NATIVE_EXPECTED_FIELDS),
+            "tooling_fields_present": [],
+            "error_code": "raw_most_not_json_object",
+            "raw_json_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+            "raw_json_size_bytes": len(raw_bytes),
+        }
+    fields_present = [
+        field for field in MOST_NATIVE_EXPECTED_FIELDS
+        if _json_key_exists(raw_json, field)
+    ]
+    missing_fields = [
+        field for field in MOST_NATIVE_EXPECTED_FIELDS
+        if field not in fields_present
+    ]
+    tooling_fields_present = [
+        field for field in MOST_NATIVE_TOOLING_FIELDS
+        if _json_key_exists(raw_json, field)
+    ]
+    return {
+        "status": "complete" if not missing_fields else "incomplete",
+        "project_code": project_code,
+        "product_id": str(product_id),
+        "work_package_id": work_package_id,
+        "raw_most_available": True,
+        "complete": not missing_fields,
+        "fields_present": fields_present,
+        "missing_fields": missing_fields,
+        "tooling_fields_present": tooling_fields_present,
+        "tooling_fields_expected_when_applicable": list(MOST_NATIVE_TOOLING_FIELDS),
+        "raw_json_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "raw_json_size_bytes": len(raw_bytes),
     }
 
 

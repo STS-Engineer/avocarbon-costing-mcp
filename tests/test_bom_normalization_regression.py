@@ -573,6 +573,13 @@ def test_valid_most_callback_completes_current_trigger_run(monkeypatch):
 
     assert result["success"] is True
     assert result["state_status_after"] == "most_received"
+    assert result["project_code"] == "TEST-PROJECT"
+    assert result["product_id"] == "TEST-PRODUCT"
+    assert result["work_package_id"] == "wp_10_wire_winding"
+    assert result["most_scope_id"] == "wp_10_wire_winding"
+    assert result["trigger_run_id"] == "most-run-current"
+    assert result["received_count"] == 1
+    assert result["required_count"] == 1
     saved_entry = state["most"]["wp_10_wire_winding"]
     assert saved_entry["received_for_trigger_run_id"] == "most-run-current"
     assert saved_entry["status"] == "received"

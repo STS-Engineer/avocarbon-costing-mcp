@@ -30,6 +30,7 @@ from services.choke_sequential_agent_workflow import (
     trigger_most_operations,
     trigger_next_component_costing,
     update_commercial_fields,
+    verify_most_raw_output_completeness,
 )
 from services.project_data_paths import (
     CustomerInputFileNotFound,
@@ -445,6 +446,19 @@ def trigger_most(request: TriggerStageRequest):
 @router.get("/most-agent-configuration")
 def most_agent_configuration():
     return _handle(get_most_agent_configuration_health)
+
+
+@router.get("/most-output-verification/{project_code}/{product_id}/{work_package_id}")
+def most_output_verification(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+):
+    return _handle(lambda: verify_most_raw_output_completeness(
+        project_code,
+        product_id,
+        work_package_id,
+    ))
 
 
 @router.post("/retry-most-work-package")
