@@ -720,6 +720,12 @@ def reconcile_most_outputs(
                 "affected_component_ids": list(entry.get("component_ids") or []),
                 "preservation_note": "Preserved for audit; excluded from the current technical revision.",
             })
+    required_id_set = set(required_ids)
+    obsolete = [
+        item
+        for item in obsolete
+        if item.get("work_package_id") not in required_id_set
+    ]
     return {
         "process_revision": process_revision_value,
         "required_work_packages": required_ids,

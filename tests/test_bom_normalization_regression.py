@@ -628,10 +628,12 @@ def test_retry_most_work_package_triggers_only_failed_scope(monkeypatch):
     most = {
         item["work_package_id"]: {
             **item,
-            "status": "trigger_request_accepted",
-            "lifecycle_status": "awaiting_most_callback",
+            "status": "trigger_request_failed",
+            "lifecycle_status": "trigger_request_failed",
             "trigger_run_id": "old-most-run",
-            "trigger_attempts": [{"status": "trigger_request_accepted"}],
+            "failure_code": "workspace_agent_unavailable",
+            "retryable": True,
+            "trigger_attempts": [{"status": "trigger_request_failed"}],
         }
         for item in process["work_packages"]
     }
@@ -672,7 +674,7 @@ def test_retry_most_work_package_triggers_only_failed_scope(monkeypatch):
     assert conversation_key == (
         "TEST-PROJECT:TEST-PRODUCT:most:wp_10_wire_winding:v1"
     )
-    assert state["most"]["wp_10_wire_winding"]["writeback_failure_history"]
+    assert state["most"]["wp_10_wire_winding"]["retry_history"]
     assert state["most"]["wp_30_soldering_tinning"]["trigger_run_id"] == "old-most-run"
 
     duplicate = workflow.retry_most_work_package(

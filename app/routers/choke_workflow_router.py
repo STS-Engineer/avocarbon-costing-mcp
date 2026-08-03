@@ -14,6 +14,7 @@ from services.choke_sequential_agent_workflow import (
     get_component_outputs,
     get_most_output,
     get_most_outputs,
+    get_most_agent_configuration_health,
     get_writeback_debug,
     get_workflow_debug,
     get_workflow_state,
@@ -437,7 +438,13 @@ def trigger_most(request: TriggerStageRequest):
         dry_run=request.dry_run,
         force=request.force,
         requested_by=request.requested_by,
+        explicit_regeneration=True,
     ))
+
+
+@router.get("/most-agent-configuration")
+def most_agent_configuration():
+    return _handle(get_most_agent_configuration_health)
 
 
 @router.post("/retry-most-work-package")

@@ -296,6 +296,46 @@ def _archive_technical_revision(
     return _relative(path)
 
 
+def _archive_previous_most_output(
+    project_code: str,
+    product_id: str,
+    work_package_id: str,
+) -> Dict[str, Optional[str]]:
+    """Archive a legacy MOST output and remove it from the current revision paths."""
+    paths = {
+        "raw": _most_output_path(project_code, product_id, work_package_id),
+        "normalized": _normalized_most_output_path(
+            project_code, product_id, work_package_id
+        ),
+    }
+    archived: Dict[str, Optional[str]] = {"raw": None, "normalized": None}
+    for kind, path in paths.items():
+        payload = _read_json(path, {}) or {}
+        if not payload:
+            continue
+        revision = (
+            payload.get("technical_revision")
+            or payload.get("output_revision")
+            or hashlib.sha256(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        archived[kind] = _archive_technical_revision(
+            project_code,
+            product_id,
+            f"most_outputs_previous_{work_package_id}_{kind}",
+            revision,
+            payload,
+        )
+        path.unlink(missing_ok=True)
+    return archived
+
+
 def _run_dir(project_code: str, product_id: str) -> Path:
     return get_workflow_run_paths(project_code, product_id)["run_dir"]
 
@@ -856,10 +896,26 @@ def _derive_revision_aware_status(state: Dict[str, Any]) -> Dict[str, Any]:
         "received_not_normalized_work_packages": "received_not_normalized",
         "obsolete_work_packages": "obsolete_for_current_revision",
     }, "work_package_id")
+    required_most_set = set(required_most)
     for item_id, revision in most_statuses.items():
         if item_id in (state.get("most") or {}):
-            state["most"][item_id]["revision_status"] = revision["status"]
-            state["most"][item_id]["revision_status_reason"] = revision.get("status_reason")
+            current_entry = state["most"][item_id]
+            if (
+                item_id in required_most_set
+                and revision["status"] == "obsolete_for_current_revision"
+            ):
+                continue
+            if (
+                current_entry.get("regenerated_for_current_revision")
+                and current_entry.get("status") in {
+                    "trigger_request_sending", "trigger_request_accepted",
+                    "awaiting_most_callback", "trigger_request_failed",
+                }
+                and revision["status"] == "legacy_unverified"
+            ):
+                continue
+            current_entry["revision_status"] = revision["status"]
+            current_entry["revision_status_reason"] = revision.get("status_reason")
     valid_most = {item["work_package_id"] for item in most_reconciliation.get("valid_work_packages") or []}
     stale_most = {item["work_package_id"] for item in most_reconciliation.get("stale_work_packages") or []}
     blocked_most = {item["work_package_id"] for item in most_reconciliation.get("blocked_work_packages") or []}
@@ -868,6 +924,11 @@ def _derive_revision_aware_status(state: Dict[str, Any]) -> Dict[str, Any]:
         if str(((state.get("most") or {}).get(item_id) or {}).get("status") or "") in {
             "trigger_request_sending", "trigger_request_accepted", "awaiting_most_callback", "triggered",
         }
+    }
+    failed_most = {
+        item_id for item_id in required_most
+        if str(((state.get("most") or {}).get(item_id) or {}).get("status") or "")
+        in {"trigger_request_failed", "failed", "failed_before_http", "writeback_failed"}
     }
     if process.get("status") == "blocked":
         most_summary = "blocked"
@@ -881,6 +942,8 @@ def _derive_revision_aware_status(state: Dict[str, Any]) -> Dict[str, Any]:
         most_summary = "received"
     elif active_most:
         most_summary = "partially_received" if valid_most else "pending"
+    elif failed_most:
+        most_summary = "trigger_failed"
     elif stale_most:
         most_summary = "stale"
     elif valid_most:
@@ -888,6 +951,12 @@ def _derive_revision_aware_status(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         most_summary = "pending"
     state["most_status"] = most_summary
+    state["most_current_revision_progress"] = {
+        "required_count": len(required_most),
+        "received_count": len(required_most_set & valid_most),
+        "pending_or_failed_count": len(required_most_set - valid_most),
+        "required_work_package_ids": list(required_most),
+    }
 
     if component_summary == "blocked" or most_summary == "blocked":
         workflow_summary = "blocked"
@@ -1308,10 +1377,11 @@ def _trigger(
     idempotency_key: str,
     dry_run: bool,
     preserve_request_identifiers: bool = False,
+    agent_id_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     _load_env()
     return trigger_workspace_agent(
-        agent_id=os.getenv(agent_id_env) or fallback_agent_name,
+        agent_id=agent_id_override or os.getenv(agent_id_env) or fallback_agent_name,
         access_token=os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN"),
         input_text=input_text,
         conversation_key=conversation_key,
@@ -1356,6 +1426,72 @@ def get_bom_agent_configuration_health() -> Dict[str, Any]:
         "callback_timeout_seconds": _bom_callback_timeout_seconds(),
         "execution_mode": "synchronous_request_path",
         "agent_capability": capability,
+    }
+
+
+def get_most_agent_configuration_health() -> Dict[str, Any]:
+    """Return a secret-safe view of the exact MOST trigger configuration."""
+    _load_env()
+    raw_agent_id = clean_agent_id(
+        str(os.getenv("CHATGPT_MOST_AGENT_ID") or "").strip().strip('"').strip("'")
+    )
+    token = str(os.getenv("CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN") or "").strip()
+    diagnostic = workspace_agent_configuration(
+        agent_id=raw_agent_id,
+        access_token=token,
+    )
+    missing_configuration = [
+        str(item).replace("CHATGPT_CHOKE_BOM_AGENT_ID", "CHATGPT_MOST_AGENT_ID")
+        for item in diagnostic.get("missing_configuration") or []
+    ]
+    return {
+        "service": "most-assemblage-workspace-agent",
+        **diagnostic,
+        "environment_variables": {
+            "agent_id": "CHATGPT_MOST_AGENT_ID",
+            "access_token": "CHATGPT_WORKSPACE_AGENT_ACCESS_TOKEN",
+        },
+        "configuration_source": "process environment, with mcp_server/.env local fallback",
+        "agent_id_prefix": raw_agent_id[:10] or None,
+        "agent_id_suffix": raw_agent_id[-4:] if raw_agent_id else None,
+        "agent_id_matches_external_component": bool(
+            raw_agent_id
+            and raw_agent_id
+            == str(os.getenv("CHATGPT_EXTERNAL_COMPONENT_AGENT_ID") or "").strip()
+        ),
+        "missing_configuration": missing_configuration,
+    }
+
+
+def _most_trigger_failure(trigger_result: Mapping[str, Any]) -> Dict[str, Any]:
+    http_status = trigger_result.get("http_status")
+    response = trigger_result.get("response")
+    error = trigger_result.get("error")
+    text = " ".join(
+        str(value)
+        for value in (response, error, trigger_result.get("note"))
+        if value not in (None, "")
+    )
+    unavailable = (
+        http_status == 409
+        and "workspace agent trigger is not currently available" in text.lower()
+    )
+    return {
+        "failure_code": (
+            "workspace_agent_unavailable" if unavailable else "workspace_agent_trigger_failed"
+        ),
+        "failure_message": (
+            "The configured MOST Workspace Agent trigger is currently unavailable."
+            if unavailable
+            else "The MOST Workspace Agent trigger request failed."
+        ),
+        "retryable": bool(
+            unavailable
+            or http_status in {429, 500, 502, 503, 504}
+            or trigger_result.get("error_type") in {"timeout", "connection_error"}
+        ),
+        "upstream_http_status": http_status,
+        "upstream_request_id": trigger_result.get("request_correlation_id"),
     }
 
 
@@ -6273,6 +6409,7 @@ def trigger_most_operations(
     only_work_package_id: Optional[str] = None,
     active_trigger_run_id: Optional[str] = None,
     requested_by: str = "system",
+    explicit_regeneration: bool = False,
 ) -> Dict[str, Any]:
     product_id = str(product_id)
     state, _ = _existing_state(project_code, product_id)
@@ -6371,6 +6508,19 @@ def trigger_most_operations(
         most_reconciliation
     )
     state["most_scheduler_eligibility"] = most_scheduler_policy
+    most_agent_configuration = get_most_agent_configuration_health()
+    state["most_agent_configuration"] = most_agent_configuration
+    logger.info(
+        "MOST Agent configuration project=%s product=%s agent_prefix=%s agent_suffix=%s "
+        "token_present=%s status=%s matches_external=%s",
+        project_code,
+        product_id,
+        most_agent_configuration.get("agent_id_prefix"),
+        most_agent_configuration.get("agent_id_suffix"),
+        most_agent_configuration.get("token_present"),
+        most_agent_configuration.get("status"),
+        most_agent_configuration.get("agent_id_matches_external_component"),
+    )
     schedulable_ids = set(most_scheduler_policy["automatic_trigger_ids"])
     legacy_or_unverified_ids = set(
         most_scheduler_policy["explicit_validation_or_regeneration_ids"]
@@ -6479,6 +6629,9 @@ def trigger_most_operations(
     for work_package in work_packages:
         work_package_id = work_package["work_package_id"]
         previous = state["most"].get(work_package_id) or {}
+        explicitly_regenerable = (
+            explicit_regeneration and work_package_id in legacy_or_unverified_ids
+        )
         if work_package.get("status") == "blocked":
             state["most"][work_package_id] = {
                 **previous,
@@ -6493,7 +6646,7 @@ def trigger_most_operations(
                 scheduler_action="blocked",
             )
             continue
-        if not force and work_package_id in legacy_or_unverified_ids:
+        if not force and not explicit_regeneration and work_package_id in legacy_or_unverified_ids:
             decision = {
                 "work_package_id": work_package_id,
                 "status": "legacy_unverified",
@@ -6521,7 +6674,11 @@ def trigger_most_operations(
                 scheduler_action="blocked",
             )
             continue
-        if not force and work_package_id not in schedulable_ids:
+        if (
+            not force
+            and work_package_id not in schedulable_ids
+            and not explicitly_regenerable
+        ):
             decision = {
                 "work_package_id": work_package_id,
                 "status": "valid",
@@ -6550,6 +6707,13 @@ def trigger_most_operations(
                 scheduler_action="skipped",
             )
             continue
+        legacy_output_archive = (
+            _archive_previous_most_output(
+                project_code, product_id, work_package_id
+            )
+            if explicitly_regenerable
+            else {"raw": None, "normalized": None}
+        )
         trigger_run_id = str(active_trigger_run_id or uuid.uuid4())
         correlation_id = str(uuid.uuid4())
         payload = _most_trigger_payload(state, work_package, trigger_run_id)
@@ -6596,6 +6760,8 @@ def trigger_most_operations(
             "source_bom_revision": source_bom_revision,
             "source_process_revision": process.get("technical_revision"),
             "source_work_package_revision": work_package.get("technical_revision"),
+            "legacy_output_archive": legacy_output_archive,
+            "regenerated_for_current_revision": explicitly_regenerable,
         }
         state["status"] = "most_triggering"
         state["current_step"] = "Step 3 MOST Assemblage"
@@ -6612,14 +6778,29 @@ def trigger_most_operations(
         _save_state(state)
         append_workflow_event(project_code, product_id, "most_trigger_requested", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="trigger_request_sending", save_path=payload["save_address"])
         try:
-            trigger_result = _trigger(
-                "CHATGPT_MOST_AGENT_ID",
-                "MOST Assemblage",
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
-                conversation_key,
-                correlation_id,
-                dry_run=dry_run,
-            )
+            if most_agent_configuration.get("status") != "configured":
+                trigger_result = {
+                    "status": "blocked",
+                    "http_status": None,
+                    "error_type": "most_agent_configuration_invalid",
+                    "note": "MOST Workspace Agent configuration is incomplete or invalid.",
+                    "missing_inputs": most_agent_configuration.get("missing_configuration") or [],
+                }
+            else:
+                trigger_result = _trigger(
+                    "CHATGPT_MOST_AGENT_ID",
+                    "MOST Assemblage",
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                    conversation_key,
+                    correlation_id,
+                    dry_run=dry_run,
+                    agent_id_override=clean_agent_id(
+                        str(os.getenv("CHATGPT_MOST_AGENT_ID") or "")
+                        .strip()
+                        .strip('"')
+                        .strip("'")
+                    ),
+                )
         except Exception as exc:
             failed_attempt = {
                 **sending_attempt,
@@ -6669,6 +6850,8 @@ def trigger_most_operations(
             "callback_status": "waiting_for_callback" if accepted else "not_requested",
             "final_outcome": "waiting_for_callback" if accepted else "trigger_request_failed",
         }
+        failure = {} if accepted else _most_trigger_failure(trigger_result)
+        completed_attempt.update(failure)
         entry = {
             **previous,
             **work_package,
@@ -6701,10 +6884,30 @@ def trigger_most_operations(
             "source_bom_revision": source_bom_revision,
             "source_process_revision": process.get("technical_revision"),
             "source_work_package_revision": work_package.get("technical_revision"),
+            "revision_status": (
+                "current_revision_pending"
+                if explicitly_regenerable
+                else (revision_by_id.get(work_package_id) or {}).get("status")
+            ),
+            "revision_status_reason": (
+                "legacy_output_archived_and_current_input_rebuilt"
+                if explicitly_regenerable
+                else (revision_by_id.get(work_package_id) or {}).get("status_reason")
+            ),
+            "legacy_output_archive": legacy_output_archive,
+            "regenerated_for_current_revision": explicitly_regenerable,
+            **failure,
         }
         state["most"][work_package_id] = entry
         _save_state(state)
-        summary = {"work_package_id": work_package_id, "status": "accepted" if accepted else "failed", "http_status": trigger_result.get("http_status"), "correlation_id": correlation_id, "trigger_run_id": trigger_run_id}
+        summary = {
+            "work_package_id": work_package_id,
+            "status": "accepted" if accepted else "failed",
+            "http_status": trigger_result.get("http_status"),
+            "correlation_id": correlation_id,
+            "trigger_run_id": trigger_run_id,
+            **failure,
+        }
         if accepted:
             triggered.append(summary)
             append_workflow_event(project_code, product_id, "most_trigger_accepted", work_package_id=work_package_id, trigger_run_id=trigger_run_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="awaiting_most_callback")
@@ -6713,7 +6916,11 @@ def trigger_most_operations(
             append_workflow_event(project_code, product_id, "most_trigger_failed", work_package_id=work_package_id, correlation_id=correlation_id, status_before=previous.get("status"), status_after="failed", http_status=trigger_result.get("http_status"))
         _append_invocation_item(
             invocation, item_type="most", item_id=work_package_id,
-            revision_status=(revision_by_id.get(work_package_id) or {}).get("status") or "missing",
+            revision_status=(
+                "current_revision_pending"
+                if explicitly_regenerable
+                else (revision_by_id.get(work_package_id) or {}).get("status") or "missing"
+            ),
             eligibility_decision="eligible", decision_reason="revision_requires_trigger",
             scheduler_action="triggered" if accepted else "failed",
             trigger_run_id=trigger_run_id, conversation_key=conversation_key,
@@ -6783,6 +6990,16 @@ def trigger_most_operations(
         ]
         state["status"] = "most_trigger_failed"
         state["current_step"] = "Step 3 MOST Assemblage"
+        failed_metadata = [
+            {
+                key: summary.get(key)
+                for key in (
+                    "work_package_id", "failure_code", "failure_message",
+                    "retryable", "upstream_http_status", "upstream_request_id",
+                )
+            }
+            for summary in failed
+        ]
         state["most"].update({
             "status": "trigger_request_failed",
             "lifecycle_status": "trigger_request_failed",
@@ -6794,6 +7011,12 @@ def trigger_most_operations(
             "skipped_operations": skipped_operations,
             "eligibility_report": eligibility_report,
             "active_trigger_run_id": trigger_run_id,
+            "retryable": any(item.get("retryable") for item in failed_metadata),
+            "failure_code": (
+                failed_metadata[0].get("failure_code")
+                if len(failed_metadata) == 1 else "one_or_more_most_triggers_failed"
+            ),
+            "failed_work_packages": failed_metadata,
         })
     elif awaiting_existing:
         state["status"] = "most_triggered"
@@ -6889,6 +7112,12 @@ def retry_most_work_package(
     state, _ = _existing_state(project_code, product_id)
     if state is None:
         raise ValueError("Workflow state not found.")
+    process = state.get("process_decomposition") or {}
+    required_ids = set(technical_revisions.required_work_package_ids(process))
+    if work_package_id not in required_ids:
+        raise ValueError(
+            f"work_package_id {work_package_id} is not required by the current process revision."
+        )
     entry = (state.get("most") or {}).get(work_package_id)
     if not isinstance(entry, dict) or not entry.get("work_package_id"):
         raise ValueError(
@@ -6909,7 +7138,7 @@ def retry_most_work_package(
         "trigger_request_sending",
         "trigger_request_accepted",
         "awaiting_most_callback",
-    } and retry_count > 0:
+    }:
         return {
             "success": False,
             "status": "most_retry_blocked",
@@ -6920,40 +7149,28 @@ def retry_most_work_package(
             "active_trigger_run_id": entry.get("trigger_run_id"),
             "state": state,
         }
-    failure = {
-        "recorded_at": _now_iso(),
-        "failure_reason": "missing_trigger_run_id",
-        "failed_trigger_run_id": entry.get("trigger_run_id"),
-        "status_before": entry.get("status"),
-        "source": "controlled_retry_request",
+    retry_record = {
+        "requested_at": _now_iso(),
+        "previous_trigger_run_id": entry.get("trigger_run_id"),
+        "previous_status": entry.get("status"),
+        "previous_failure_code": entry.get("failure_code") or entry.get("failure_reason"),
+        "source": "controlled_most_retry",
     }
-    entry.setdefault("writeback_failure_history", []).append(failure)
+    entry.setdefault("retry_history", []).append(retry_record)
     entry.update({
-        "status": "writeback_failed",
-        "lifecycle_status": "most_writeback_failed",
-        "retryable": True,
-        "failure_reason": "missing_trigger_run_id",
         "retry_count": retry_count + 1,
     })
     state["most"][work_package_id] = entry
-    state["most"].update({
-        "status": "writeback_failed",
-        "lifecycle_status": "most_writeback_failed",
-        "retryable": True,
-        "failure_reason": "missing_trigger_run_id",
-    })
-    state["status"] = "most_trigger_failed"
-    state["current_step"] = "Step 3 MOST Assemblage"
     _save_state(state)
     append_workflow_event(
         project_code,
         product_id,
-        "most_writeback_failed",
+        "most_retry_requested",
         work_package_id=work_package_id,
         trigger_run_id=entry.get("trigger_run_id"),
-        failure_reason="missing_trigger_run_id",
-        status_before=failure["status_before"],
-        status_after="writeback_failed",
+        failure_reason=retry_record["previous_failure_code"],
+        status_before=retry_record["previous_status"],
+        status_after="retry_requested",
     )
     new_trigger_run_id = str(uuid.uuid4())
     return trigger_most_operations(
@@ -6963,6 +7180,8 @@ def retry_most_work_package(
         force=True,
         only_work_package_id=work_package_id,
         active_trigger_run_id=new_trigger_run_id,
+        requested_by="most_work_package_retry",
+        explicit_regeneration=True,
     )
 
 
