@@ -9,8 +9,8 @@ from services import choke_component_costing
 from services.project_data_paths import (
     BACKEND_ROOT,
     CUSTOMER_INPUT_DIR,
-    get_workflow_run_paths,
     portable_data_reference,
+    resolve_costing_run_dir,
 )
 
 
@@ -31,7 +31,7 @@ def _safe_part(value: Any, field_name: str) -> str:
 
 
 def _run_dir(project_code: str, product_id: str) -> Path:
-    return get_workflow_run_paths(project_code, product_id)["run_dir"]
+    return resolve_costing_run_dir(project_code, product_id)
 
 
 def _relative(path: Path) -> str:

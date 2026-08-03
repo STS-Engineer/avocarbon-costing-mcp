@@ -45,12 +45,14 @@ from services.project_data_paths import (
     DATA_ROOT,
     PROJECT_ROOT,
     atomic_write_json,
+    costing_run_storage_diagnostics,
     data_reference_candidates,
     ensure_workflow_storage_ready,
     get_git_commit,
     get_legacy_workflow_state_paths,
     get_workflow_run_paths,
     portable_data_reference,
+    resolve_costing_run_dir,
     resolve_customer_input_path,
     workflow_path_diagnostics,
 )
@@ -337,7 +339,7 @@ def _archive_previous_most_output(
 
 
 def _run_dir(project_code: str, product_id: str) -> Path:
-    return get_workflow_run_paths(project_code, product_id)["run_dir"]
+    return resolve_costing_run_dir(project_code, product_id)
 
 
 def _state_path(project_code: str, product_id: str) -> Path:
@@ -6086,6 +6088,12 @@ def normalize_component_output(
             and delivered.get("pricing_unit")
             else None
         ),
+        "delivered_material_unit_cost_currency": delivered.get(
+            "delivered_cost_currency"
+        ),
+        "delivered_material_unit_cost_pricing_unit": delivered.get(
+            "pricing_unit"
+        ),
         "delivered_material_cost_per_piece": delivered_material_cost,
         "delivered_cost_reconciliation": delivered,
         "capital_cost": capital_audit.get("converted_value"),
@@ -6108,6 +6116,14 @@ def normalize_component_output(
         "source_quantity": canonical.get("source_quantity"),
         "conversion": canonical.get("conversion"),
         "provisional_consumption": glue_consumption,
+        "density_g_cm3": (
+            glue_consumption.get("density_g_cm3")
+            if glue_consumption else None
+        ),
+        "application_count": (
+            glue_consumption.get("application_count")
+            if glue_consumption else None
+        ),
         "annual_quantity": customer_input.get("annual_quantity"),
         "destination_zone": customer_input.get("customer_delivery_zone"),
         "reporting_currency": reporting_currency,
@@ -6409,6 +6425,113 @@ def _artifact_metadata(path: Path) -> Dict[str, Any]:
     }
 
 
+def _self_heal_current_component_outputs(
+    state: Dict[str, Any],
+    normalized_bom: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Deterministically refresh current normalized outputs from immutable raw JSON."""
+    report = {
+        "status": "checked",
+        "agent_triggered": False,
+        "components_checked": [],
+        "components_rebuilt": [],
+        "components_unchanged": [],
+        "components_missing_raw": [],
+        "raw_outputs_preserved": True,
+    }
+    state_changed = False
+    for bom_component in _required_external_components(
+        normalized_bom, include_unconfirmed=True,
+    ):
+        component_id = bom_component["component_id"]
+        raw_path = _component_output_path(
+            state["project_code"], state["product_id"], component_id,
+        )
+        normalized_path = _normalized_component_output_path(
+            state["project_code"], state["product_id"], component_id,
+        )
+        report["components_checked"].append(component_id)
+        if not raw_path.is_file():
+            report["components_missing_raw"].append(component_id)
+            continue
+
+        raw_before = _artifact_metadata(raw_path)
+        raw_json = _read_json(raw_path, None)
+        if not isinstance(raw_json, dict):
+            report.setdefault("errors", []).append({
+                "component_id": component_id,
+                "reason": "raw_component_output_not_object",
+            })
+            continue
+        candidate = normalize_component_output(state, bom_component, raw_json)
+        candidate_bytes = _json_artifact_bytes(candidate)
+        candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+        previous = _read_json(normalized_path, None)
+        previous_metadata = _artifact_metadata(normalized_path)
+        changed = previous != candidate
+        archive_path = None
+        if changed:
+            if isinstance(previous, dict):
+                previous_revision = (
+                    previous.get("technical_revision")
+                    or f"normalized-sha256:{previous_metadata['sha256']}"
+                )
+                archive_path = _archive_technical_revision(
+                    state["project_code"],
+                    state["product_id"],
+                    f"component_outputs_normalized_previous_{component_id}",
+                    previous_revision,
+                    previous,
+                )
+            _write_json(normalized_path, candidate)
+            report["components_rebuilt"].append(component_id)
+        else:
+            report["components_unchanged"].append(component_id)
+        persisted_metadata = _artifact_metadata(normalized_path)
+        candidate_sha256 = persisted_metadata.get("sha256") or candidate_sha256
+
+        raw_after = _artifact_metadata(raw_path)
+        if raw_after.get("sha256") != raw_before.get("sha256"):
+            raise RuntimeError(
+                f"Raw component output changed during self-heal: {component_id}."
+            )
+        current_state = dict(
+            (state.get("components") or {}).get(component_id) or {}
+        )
+        desired_state = {
+            **current_state,
+            "normalized_path": _relative(normalized_path),
+            "output_revision": candidate.get("technical_revision"),
+            "costing_readiness": (
+                "complete"
+                if candidate.get("costing_resolution_status") == "resolved"
+                else "incomplete"
+            ),
+            "requires_regeneration": (
+                candidate.get("costing_resolution_status") != "resolved"
+            ),
+        }
+        if desired_state != current_state:
+            state.setdefault("components", {})[component_id] = desired_state
+            state_changed = True
+        report.setdefault("artifacts", {})[component_id] = {
+            "raw_path": str(raw_path),
+            "raw_sha256": raw_after.get("sha256"),
+            "normalized_path": str(normalized_path),
+            "old_normalized_sha256": previous_metadata.get("sha256"),
+            "new_normalized_sha256": candidate_sha256,
+            "archive_path": archive_path,
+            "rebuilt": changed,
+        }
+
+    if state_changed:
+        _save_state(state)
+    report["status"] = (
+        "rebuilt" if report["components_rebuilt"] else "current"
+    )
+    return report
+
+
 def renormalize_component_output(
     project_code: str,
     product_id: str,
@@ -6454,7 +6577,7 @@ def renormalize_component_output(
     candidate = normalize_component_output(state, bom_component, raw_json)
     candidate_bytes = _json_artifact_bytes(candidate)
     candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
-    changed = old_metadata.get("sha256") != candidate_sha256
+    changed = old_normalized != candidate
     result = {
         "status": "dry_run" if dry_run else "applied",
         "project_code": project_code,
@@ -6486,9 +6609,13 @@ def renormalize_component_output(
                 "currency",
                 "delivered_material_unit_cost",
                 "delivered_material_unit_cost_basis",
+                "delivered_material_unit_cost_currency",
+                "delivered_material_unit_cost_pricing_unit",
                 "delivered_material_cost_per_piece",
                 "capital_cost",
                 "capital_cost_included_in_delivered_material",
+                "density_g_cm3",
+                "application_count",
                 "reconciliation_residual",
                 "logistics_adders_unresolved",
                 "delivered_cost_adjustments_unresolved",
@@ -8378,6 +8505,11 @@ def calculate_final_choke_costing_from_saved_outputs(
         if isinstance(item, dict) and item.get("component_id")
     }
 
+    storage_diagnostics = costing_run_storage_diagnostics(project_code, product_id)
+    component_self_heal = _self_heal_current_component_outputs(
+        state, normalized_bom,
+    )
+
     component_reconciliation = technical_revisions.reconcile_component_outputs(
         normalized_bom,
         state,
@@ -8502,6 +8634,39 @@ def calculate_final_choke_costing_from_saved_outputs(
             ),
             "technical_quantity_resolution": technical_quantity,
         }
+        canonical_quantity = component.get("purchasing_quantity_per_product")
+        canonical_pricing_unit = component.get("pricing_unit")
+        canonical_quantity_allowed = (
+            canonical_quantity is not None
+            and canonical_pricing_unit
+            and (
+                component.get("technical_quantity_status") != "provisional"
+                or result_mode == "preliminary"
+            )
+        )
+        if canonical_quantity_allowed:
+            technical_quantity = {
+                **technical_quantity,
+                "resolution_status": (
+                    "estimated"
+                    if component.get("technical_quantity_status") == "provisional"
+                    else "confirmed"
+                ),
+                "quantity": canonical_quantity,
+                "source_quantity": {
+                    "value": component.get("technical_quantity"),
+                    "unit": component.get("technical_quantity_unit"),
+                },
+                "source": "current_canonical_component",
+            }
+            pricing_quantity_info.update({
+                "status": "resolved",
+                "pricing_quantity": canonical_quantity,
+                "pricing_unit": canonical_pricing_unit,
+                "pricing_quantity_basis": "current_canonical_component",
+                "reason": None,
+                "technical_quantity_resolution": technical_quantity,
+            })
         source_material_result = component_costing.compute_component_material_cost(
             component_id, pricing_quantity_info, price_info,
         )
@@ -8535,8 +8700,11 @@ def calculate_final_choke_costing_from_saved_outputs(
                 == normalize_currency_code(price_info.get("unit_price_currency"))
                 else Decimal(str(line_material_cost))
             )
-        delivered_result = component_costing.resolve_delivered_unit_cost(
-            raw, project_currency, fx_rates=fx_rates_override,
+        delivered_result = (
+            component.get("delivered_cost_reconciliation")
+            or component_costing.resolve_delivered_unit_cost(
+                raw, project_currency, fx_rates=fx_rates_override,
+            )
         )
         delivered_basis = delivered_result.get("pricing_unit")
         pricing_unit = pricing_quantity_info.get("pricing_unit")
@@ -8788,7 +8956,7 @@ def calculate_final_choke_costing_from_saved_outputs(
             "technical_quantity_resolution": technical_quantity,
             "assumption_details": technical_quantity.get("assumptions") or None,
             "classification": "External",
-            "source": "saved_component_json",
+            "source": "current_canonical_resolved_component",
             "status": component_status,
             "blocking_reason": component_blocking_reason,
         })
@@ -8995,9 +9163,19 @@ def calculate_final_choke_costing_from_saved_outputs(
         },
         "status": result_status,
         "result_mode": result_mode,
+        "technical_calculation_status": (
+            technical_preliminary_status
+            if result_mode == "preliminary"
+            else technical_firm_status
+        ),
         "technical_preliminary_status": technical_preliminary_status,
         "technical_firm_status": technical_firm_status,
         "technical_firm_blockers": list(dict.fromkeys(technical_firm_blockers)),
+        "financial_preliminary_status": "not_evaluated",
+        "financial_firm_status": "not_evaluated",
+        "financial_missing_inputs": [],
+        "storage_diagnostics": storage_diagnostics,
+        "component_normalization_self_heal": component_self_heal,
         "commercially_usable": (
             result_status == "calculated"
             and all(
@@ -9079,6 +9257,31 @@ def calculate_final_choke_costing_from_saved_outputs(
             ),
         ])),
     }
+    from services.choke_financial_plan import financial_readiness
+
+    preliminary_readiness = financial_readiness(
+        result,
+        {**customer_input, "mode": "preliminary"},
+        unit_data,
+    )
+    firm_readiness = financial_readiness(
+        result,
+        {**customer_input, "mode": "firm"},
+        unit_data,
+    )
+    result.update({
+        "financial_preliminary_status": preliminary_readiness.get(
+            "financial_preliminary_status"
+        ),
+        "financial_firm_status": firm_readiness.get("financial_firm_status"),
+        "financial_missing_inputs": list(dict.fromkeys([
+            *(preliminary_readiness.get("missing_inputs") or []),
+            *(firm_readiness.get("financial_firm_blockers") or []),
+        ])),
+        "financial_preliminary_warnings": (
+            preliminary_readiness.get("warnings") or []
+        ),
+    })
     output_path = _run_dir(project_code, product_id) / "final_choke_costing_result.json"
     result["source_bom_revision"] = normalized_bom.get("technical_revision")
     result["source_process_revision"] = process_decomposition.get("technical_revision")

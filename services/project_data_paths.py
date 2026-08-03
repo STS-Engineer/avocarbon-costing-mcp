@@ -199,6 +199,28 @@ def get_workflow_run_paths(project_code: str, product_id: str) -> Dict[str, Path
     }
 
 
+def resolve_costing_run_dir(project_code: str, product_id: str) -> Path:
+    """Return the one canonical absolute directory for a costing run."""
+    return get_workflow_run_paths(project_code, product_id)["run_dir"]
+
+
+def costing_run_storage_diagnostics(
+    project_code: str,
+    product_id: str,
+) -> Dict[str, Any]:
+    paths = get_workflow_run_paths(project_code, product_id)
+    run_dir = paths["run_dir"]
+    normalized_dir = (run_dir / "components_normalized").resolve()
+    return {
+        "configured_data_root": str(get_data_root(create=False)),
+        "resolved_run_directory": str(run_dir),
+        "raw_components_directory": str(paths["components_dir"]),
+        "raw_components_directory_exists": paths["components_dir"].is_dir(),
+        "normalized_components_directory": str(normalized_dir),
+        "normalized_components_directory_exists": normalized_dir.is_dir(),
+        "final_result_path": str((run_dir / "final_choke_costing_result.json").resolve()),
+    }
+
 def get_legacy_workflow_state_paths(project_code: str, product_id: str) -> List[Path]:
     project = _safe_workflow_part(project_code, "project_code")
     product = _safe_workflow_part(product_id, "product_id")

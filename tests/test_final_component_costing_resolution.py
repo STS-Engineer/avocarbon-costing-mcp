@@ -572,3 +572,17 @@ def test_external_material_classification_is_not_changed_by_most_participation()
     assert rows["ferrite_core"]["external_or_internal"] == "external"
     assert rows["magnet_wire"]["external_or_internal"] == "external"
     assert rows["lead_tinning"]["external_or_internal"] == "external"
+
+
+def test_financial_missing_inputs_do_not_reblock_technical_costing(monkeypatch):
+    result = _run_final(monkeypatch, "preliminary")
+    assert result["technical_calculation_status"] == result[
+        "technical_preliminary_status"
+    ]
+    assert result["technical_calculation_status"] in {
+        "calculated", "resolved_assumption"
+    }
+    assert result["financial_preliminary_status"] in {
+        "blocked", "preliminary_assumption"
+    }
+    assert result["manufacturing_cost_per_piece"] is not None

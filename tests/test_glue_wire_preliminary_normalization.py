@@ -162,11 +162,19 @@ def _renormalization_fixture(monkeypatch, tmp_path, component_id, raw):
     }
     monkeypatch.setattr(workflow, "_run_dir", lambda *_: run_dir)
     monkeypatch.setattr(
-        workflow, "_component_output_path", lambda *_: raw_path,
+        workflow,
+        "_component_output_path",
+        lambda _project, _product, current_id: (
+            raw_path if current_id == component_id
+            else run_dir / "agent_outputs" / "components" / f"{current_id}.json"
+        ),
     )
     monkeypatch.setattr(
         workflow, "_normalized_component_output_path",
-        lambda *_: normalized_path,
+        lambda _project, _product, current_id: (
+            normalized_path if current_id == component_id
+            else run_dir / "components_normalized" / f"{current_id}.json"
+        ),
     )
     monkeypatch.setattr(workflow, "_bom_raw_path", lambda *_: bom_raw_path)
     monkeypatch.setattr(
@@ -185,6 +193,8 @@ def _renormalization_fixture(monkeypatch, tmp_path, component_id, raw):
         "bom": bom_raw_path,
         "most": most_path,
         "run_dir": run_dir,
+        "state": state,
+        "normalized_bom": bom,
     }
 
 
@@ -409,3 +419,51 @@ def test_three_current_external_components_can_all_be_resolved():
     }
     assert sum(value == "resolved" for value in component_statuses.values()) == 3
     assert len(component_statuses) == 3
+
+
+@pytest.mark.parametrize(
+    ("component_id", "raw", "expected_quantity", "expected_delivered"),
+    [
+        ("glue", _glue_offer(), 0.024504422698, 10110),
+        ("magnet_wire", _wire_offer(), 0.725061, 1469.73383),
+    ],
+)
+def test_calculation_self_heal_rebuilds_stale_normalized_artifacts(
+    monkeypatch,
+    tmp_path,
+    component_id,
+    raw,
+    expected_quantity,
+    expected_delivered,
+):
+    paths = _renormalization_fixture(
+        monkeypatch, tmp_path, component_id, deepcopy(raw),
+    )
+    raw_before = paths["raw"].read_bytes()
+    bom_before = paths["bom"].read_bytes()
+    most_before = paths["most"].read_bytes()
+    result = workflow._self_heal_current_component_outputs(
+        paths["state"], paths["normalized_bom"],
+    )
+    normalized = json.loads(paths["normalized"].read_text(encoding="utf-8"))
+    assert result["status"] == "rebuilt"
+    assert component_id in result["components_rebuilt"]
+    assert normalized["technical_quantity"] == pytest.approx(expected_quantity)
+    assert normalized["delivered_material_unit_cost"] == expected_delivered
+    assert normalized["costing_resolution_status"] == "resolved"
+    assert normalized["logistics_adders_unresolved"] is False
+    assert normalized["delivered_cost_adjustments_unresolved"] is False
+    assert paths["raw"].read_bytes() == raw_before
+    assert paths["bom"].read_bytes() == bom_before
+    assert paths["most"].read_bytes() == most_before
+
+    first_hash = result["artifacts"][component_id]["new_normalized_sha256"]
+    archives_before = sorted((paths["run_dir"] / "revisions").rglob("*.json"))
+    second = workflow._self_heal_current_component_outputs(
+        paths["state"], paths["normalized_bom"],
+    )
+    archives_after = sorted((paths["run_dir"] / "revisions").rglob("*.json"))
+    assert second["status"] == "current"
+    assert component_id in second["components_unchanged"]
+    assert second["artifacts"][component_id]["new_normalized_sha256"] == first_hash
+    assert archives_after == archives_before
