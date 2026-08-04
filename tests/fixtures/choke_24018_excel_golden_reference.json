@@ -1,0 +1,3149 @@
+{
+  "schema_version": "choke-excel-golden-reference-v1",
+  "workbook": "24018-CHO-00 - 0300440157 - PRABHA ENGINEERING- India - Chokes - assy Quotation.xlsm",
+  "source_hash": "84b2166bd0a55af2a6b75be09b6fcc67c8cb4a87024b60075fd56d80f7eacbf1",
+  "source_size_bytes": 1280390,
+  "workbook_inventory": {
+    "worksheets": [
+      {
+        "name": "RFQ Data",
+        "state": "visible",
+        "used_range": "A1:AA89",
+        "tables": []
+      },
+      {
+        "name": "Purchasing",
+        "state": "visible",
+        "used_range": "A1:CA36",
+        "tables": []
+      },
+      {
+        "name": "Material Cost ",
+        "state": "visible",
+        "used_range": "A1:EM133",
+        "tables": [
+          "Compil_indexation"
+        ]
+      },
+      {
+        "name": "Material analysis ",
+        "state": "visible",
+        "used_range": "A1:R22",
+        "tables": []
+      },
+      {
+        "name": "Product Added value",
+        "state": "visible",
+        "used_range": "A1:DR81",
+        "tables": []
+      },
+      {
+        "name": "VOH cost per h",
+        "state": "visible",
+        "used_range": "A1:Z33",
+        "tables": []
+      },
+      {
+        "name": "Transp-Packaging-AMS",
+        "state": "visible",
+        "used_range": "A1:CB155",
+        "tables": [
+          "Invest_retainer",
+          "tran_conv_site_zone"
+        ]
+      },
+      {
+        "name": "Buffersheet",
+        "state": "visible",
+        "used_range": "A1:I11",
+        "tables": []
+      },
+      {
+        "name": "Capex ",
+        "state": "visible",
+        "used_range": "A1:AJ113",
+        "tables": []
+      },
+      {
+        "name": "PriceCalAVO",
+        "state": "visible",
+        "used_range": "A1:AW78",
+        "tables": []
+      },
+      {
+        "name": "Output for sales-PM",
+        "state": "visible",
+        "used_range": "A1:AQ128",
+        "tables": [
+          "Output_for_SALES_PM",
+          "Tableau5"
+        ]
+      },
+      {
+        "name": "Category_output",
+        "state": "hidden",
+        "used_range": "A1:DK8",
+        "tables": [
+          "Category_output"
+        ]
+      },
+      {
+        "name": "Customer offer",
+        "state": "visible",
+        "used_range": "A1:P148",
+        "tables": []
+      },
+      {
+        "name": "Output for sales",
+        "state": "visible",
+        "used_range": "A1:U92",
+        "tables": []
+      },
+      {
+        "name": "CompilData",
+        "state": "hidden",
+        "used_range": "A1:N75",
+        "tables": [
+          "Preparation_export"
+        ]
+      },
+      {
+        "name": "ExportData",
+        "state": "hidden",
+        "used_range": "A1:BI14",
+        "tables": [
+          "Export_database"
+        ]
+      },
+      {
+        "name": "INPUTCOSTING",
+        "state": "hidden",
+        "used_range": "A1:U48",
+        "tables": []
+      },
+      {
+        "name": "Layout Maker",
+        "state": "visible",
+        "used_range": "A1:N37",
+        "tables": []
+      },
+      {
+        "name": "H1 2022 - in KEUR",
+        "state": "hidden",
+        "used_range": "A1:AR55",
+        "tables": []
+      },
+      {
+        "name": "Financials Parameters",
+        "state": "visible",
+        "used_range": "A1:CB430",
+        "tables": []
+      },
+      {
+        "name": "PL Parameters",
+        "state": "hidden",
+        "used_range": "A1:CE53",
+        "tables": [
+          "Tableau9"
+        ]
+      }
+    ],
+    "defined_names": [
+      {
+        "name": "FP",
+        "destination": "'Financials Parameters'!$I$5:$CC$16",
+        "broken": false
+      },
+      {
+        "name": "Liste_BaseVOH",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_Currency",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_CurrencyPerPlant",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_DeliveryFreqDifferentZone",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_DeliveryFreqSameZone",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_DLCOST",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_EdiFreeze",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_ExternalPaymentTerms",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_Exworks",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_HourperYear",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_InternalPaymentTerms",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_LeadTimeOtherZone",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_LeadTimeSameZone",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_MaxDC",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_MaxFeePercentage",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_MaxFOHPercentage",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_MinDC",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_MinFeePercentage",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_MinFOHPercentage",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_Origine",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_SafetyStock",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_TaxeDividend",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_Taxes",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_TWCChokes",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Liste_Zone",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "OD",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "PLANTS",
+        "destination": "'Financials Parameters'!$I$5:$I$16",
+        "broken": false
+      },
+      {
+        "name": "Product_CapexPerM",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Product_FinalValueRetaining",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Product_PercentageNPV",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Product_ToolingToCustomer",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Product_WIPinPlant",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "Products",
+        "destination": "#REF!",
+        "broken": true
+      },
+      {
+        "name": "QuotingCUR",
+        "destination": "'RFQ Data'!$H$16",
+        "broken": false
+      }
+    ],
+    "external_links": [],
+    "calculation": {
+      "mode": null,
+      "full_calculation_on_load": true,
+      "force_full_calculation": null,
+      "iterative": null,
+      "iteration_count": null,
+      "iteration_delta": null
+    },
+    "formula_without_cached_value_count": 699,
+    "formula_without_cached_value_examples": [
+      {
+        "sheet": "Purchasing",
+        "cell": "BX4",
+        "formula": "=IF(BB4<>0,BB4,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV5",
+        "formula": "=IF(Z5<>0,Z5,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW5",
+        "formula": "=IF(AN5<>0,AN5,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX5",
+        "formula": "=IF(BB5<>0,BB5,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW6",
+        "formula": "=IF(AN6<>0,AN6,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX6",
+        "formula": "=IF(BB6<>0,BB6,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV7",
+        "formula": "=IF(Z7<>0,Z7,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW7",
+        "formula": "=IF(AN7<>0,AN7,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX7",
+        "formula": "=IF(BB7<>0,BB7,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV8",
+        "formula": "=IF(Z8<>0,Z8,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW8",
+        "formula": "=IF(AN8<>0,AN8,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX8",
+        "formula": "=IF(BB8<>0,BB8,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV9",
+        "formula": "=IF(Z9<>0,Z9,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW9",
+        "formula": "=IF(AN9<>0,AN9,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX9",
+        "formula": "=IF(BB9<>0,BB9,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV10",
+        "formula": "=IF(Z10<>0,Z10,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW10",
+        "formula": "=IF(AN10<>0,AN10,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX10",
+        "formula": "=IF(BB10<>0,BB10,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV11",
+        "formula": "=IF(Z11<>0,Z11,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW11",
+        "formula": "=IF(AN11<>0,AN11,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX11",
+        "formula": "=IF(BB11<>0,BB11,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV12",
+        "formula": "=IF(Z12<>0,Z12,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW12",
+        "formula": "=IF(AN12<>0,AN12,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX12",
+        "formula": "=IF(BB12<>0,BB12,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV13",
+        "formula": "=IF(Z13<>0,Z13,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW13",
+        "formula": "=IF(AN13<>0,AN13,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX13",
+        "formula": "=IF(BB13<>0,BB13,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV14",
+        "formula": "=IF(Z14<>0,Z14,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW14",
+        "formula": "=IF(AN14<>0,AN14,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX14",
+        "formula": "=IF(BB14<>0,BB14,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV15",
+        "formula": "=IF(Z15<>0,Z15,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW15",
+        "formula": "=IF(AN15<>0,AN15,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX15",
+        "formula": "=IF(BB15<>0,BB15,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV16",
+        "formula": "=IF(Z16<>0,Z16,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW16",
+        "formula": "=IF(AN16<>0,AN16,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX16",
+        "formula": "=IF(BB16<>0,BB16,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV17",
+        "formula": "=IF(Z17<>0,Z17,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW17",
+        "formula": "=IF(AN17<>0,AN17,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX17",
+        "formula": "=IF(BB17<>0,BB17,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV18",
+        "formula": "=IF(Z18<>0,Z18,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW18",
+        "formula": "=IF(AN18<>0,AN18,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX18",
+        "formula": "=IF(BB18<>0,BB18,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV19",
+        "formula": "=IF(Z19<>0,Z19,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW19",
+        "formula": "=IF(AN19<>0,AN19,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX19",
+        "formula": "=IF(BB19<>0,BB19,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV20",
+        "formula": "=IF(Z20<>0,Z20,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW20",
+        "formula": "=IF(AN20<>0,AN20,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX20",
+        "formula": "=IF(BB20<>0,BB20,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV21",
+        "formula": "=IF(Z21<>0,Z21,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW21",
+        "formula": "=IF(AN21<>0,AN21,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX21",
+        "formula": "=IF(BB21<>0,BB21,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV22",
+        "formula": "=IF(Z22<>0,Z22,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW22",
+        "formula": "=IF(AN22<>0,AN22,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX22",
+        "formula": "=IF(BB22<>0,BB22,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV23",
+        "formula": "=IF(Z23<>0,Z23,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW23",
+        "formula": "=IF(AN23<>0,AN23,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX23",
+        "formula": "=IF(BB23<>0,BB23,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV24",
+        "formula": "=IF(Z24<>0,Z24,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW24",
+        "formula": "=IF(AN24<>0,AN24,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX24",
+        "formula": "=IF(BB24<>0,BB24,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV25",
+        "formula": "=IF(Z25<>0,Z25,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW25",
+        "formula": "=IF(AN25<>0,AN25,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX25",
+        "formula": "=IF(BB25<>0,BB25,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV26",
+        "formula": "=IF(Z26<>0,Z26,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW26",
+        "formula": "=IF(AN26<>0,AN26,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX26",
+        "formula": "=IF(BB26<>0,BB26,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV27",
+        "formula": "=IF(Z27<>0,Z27,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW27",
+        "formula": "=IF(AN27<>0,AN27,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX27",
+        "formula": "=IF(BB27<>0,BB27,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV28",
+        "formula": "=IF(Z28<>0,Z28,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW28",
+        "formula": "=IF(AN28<>0,AN28,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX28",
+        "formula": "=IF(BB28<>0,BB28,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV29",
+        "formula": "=IF(Z29<>0,Z29,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW29",
+        "formula": "=IF(AN29<>0,AN29,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX29",
+        "formula": "=IF(BB29<>0,BB29,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BV30",
+        "formula": "=IF(Z30<>0,Z30,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BW30",
+        "formula": "=IF(AN30<>0,AN30,\"\")"
+      },
+      {
+        "sheet": "Purchasing",
+        "cell": "BX30",
+        "formula": "=IF(BB30<>0,BB30,\"\")"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "G6",
+        "formula": "=IF(Purchasing!L3=\"\",\"\",Purchasing!L3)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "H6",
+        "formula": "=IF(Purchasing!M3=\"\",\"\",Purchasing!M3)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "E7",
+        "formula": "=IF(Purchasing!P4=\"\",\"\",Purchasing!P4)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "G7",
+        "formula": "=IF(Purchasing!L4=\"\",\"\",Purchasing!L4)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "H7",
+        "formula": "=IF(Purchasing!M4=\"\",\"\",Purchasing!M4)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "E8",
+        "formula": "=IF(Purchasing!P5=\"\",\"\",Purchasing!P5)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "G8",
+        "formula": "=IF(Purchasing!L5=\"\",\"\",Purchasing!L5)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "H8",
+        "formula": "=IF(Purchasing!M5=\"\",\"\",Purchasing!M5)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "K8",
+        "formula": "=IF(Purchasing!BP5=\"-\",\"\",Purchasing!BP5)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "DS8",
+        "formula": "=+K8"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "E9",
+        "formula": "=IF(Purchasing!P6=\"\",\"\",Purchasing!P6)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "G9",
+        "formula": "=IF(Purchasing!L6=\"\",\"\",Purchasing!L6)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "H9",
+        "formula": "=IF(Purchasing!M6=\"\",\"\",Purchasing!M6)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "K9",
+        "formula": "=IF(Purchasing!BP6=\"-\",\"\",Purchasing!BP6)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "DS9",
+        "formula": "=+K9"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "C10",
+        "formula": "=IF(Purchasing!A7=\"\",\"\",Purchasing!A7)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "D10",
+        "formula": "=IF(Purchasing!B7=\"\",\"\",Purchasing!B7)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "E10",
+        "formula": "=IF(Purchasing!P7=\"\",\"\",Purchasing!P7)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "G10",
+        "formula": "=IF(Purchasing!L7=\"\",\"\",Purchasing!L7)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "H10",
+        "formula": "=IF(Purchasing!M7=\"\",\"\",Purchasing!M7)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "I10",
+        "formula": "=IF(Purchasing!N7=\"\",\"\",Purchasing!N7)"
+      },
+      {
+        "sheet": "Material Cost ",
+        "cell": "J10",
+        "formula": "=IF(Purchasing!J7<>\"\",Purchasing!J7,\"\")"
+      }
+    ],
+    "vba": {
+      "present": true,
+      "observed_modules": [
+        "ThisWorkbook",
+        "Module1",
+        "Module3"
+      ],
+      "observed_relevant_symbols": [
+        "GoalSeek",
+        "Export_confirm_Click"
+      ],
+      "inspection_method": "static vbaProject.bin string fingerprint"
+    }
+  },
+  "inputs": {
+    "project_code": "24018-CHO-00",
+    "product": "Rod choke",
+    "part_number": "0300440157",
+    "customer": "PRABHA ",
+    "delivery_zone": "India",
+    "product_line": "Chokes - Standard rod chokes",
+    "production_plant": "Chennai",
+    "customer_incoterm": "DAP",
+    "customer_payment_days": 30,
+    "quotation_currency": "INR",
+    "delivery_frequency_weeks": 1,
+    "finished_product_inventory_days": 12,
+    "profitability_target": 0.5,
+    "dl_rate_per_hour": 193.66872330327482,
+    "voh_rate_per_hour": 442.5249169435216,
+    "wip_days": 7
+  },
+  "component_costs": [
+    {
+      "component_id": "magnet_wire",
+      "designation": "Copper Wire φ0.75 turns 14.5",
+      "quantity_per_product": 0.00091,
+      "quantity_unit": "Kg",
+      "supplier_unit_price": 854.8399999999999,
+      "supplier_currency": "INR",
+      "fx_rate": 1,
+      "converted_unit_price": 854.8399999999999,
+      "incoterm": "DDP",
+      "payment_days": 60,
+      "base_cost_per_product": 0.7732494076239295,
+      "inbound_transport_per_product": 0.011668565999999998,
+      "historical_tco_per_product": 0.7849179736239295,
+      "tooling_cost_per_product": 0,
+      "cell_sources": {
+        "quantity_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "F6",
+          "formula": "=IF(Purchasing!K3<>\"\",IF(Purchasing!K3=\"\",\"\",Purchasing!K3),0)",
+          "cached_value": 0.00091
+        },
+        "quantity_unit": {
+          "sheet": "Material Cost ",
+          "cell": "I6",
+          "formula": "=IF(Purchasing!N3=\"\",\"\",Purchasing!N3)",
+          "cached_value": "Kg"
+        },
+        "supplier_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Q6",
+          "formula": "=IF(Purchasing!BP3=Purchasing!Z3,Purchasing!AB3,IF(Purchasing!BP3=Purchasing!AN3,Purchasing!AP3,IF(Purchasing!BP3=Purchasing!BB3,Purchasing!BD3,Purchasing!W3)))",
+          "cached_value": 854.8399999999999
+        },
+        "supplier_currency": {
+          "sheet": "Material Cost ",
+          "cell": "R6",
+          "formula": "=IF(Purchasing!BP3=Purchasing!Z3,Purchasing!AC3,IF(Purchasing!BP3=Purchasing!AN3,Purchasing!AR3,IF(Purchasing!BP3=Purchasing!BB3,Purchasing!BF3,Purchasing!X3)))",
+          "cached_value": "INR"
+        },
+        "fx_rate": {
+          "sheet": "Material Cost ",
+          "cell": "U6",
+          "formula": "=+SUMIF('Financials Parameters'!$D$29:$D$53,'Material Cost '!T6,'Financials Parameters'!$E$29:$E$53)",
+          "cached_value": 1
+        },
+        "converted_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Y6",
+          "formula": "=+Q6*U6",
+          "cached_value": 854.8399999999999
+        },
+        "base_cost_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BS6",
+          "formula": "=+AVERAGE(BO6:BR6)*F6",
+          "cached_value": 0.7732494076239295
+        },
+        "inbound_transport_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BN6",
+          "formula": "=+BM6*Y6*F6",
+          "cached_value": 0.011668565999999998
+        },
+        "historical_tco_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "B6",
+          "formula": "=+DT6",
+          "cached_value": 0.7849179736239295
+        }
+      }
+    },
+    {
+      "component_id": "ferrite_core",
+      "designation": "Core φ3*13 B3",
+      "quantity_per_product": 1,
+      "quantity_unit": "U",
+      "supplier_unit_price": 0.0207,
+      "supplier_currency": "RMB",
+      "fx_rate": 11.520610356720159,
+      "converted_unit_price": 0.2384766343841073,
+      "incoterm": "ExWorks",
+      "payment_days": 60,
+      "base_cost_per_product": 0.22795820509048606,
+      "inbound_transport_per_product": 0.035771495157616094,
+      "historical_tco_per_product": 0.26372970024810216,
+      "tooling_cost_per_product": 0,
+      "cell_sources": {
+        "quantity_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "F7",
+          "formula": "=IF(Purchasing!K4<>\"\",IF(Purchasing!K4=\"\",\"\",Purchasing!K4),0)",
+          "cached_value": 1
+        },
+        "quantity_unit": {
+          "sheet": "Material Cost ",
+          "cell": "I7",
+          "formula": "=IF(Purchasing!N4=\"\",\"\",Purchasing!N4)",
+          "cached_value": "U"
+        },
+        "supplier_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Q7",
+          "formula": "=IF(Purchasing!BP4=Purchasing!Z4,Purchasing!AB4,IF(Purchasing!BP4=Purchasing!AN4,Purchasing!AP4,IF(Purchasing!BP4=Purchasing!BB4,Purchasing!BD4,Purchasing!W4)))",
+          "cached_value": 0.0207
+        },
+        "supplier_currency": {
+          "sheet": "Material Cost ",
+          "cell": "R7",
+          "formula": "=IF(Purchasing!BP4=Purchasing!Z4,Purchasing!AC4,IF(Purchasing!BP4=Purchasing!AN4,Purchasing!AR4,IF(Purchasing!BP4=Purchasing!BB4,Purchasing!BF4,Purchasing!X4)))",
+          "cached_value": "RMB"
+        },
+        "fx_rate": {
+          "sheet": "Material Cost ",
+          "cell": "U7",
+          "formula": "=+SUMIF('Financials Parameters'!$D$29:$D$53,'Material Cost '!T7,'Financials Parameters'!$E$29:$E$53)",
+          "cached_value": 11.520610356720159
+        },
+        "converted_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Y7",
+          "formula": "=+Q7*U7",
+          "cached_value": 0.2384766343841073
+        },
+        "base_cost_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BS7",
+          "formula": "=+AVERAGE(BO7:BR7)*F7",
+          "cached_value": 0.22795820509048606
+        },
+        "inbound_transport_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BN7",
+          "formula": "=+BM7*Y7*F7",
+          "cached_value": 0.035771495157616094
+        },
+        "historical_tco_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "B7",
+          "formula": "=+DT7",
+          "cached_value": 0.26372970024810216
+        }
+      }
+    },
+    {
+      "component_id": "glue",
+      "designation": "Glue E1927",
+      "quantity_per_product": 1e-05,
+      "quantity_unit": "Kg",
+      "supplier_unit_price": 2340,
+      "supplier_currency": "INR",
+      "fx_rate": 1,
+      "converted_unit_price": 2340,
+      "incoterm": "DDP",
+      "payment_days": 60,
+      "base_cost_per_product": 0.0234,
+      "inbound_transport_per_product": 0.000351,
+      "historical_tco_per_product": 0.023751,
+      "tooling_cost_per_product": 0,
+      "cell_sources": {
+        "quantity_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "F8",
+          "formula": "=IF(Purchasing!K5<>\"\",IF(Purchasing!K5=\"\",\"\",Purchasing!K5),0)",
+          "cached_value": 1e-05
+        },
+        "quantity_unit": {
+          "sheet": "Material Cost ",
+          "cell": "I8",
+          "formula": "=IF(Purchasing!N5=\"\",\"\",Purchasing!N5)",
+          "cached_value": "Kg"
+        },
+        "supplier_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Q8",
+          "formula": "=IF(Purchasing!BP5=Purchasing!Z5,Purchasing!AB5,IF(Purchasing!BP5=Purchasing!AN5,Purchasing!AP5,IF(Purchasing!BP5=Purchasing!BB5,Purchasing!BD5,Purchasing!W5)))",
+          "cached_value": 2340
+        },
+        "supplier_currency": {
+          "sheet": "Material Cost ",
+          "cell": "R8",
+          "formula": "=IF(Purchasing!BP5=Purchasing!Z5,Purchasing!AC5,IF(Purchasing!BP5=Purchasing!AN5,Purchasing!AR5,IF(Purchasing!BP5=Purchasing!BB5,Purchasing!BF5,Purchasing!X5)))",
+          "cached_value": "INR"
+        },
+        "fx_rate": {
+          "sheet": "Material Cost ",
+          "cell": "U8",
+          "formula": "=+SUMIF('Financials Parameters'!$D$29:$D$53,'Material Cost '!T8,'Financials Parameters'!$E$29:$E$53)",
+          "cached_value": 1
+        },
+        "converted_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Y8",
+          "formula": "=+Q8*U8",
+          "cached_value": 2340
+        },
+        "base_cost_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BS8",
+          "formula": "=+AVERAGE(BO8:BR8)*F8",
+          "cached_value": 0.0234
+        },
+        "inbound_transport_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BN8",
+          "formula": "=+BM8*Y8*F8",
+          "cached_value": 0.000351
+        },
+        "historical_tco_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "B8",
+          "formula": "=+DT8",
+          "cached_value": 0.023751
+        }
+      }
+    },
+    {
+      "component_id": "lead_tinning",
+      "designation": "Tin Sncu0.7",
+      "quantity_per_product": 1e-05,
+      "quantity_unit": "Kg",
+      "supplier_unit_price": 2582,
+      "supplier_currency": "INR",
+      "fx_rate": 1,
+      "converted_unit_price": 2582,
+      "incoterm": "DDP",
+      "payment_days": 60,
+      "base_cost_per_product": 0.025820000000000003,
+      "inbound_transport_per_product": 0.0003873,
+      "historical_tco_per_product": 0.026207300000000003,
+      "tooling_cost_per_product": 0,
+      "cell_sources": {
+        "quantity_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "F9",
+          "formula": "=IF(Purchasing!K6<>\"\",IF(Purchasing!K6=\"\",\"\",Purchasing!K6),0)",
+          "cached_value": 1e-05
+        },
+        "quantity_unit": {
+          "sheet": "Material Cost ",
+          "cell": "I9",
+          "formula": "=IF(Purchasing!N6=\"\",\"\",Purchasing!N6)",
+          "cached_value": "Kg"
+        },
+        "supplier_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Q9",
+          "formula": "=IF(Purchasing!BP6=Purchasing!Z6,Purchasing!AB6,IF(Purchasing!BP6=Purchasing!AN6,Purchasing!AP6,IF(Purchasing!BP6=Purchasing!BB6,Purchasing!BD6,Purchasing!W6)))",
+          "cached_value": 2582
+        },
+        "supplier_currency": {
+          "sheet": "Material Cost ",
+          "cell": "R9",
+          "formula": "=IF(Purchasing!BP6=Purchasing!Z6,Purchasing!AC6,IF(Purchasing!BP6=Purchasing!AN6,Purchasing!AR6,IF(Purchasing!BP6=Purchasing!BB6,Purchasing!BF6,Purchasing!X6)))",
+          "cached_value": "INR"
+        },
+        "fx_rate": {
+          "sheet": "Material Cost ",
+          "cell": "U9",
+          "formula": "=+SUMIF('Financials Parameters'!$D$29:$D$53,'Material Cost '!T9,'Financials Parameters'!$E$29:$E$53)",
+          "cached_value": 1
+        },
+        "converted_unit_price": {
+          "sheet": "Material Cost ",
+          "cell": "Y9",
+          "formula": "=+Q9*U9",
+          "cached_value": 2582
+        },
+        "base_cost_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BS9",
+          "formula": "=+AVERAGE(BO9:BR9)*F9",
+          "cached_value": 0.025820000000000003
+        },
+        "inbound_transport_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "BN9",
+          "formula": "=+BM9*Y9*F9",
+          "cached_value": 0.0003873
+        },
+        "historical_tco_per_product": {
+          "sheet": "Material Cost ",
+          "cell": "B9",
+          "formula": "=+DT9",
+          "cached_value": 0.026207300000000003
+        }
+      }
+    }
+  ],
+  "operations": [
+    {
+      "operation_id": "OP 10",
+      "operation_name": "Winding",
+      "p_h_after_oee": 1000,
+      "operator_fraction": 0.15,
+      "dl_cost_per_product": 0.02905030849549122,
+      "voh_cost_per_product": 0.4743430987617034
+    },
+    {
+      "operation_id": "OP 20",
+      "operation_name": "Manual gluing and oven",
+      "p_h_after_oee": 700,
+      "operator_fraction": 1,
+      "dl_cost_per_product": 0.276669604718964,
+      "voh_cost_per_product": 0.6451654657634724
+    },
+    {
+      "operation_id": "OP 30",
+      "operation_name": "Inspection + Packaging",
+      "p_h_after_oee": 10000,
+      "operator_fraction": 1,
+      "dl_cost_per_product": 0.01936687233032748,
+      "voh_cost_per_product": 0.04425249169435216
+    },
+    {
+      "operation_id": "OP 40",
+      "operation_name": "Push test",
+      "p_h_after_oee": 1200,
+      "operator_fraction": 2,
+      "dl_cost_per_product": 0.322781205505458,
+      "voh_cost_per_product": 0.3710434913923286
+    }
+  ],
+  "manufacturing_cost": {
+    "base_material_per_product": 1.0657592336443449,
+    "packaging_per_product": 0.002,
+    "inbound_transport_per_product": 0.04817836115761609,
+    "outbound_transport_per_product": 0.24134383131864748,
+    "delivered_material_per_product": 1.113937594801961,
+    "dl_per_product": 0.6478679910502407,
+    "voh_per_product": 1.5348045476118566,
+    "direct_cost_per_product": 2.472194731138361,
+    "foh_per_product": 1.1581385973812375,
+    "fees_per_product": 1.2275607968436708,
+    "manufacturing_cost_per_product": 4.857894125363269,
+    "total_product_cost_per_product": 5.925653359007614
+  },
+  "annual_financial_model": {
+    "Y-1": {
+      "calendar_year": 2024,
+      "quantity_kpieces": 0,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 0,
+      "material_kcurrency": 0,
+      "packaging_kcurrency": 0,
+      "total_material_kcurrency": 0,
+      "dl_kcurrency": 0,
+      "voh_kcurrency": 0,
+      "inbound_transport_kcurrency": 0,
+      "outbound_transport_kcurrency": 0,
+      "total_transport_kcurrency": 0,
+      "gmdc_kcurrency": 0,
+      "foh_kcurrency": 0,
+      "fees_kcurrency": 0,
+      "ebitda_kcurrency": 0,
+      "depreciation_kcurrency": 52.23602003842747,
+      "financing_cost_kcurrency": 28.729811021135113,
+      "operating_income_kcurrency": -80.96583105956259,
+      "taxes_kcurrency": -24.289749317868775,
+      "net_result_kcurrency": -56.676081741693814,
+      "annual_cash_flow_kcurrency": -265.62016189540367,
+      "cumulative_cash_kcurrency": -265.62016189540367,
+      "ap_kcurrency": 0,
+      "ar_kcurrency": 0,
+      "finished_product_stock_kcurrency": 0,
+      "wip_kcurrency": 0,
+      "raw_material_stock_kcurrency": 0,
+      "twc_kcurrency": 0,
+      "delta_twc_kcurrency": 0
+    },
+    "Y0": {
+      "calendar_year": 2025,
+      "quantity_kpieces": 360,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 2569.997472837944,
+      "material_kcurrency": 379.97759412461573,
+      "packaging_kcurrency": 0.72,
+      "total_material_kcurrency": 380.69759412461576,
+      "dl_kcurrency": 233.23247677808666,
+      "voh_kcurrency": 552.5296371402684,
+      "inbound_transport_kcurrency": 17.34421001674179,
+      "outbound_transport_kcurrency": 86.88377927471309,
+      "total_transport_kcurrency": 104.22798929145489,
+      "gmdc_kcurrency": 1299.309775503518,
+      "foh_kcurrency": 416.9298950572455,
+      "fees_kcurrency": 441.9218868637215,
+      "ebitda_kcurrency": 440.457993582551,
+      "depreciation_kcurrency": 52.23602003842747,
+      "financing_cost_kcurrency": 26.56201618954037,
+      "operating_income_kcurrency": 361.6599573545832,
+      "taxes_kcurrency": 108.49798720637496,
+      "net_result_kcurrency": 253.16197014820824,
+      "annual_cash_flow_kcurrency": -23.11875954258988,
+      "cumulative_cash_kcurrency": -288.73892143799355,
+      "ap_kcurrency": 63.840386331847526,
+      "ar_kcurrency": -264.77428301783607,
+      "finished_product_stock_kcurrency": -84.49306760015158,
+      "wip_kcurrency": -7.301049750335097,
+      "raw_material_stock_kcurrency": -35.7887356927504,
+      "twc_kcurrency": -328.5167497292256,
+      "delta_twc_kcurrency": -328.5167497292256
+    },
+    "Y1": {
+      "calendar_year": 2026,
+      "quantity_kpieces": 360,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 2569.997472837944,
+      "material_kcurrency": 376.3636112961519,
+      "packaging_kcurrency": 0.72,
+      "total_material_kcurrency": 377.0836112961519,
+      "dl_kcurrency": 233.23247677808666,
+      "voh_kcurrency": 552.5296371402684,
+      "inbound_transport_kcurrency": 17.34421001674179,
+      "outbound_transport_kcurrency": 86.88377927471309,
+      "total_transport_kcurrency": 104.22798929145489,
+      "gmdc_kcurrency": 1302.923758331982,
+      "foh_kcurrency": 416.9298950572455,
+      "fees_kcurrency": 441.9218868637215,
+      "ebitda_kcurrency": 444.07197641101504,
+      "depreciation_kcurrency": 52.23602003842747,
+      "financing_cost_kcurrency": 28.873892143799356,
+      "operating_income_kcurrency": 362.9620642287882,
+      "taxes_kcurrency": 108.88861926863646,
+      "net_result_kcurrency": 254.07344496015176,
+      "annual_cash_flow_kcurrency": 245.10301940664255,
+      "cumulative_cash_kcurrency": -43.63590203135101,
+      "ap_kcurrency": 63.840386331847526,
+      "ar_kcurrency": -264.77428301783607,
+      "finished_product_stock_kcurrency": -84.49306760015158,
+      "wip_kcurrency": -7.231740490611132,
+      "raw_material_stock_kcurrency": -35.7887356927504,
+      "twc_kcurrency": -328.4474404695016,
+      "delta_twc_kcurrency": 0.06930925972397972
+    },
+    "Y2": {
+      "calendar_year": 2027,
+      "quantity_kpieces": 360,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 2569.997472837944,
+      "material_kcurrency": 372.82903971076877,
+      "packaging_kcurrency": 0.72,
+      "total_material_kcurrency": 373.5490397107688,
+      "dl_kcurrency": 233.23247677808666,
+      "voh_kcurrency": 552.5296371402684,
+      "inbound_transport_kcurrency": 17.34421001674179,
+      "outbound_transport_kcurrency": 86.88377927471309,
+      "total_transport_kcurrency": 104.22798929145489,
+      "gmdc_kcurrency": 1306.4583299173648,
+      "foh_kcurrency": 416.9298950572455,
+      "fees_kcurrency": 441.9218868637215,
+      "ebitda_kcurrency": 447.6065479963978,
+      "depreciation_kcurrency": 52.23602003842747,
+      "financing_cost_kcurrency": 4.363590203135101,
+      "operating_income_kcurrency": 391.00693775483523,
+      "taxes_kcurrency": 117.30208132645056,
+      "net_result_kcurrency": 273.7048564283847,
+      "annual_cash_flow_kcurrency": 260.80693021695146,
+      "cumulative_cash_kcurrency": 217.17102818560045,
+      "ap_kcurrency": 63.840386331847526,
+      "ar_kcurrency": -264.77428301783607,
+      "finished_product_stock_kcurrency": -84.49306760015158,
+      "wip_kcurrency": -7.163954186233923,
+      "raw_material_stock_kcurrency": -35.7887356927504,
+      "twc_kcurrency": -328.3796541651244,
+      "delta_twc_kcurrency": 0.06778630437719357
+    },
+    "Y3": {
+      "calendar_year": 2028,
+      "quantity_kpieces": 360,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 2569.997472837944,
+      "material_kcurrency": 372.82903971076877,
+      "packaging_kcurrency": 0.72,
+      "total_material_kcurrency": 373.5490397107688,
+      "dl_kcurrency": 233.23247677808666,
+      "voh_kcurrency": 552.5296371402684,
+      "inbound_transport_kcurrency": 17.34421001674179,
+      "outbound_transport_kcurrency": 86.88377927471309,
+      "total_transport_kcurrency": 104.22798929145489,
+      "gmdc_kcurrency": 1306.4583299173648,
+      "foh_kcurrency": 416.9298950572455,
+      "fees_kcurrency": 441.9218868637215,
+      "ebitda_kcurrency": 447.6065479963978,
+      "depreciation_kcurrency": 52.23602003842747,
+      "financing_cost_kcurrency": -21.717102818560047,
+      "operating_income_kcurrency": 417.0876307765304,
+      "taxes_kcurrency": 125.12628923295911,
+      "net_result_kcurrency": 291.9613415435713,
+      "annual_cash_flow_kcurrency": 275.357889265599,
+      "cumulative_cash_kcurrency": 492.52891745119945,
+      "ap_kcurrency": 63.840386331847526,
+      "ar_kcurrency": -264.77428301783607,
+      "finished_product_stock_kcurrency": -84.49306760015158,
+      "wip_kcurrency": -7.163954186233923,
+      "raw_material_stock_kcurrency": -35.7887356927504,
+      "twc_kcurrency": -328.3796541651244,
+      "delta_twc_kcurrency": 0
+    },
+    "Y4": {
+      "calendar_year": 2029,
+      "quantity_kpieces": 360,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 2569.997472837944,
+      "material_kcurrency": 372.82903971076877,
+      "packaging_kcurrency": 0.72,
+      "total_material_kcurrency": 373.5490397107688,
+      "dl_kcurrency": 233.23247677808666,
+      "voh_kcurrency": 552.5296371402684,
+      "inbound_transport_kcurrency": 17.34421001674179,
+      "outbound_transport_kcurrency": 86.88377927471309,
+      "total_transport_kcurrency": 104.22798929145489,
+      "gmdc_kcurrency": 1306.4583299173648,
+      "foh_kcurrency": 416.9298950572455,
+      "fees_kcurrency": 441.9218868637215,
+      "ebitda_kcurrency": 447.6065479963978,
+      "depreciation_kcurrency": 0,
+      "financing_cost_kcurrency": -49.252891745119946,
+      "operating_income_kcurrency": 496.85943974151775,
+      "taxes_kcurrency": 149.0578319224553,
+      "net_result_kcurrency": 347.80160781906244,
+      "annual_cash_flow_kcurrency": 278.24128625525,
+      "cumulative_cash_kcurrency": 770.7702037064494,
+      "ap_kcurrency": 63.840386331847526,
+      "ar_kcurrency": -264.77428301783607,
+      "finished_product_stock_kcurrency": -84.49306760015158,
+      "wip_kcurrency": -7.163954186233923,
+      "raw_material_stock_kcurrency": -35.7887356927504,
+      "twc_kcurrency": -328.3796541651244,
+      "delta_twc_kcurrency": 0
+    },
+    "EOL": {
+      "calendar_year": 2030,
+      "quantity_kpieces": 0,
+      "productivity_rate": 0,
+      "part_price_before_indexed_material_and_packaging": 6.1586590903072205,
+      "packaging_and_transport_price": 0.24334383131864748,
+      "indexed_material_price": 0.736878947368421,
+      "selling_price": 7.138881868994289,
+      "sales_kcurrency": 0,
+      "material_kcurrency": 0,
+      "packaging_kcurrency": 0,
+      "total_material_kcurrency": 0,
+      "dl_kcurrency": 0,
+      "voh_kcurrency": 0,
+      "inbound_transport_kcurrency": 0,
+      "outbound_transport_kcurrency": 0,
+      "total_transport_kcurrency": 0,
+      "gmdc_kcurrency": 0,
+      "foh_kcurrency": 0,
+      "fees_kcurrency": 0,
+      "ebitda_kcurrency": 0,
+      "depreciation_kcurrency": 0,
+      "financing_cost_kcurrency": -77.07702037064495,
+      "operating_income_kcurrency": 77.07702037064495,
+      "taxes_kcurrency": 23.123106111193483,
+      "net_result_kcurrency": 53.953914259451466,
+      "annual_cash_flow_kcurrency": 43.163131407561174,
+      "cumulative_cash_kcurrency": 813.9333351140106,
+      "ap_kcurrency": 0,
+      "ar_kcurrency": 0,
+      "finished_product_stock_kcurrency": 0,
+      "wip_kcurrency": 0,
+      "raw_material_stock_kcurrency": 0,
+      "twc_kcurrency": 0,
+      "delta_twc_kcurrency": 0
+    }
+  },
+  "solver": {
+    "initial_price_seed": 6.717489629548733,
+    "solved_part_price": 6.1586590903072205,
+    "quoted_y0_selling_price": 7.138881868994289,
+    "profitability_target": 0.5,
+    "achieved_irr": 0.4999999999999969,
+    "discount_rate_used_by_workbook": 0.5,
+    "npv": -7.075821410277665e-14,
+    "converged": true
+  },
+  "cell_sources": {
+    "project_code": {
+      "sheet": "RFQ Data",
+      "cell": "D7",
+      "formula": "24018-CHO-00",
+      "cached_value": "24018-CHO-00"
+    },
+    "product": {
+      "sheet": "RFQ Data",
+      "cell": "H7",
+      "formula": "Rod choke",
+      "cached_value": "Rod choke"
+    },
+    "part_number": {
+      "sheet": "RFQ Data",
+      "cell": "M7",
+      "formula": "0300440157",
+      "cached_value": "0300440157"
+    },
+    "customer": {
+      "sheet": "RFQ Data",
+      "cell": "D10",
+      "formula": "PRABHA ",
+      "cached_value": "PRABHA "
+    },
+    "delivery_zone": {
+      "sheet": "RFQ Data",
+      "cell": "D12",
+      "formula": "India",
+      "cached_value": "India"
+    },
+    "product_line": {
+      "sheet": "RFQ Data",
+      "cell": "I12",
+      "formula": "Chokes - Standard rod chokes",
+      "cached_value": "Chokes - Standard rod chokes"
+    },
+    "production_plant": {
+      "sheet": "RFQ Data",
+      "cell": "K13",
+      "formula": "=IF(O14=\"\",+VLOOKUP(I12,'PL Parameters'!D5:J53,'RFQ Data'!F12+1,FALSE),O14)",
+      "cached_value": "Chennai"
+    },
+    "customer_incoterm": {
+      "sheet": "RFQ Data",
+      "cell": "D17",
+      "formula": "=+H14",
+      "cached_value": "DAP"
+    },
+    "customer_payment_days": {
+      "sheet": "RFQ Data",
+      "cell": "E16",
+      "formula": 30,
+      "cached_value": 30
+    },
+    "quotation_currency": {
+      "sheet": "RFQ Data",
+      "cell": "H16",
+      "formula": "=+VLOOKUP($K$13,'Financials Parameters'!$I$5:$AQ$15,2,FALSE)",
+      "cached_value": "INR"
+    },
+    "delivery_frequency_weeks": {
+      "sheet": "RFQ Data",
+      "cell": "H17",
+      "formula": "=+IF(D17=\"DAP\",+VLOOKUP(K13,'Financials Parameters'!$I$5:$AQ$15,7,FALSE),+VLOOKUP(K13,'Financials Parameters'!$I$5:$AQ$15,8,FALSE))",
+      "cached_value": 1
+    },
+    "finished_product_inventory_days": {
+      "sheet": "RFQ Data",
+      "cell": "G25",
+      "formula": "=+SUM(G21:G24)",
+      "cached_value": 12
+    },
+    "profitability_target": {
+      "sheet": "RFQ Data",
+      "cell": "H56",
+      "formula": "=+VLOOKUP($F$55,'PL Parameters'!$D$5:$AA$53,12,FALSE)",
+      "cached_value": 0.5
+    },
+    "dl_rate_per_hour": {
+      "sheet": "RFQ Data",
+      "cell": "J63",
+      "formula": "=+VLOOKUP($K$13,'Financials Parameters'!$I$5:$BG$15,17,FALSE)",
+      "cached_value": 193.66872330327482
+    },
+    "voh_rate_per_hour": {
+      "sheet": "RFQ Data",
+      "cell": "J64",
+      "formula": "=+VLOOKUP($K$13,'Financials Parameters'!$I$5:$BG$15,18,FALSE)",
+      "cached_value": 442.5249169435216
+    },
+    "wip_days": {
+      "sheet": "RFQ Data",
+      "cell": "J65",
+      "formula": "=+VLOOKUP($F$55,'PL Parameters'!$D$5:$BU$53,15,FALSE)",
+      "cached_value": 7
+    },
+    "historical_material_tco_per_product": {
+      "sheet": "Material Cost ",
+      "cell": "B35",
+      "formula": "=+SUM(B6:B34)",
+      "cached_value": 1.1117892455584961
+    },
+    "base_material_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB7",
+      "formula": "=+'Material Cost '!BO35",
+      "cached_value": 1.0657592336443449
+    },
+    "packaging_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB9",
+      "formula": "='Transp-Packaging-AMS'!S4",
+      "cached_value": 0.002
+    },
+    "dl_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB10",
+      "formula": "=+'Product Added value'!$AJ$32",
+      "cached_value": 0.6478679910502407
+    },
+    "voh_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB11",
+      "formula": "=+'Product Added value'!$AG$32",
+      "cached_value": 1.5348045476118566
+    },
+    "inbound_transport_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB12",
+      "formula": "=+'Material Cost '!$BN$35",
+      "cached_value": 0.04817836115761609
+    },
+    "internal_transport_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB13",
+      "formula": "=+AC13*AB1",
+      "cached_value": 0
+    },
+    "outbound_transport_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB14",
+      "formula": "='Transp-Packaging-AMS'!S6",
+      "cached_value": 0.24134383131864748
+    },
+    "foh_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB16",
+      "formula": "=+AN19*(AB10+AB11+AB12+AB13+AB14)",
+      "cached_value": 1.1581385973812375
+    },
+    "fees_per_product": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB17",
+      "formula": "=+AO19*(AB10+AB11+AB12+AB13+AB14)",
+      "cached_value": 1.2275607968436708
+    },
+    "initial_price_seed": {
+      "sheet": "PriceCalAVO",
+      "cell": "AB1",
+      "formula": "=+AB7*1.07+2.5*(AB10+AB11+AB12)",
+      "cached_value": 6.717489629548733
+    },
+    "solved_part_price": {
+      "sheet": "PriceCalAVO",
+      "cell": "B4",
+      "formula": 6.1586590903072205,
+      "cached_value": 6.1586590903072205
+    },
+    "quoted_y0_selling_price": {
+      "sheet": "PriceCalAVO",
+      "cell": "B7",
+      "formula": "=+B4+B5+B6",
+      "cached_value": 7.138881868994289
+    },
+    "achieved_irr": {
+      "sheet": "PriceCalAVO",
+      "cell": "B57",
+      "formula": "=+IRR(B54:H54)",
+      "cached_value": 0.4999999999999969
+    },
+    "npv": {
+      "sheet": "PriceCalAVO",
+      "cell": "B58",
+      "formula": "=+NPV(O3,B54:H54)",
+      "cached_value": -7.075821410277665e-14
+    },
+    "discount_rate_used_by_workbook": {
+      "sheet": "PriceCalAVO",
+      "cell": "O3",
+      "formula": 0.5,
+      "cached_value": 0.5
+    },
+    "prelaunch_capex_kcurrency": {
+      "sheet": "PriceCalAVO",
+      "cell": "B61",
+      "formula": "=+'Capex '!C11",
+      "cached_value": 261.18010019213733
+    },
+    "direct_cost_per_product": {
+      "sheet": "independently_recalculated",
+      "cell": "direct_cost_per_product",
+      "formula": "PriceCalAVO!AB10+AB11+AB12+AB13+AB14",
+      "cached_value": 2.472194731138361
+    },
+    "delivered_material_per_product": {
+      "sheet": "independently_recalculated",
+      "cell": "delivered_material_per_product",
+      "formula": "PriceCalAVO!AB7+AB12",
+      "cached_value": 1.113937594801961
+    },
+    "manufacturing_cost_per_product": {
+      "sheet": "independently_recalculated",
+      "cell": "manufacturing_cost_per_product",
+      "formula": "direct_cost_per_product+PriceCalAVO!AB16+AB17",
+      "cached_value": 4.857894125363269
+    },
+    "total_product_cost_per_product": {
+      "sheet": "independently_recalculated",
+      "cell": "total_product_cost_per_product",
+      "formula": "PriceCalAVO!AB7+AB9+manufacturing_cost_per_product",
+      "cached_value": 5.925653359007614
+    },
+    "annual_financial_model": {
+      "Y-1": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "B1",
+          "formula": "=+'RFQ Data'!C30",
+          "cached_value": 2024
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "B2",
+          "formula": "=+'RFQ Data'!C31",
+          "cached_value": 0
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "B3",
+          "formula": "=+'RFQ Data'!C32",
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "B4",
+          "formula": 6.1586590903072205,
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "B5",
+          "formula": "='Transp-Packaging-AMS'!S4+'Transp-Packaging-AMS'!S6",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "B6",
+          "formula": "=GETPIVOTDATA(\"Somme de Value (Cur)\",Buffersheet!$B$7)",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "B7",
+          "formula": "=+B4+B5+B6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B9",
+          "formula": "=+B7*B2",
+          "cached_value": 0
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B11",
+          "formula": "=+C11*B2",
+          "cached_value": 0
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*B2",
+          "cached_value": 0
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B13",
+          "formula": "=+B11+B12",
+          "cached_value": 0
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B16",
+          "formula": "=+$AB$10*B2",
+          "cached_value": 0
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B18",
+          "formula": "=+'Product Added value'!$AG$32*B2",
+          "cached_value": 0
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B20",
+          "formula": "=+'Material Cost '!$BN$35*B2",
+          "cached_value": 0
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*B2",
+          "cached_value": 0
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B22",
+          "formula": "=+B20+B21",
+          "cached_value": 0
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B25",
+          "formula": "=+B9-B11-B16-B18-B22-B12",
+          "cached_value": 0
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B28",
+          "formula": "=IF(M28<M36,M36,M28)",
+          "cached_value": 0
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B30",
+          "formula": "=IF(M30<M39,M39,M30)",
+          "cached_value": 0
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B33",
+          "formula": "=+B25-B28-B30",
+          "cached_value": 0
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B36",
+          "formula": "=+B67",
+          "cached_value": 52.23602003842747
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B37",
+          "formula": "=-B52",
+          "cached_value": 28.729811021135113
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B39",
+          "formula": "=+B33-B36-B37",
+          "cached_value": -80.96583105956259
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*B39",
+          "cached_value": -24.289749317868775
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B44",
+          "formula": "=+B39-B42",
+          "cached_value": -56.676081741693814
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B54",
+          "formula": "=+SUM(B48:B53)",
+          "cached_value": -265.62016189540367
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B55",
+          "formula": "=+B54",
+          "cached_value": -265.62016189540367
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B70",
+          "formula": "=+'Material Cost '!$BJ$35*B2",
+          "cached_value": 0
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B71",
+          "formula": "=-'RFQ Data'!$E$16*B9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*B9/48,0)",
+          "cached_value": 0
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B72",
+          "formula": "=-'RFQ Data'!$G$25/365*B9",
+          "cached_value": 0
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B73",
+          "formula": "=-'RFQ Data'!$J$65/365*B13",
+          "cached_value": 0
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B74",
+          "formula": "=-'Material Cost '!$BL$35*B11",
+          "cached_value": 0
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B75",
+          "formula": "=+SUM(B70:B74)",
+          "cached_value": 0
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "B76",
+          "formula": 0,
+          "cached_value": 0
+        }
+      },
+      "Y0": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "C1",
+          "formula": "=+'RFQ Data'!D30",
+          "cached_value": 2025
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "C2",
+          "formula": "=+'RFQ Data'!D31",
+          "cached_value": 360
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "C3",
+          "formula": "=+'RFQ Data'!D32",
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "C4",
+          "formula": "=B4*(1-C3)",
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "C5",
+          "formula": "=+B5",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "C6",
+          "formula": "=+B6",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "C7",
+          "formula": "=+C4+C5+C6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C9",
+          "formula": "=+C7*C2",
+          "cached_value": 2569.997472837944
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C11",
+          "formula": "=+'Material Cost '!BP35*C2",
+          "cached_value": 379.97759412461573
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*C2",
+          "cached_value": 0.72
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C13",
+          "formula": "=+C11+C12",
+          "cached_value": 380.69759412461576
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C16",
+          "formula": "=+$AB$10*C2",
+          "cached_value": 233.23247677808666
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C18",
+          "formula": "=+'Product Added value'!$AG$32*C2",
+          "cached_value": 552.5296371402684
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C20",
+          "formula": "=+'Material Cost '!$BN$35*C2",
+          "cached_value": 17.34421001674179
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*C2",
+          "cached_value": 86.88377927471309
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C22",
+          "formula": "=+C20+C21",
+          "cached_value": 104.22798929145489
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C25",
+          "formula": "=+C9-C11-C16-C18-C22-C12",
+          "cached_value": 1299.309775503518
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C28",
+          "formula": "=IF(N28<N36,N36,N28)",
+          "cached_value": 416.9298950572455
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C30",
+          "formula": "=IF(N30<N39,N39,N30)",
+          "cached_value": 441.9218868637215
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C33",
+          "formula": "=+C25-C28-C30",
+          "cached_value": 440.457993582551
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C36",
+          "formula": "=+C67",
+          "cached_value": 52.23602003842747
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C37",
+          "formula": "=-C52",
+          "cached_value": 26.56201618954037
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C39",
+          "formula": "=+C33-C36-C37",
+          "cached_value": 361.6599573545832
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*C39",
+          "cached_value": 108.49798720637496
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C44",
+          "formula": "=+C39-C42",
+          "cached_value": 253.16197014820824
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C54",
+          "formula": "=+SUM(C48:C53)",
+          "cached_value": -23.11875954258988
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C55",
+          "formula": "=+B55+C54",
+          "cached_value": -288.73892143799355
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C70",
+          "formula": "=+'Material Cost '!$BJ$35*C2",
+          "cached_value": 63.840386331847526
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C71",
+          "formula": "=-'RFQ Data'!$E$16*C9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*C9/48,0)",
+          "cached_value": -264.77428301783607
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C72",
+          "formula": "=-'RFQ Data'!$G$25/365*C9",
+          "cached_value": -84.49306760015158
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C73",
+          "formula": "=-'RFQ Data'!$J$65/365*C13",
+          "cached_value": -7.301049750335097
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C74",
+          "formula": "=-'Material Cost '!$BL$35*C2",
+          "cached_value": -35.7887356927504
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C75",
+          "formula": "=+SUM(C70:C74)",
+          "cached_value": -328.5167497292256
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "C76",
+          "formula": "=+C75-B75",
+          "cached_value": -328.5167497292256
+        }
+      },
+      "Y1": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "D1",
+          "formula": "=+'RFQ Data'!E30",
+          "cached_value": 2026
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "D2",
+          "formula": "=+'RFQ Data'!E31",
+          "cached_value": 360
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "D3",
+          "formula": "=+'RFQ Data'!E32",
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "D4",
+          "formula": "=C4*(1-D3)",
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "D5",
+          "formula": "=+C5",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "D6",
+          "formula": "=+C6",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "D7",
+          "formula": "=+D4+D5+D6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D9",
+          "formula": "=+D7*D2",
+          "cached_value": 2569.997472837944
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D11",
+          "formula": "=+'Material Cost '!BQ35*D2",
+          "cached_value": 376.3636112961519
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*D2",
+          "cached_value": 0.72
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D13",
+          "formula": "=+D11+D12",
+          "cached_value": 377.0836112961519
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D16",
+          "formula": "=+$AB$10*D2",
+          "cached_value": 233.23247677808666
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D18",
+          "formula": "=+'Product Added value'!$AG$32*D2",
+          "cached_value": 552.5296371402684
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D20",
+          "formula": "=+'Material Cost '!$BN$35*D2",
+          "cached_value": 17.34421001674179
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*D2",
+          "cached_value": 86.88377927471309
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D22",
+          "formula": "=+D20+D21",
+          "cached_value": 104.22798929145489
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D25",
+          "formula": "=+D9-D11-D16-D18-D22-D12",
+          "cached_value": 1302.923758331982
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D28",
+          "formula": "=IF(O28<O36,O36,O28)",
+          "cached_value": 416.9298950572455
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D30",
+          "formula": "=IF(O30<O39,O39,O30)",
+          "cached_value": 441.9218868637215
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D33",
+          "formula": "=+D25-D28-D30",
+          "cached_value": 444.07197641101504
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D36",
+          "formula": "=+D67",
+          "cached_value": 52.23602003842747
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D37",
+          "formula": "=-D52",
+          "cached_value": 28.873892143799356
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D39",
+          "formula": "=+D33-D36-D37",
+          "cached_value": 362.9620642287882
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*D39",
+          "cached_value": 108.88861926863646
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D44",
+          "formula": "=+D39-D42",
+          "cached_value": 254.07344496015176
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D54",
+          "formula": "=+SUM(D48:D53)",
+          "cached_value": 245.10301940664255
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D55",
+          "formula": "=+C55+D54",
+          "cached_value": -43.63590203135101
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D70",
+          "formula": "=+'Material Cost '!$BJ$35*D2",
+          "cached_value": 63.840386331847526
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D71",
+          "formula": "=-'RFQ Data'!$E$16*D9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*D9/48,0)",
+          "cached_value": -264.77428301783607
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D72",
+          "formula": "=-'RFQ Data'!$G$25/365*D9",
+          "cached_value": -84.49306760015158
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D73",
+          "formula": "=-'RFQ Data'!$J$65/365*D13",
+          "cached_value": -7.231740490611132
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D74",
+          "formula": "=-'Material Cost '!$BL$35*D2",
+          "cached_value": -35.7887356927504
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D75",
+          "formula": "=+SUM(D70:D74)",
+          "cached_value": -328.4474404695016
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "D76",
+          "formula": "=+D75-C75",
+          "cached_value": 0.06930925972397972
+        }
+      },
+      "Y2": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "E1",
+          "formula": "=+'RFQ Data'!F30",
+          "cached_value": 2027
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "E2",
+          "formula": "=+'RFQ Data'!F31",
+          "cached_value": 360
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "E3",
+          "formula": "=+'RFQ Data'!F32",
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "E4",
+          "formula": "=D4*(1-E3)",
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "E5",
+          "formula": "=+D5",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "E6",
+          "formula": "=+D6",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "E7",
+          "formula": "=+E4+E5+E6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E9",
+          "formula": "=+E7*E2",
+          "cached_value": 2569.997472837944
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E11",
+          "formula": "=+'Material Cost '!BR35*E2",
+          "cached_value": 372.82903971076877
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*E2",
+          "cached_value": 0.72
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E13",
+          "formula": "=+E11+E12",
+          "cached_value": 373.5490397107688
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E16",
+          "formula": "=+$AB$10*E2",
+          "cached_value": 233.23247677808666
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E18",
+          "formula": "=+'Product Added value'!$AG$32*E2",
+          "cached_value": 552.5296371402684
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E20",
+          "formula": "=+'Material Cost '!$BN$35*E2",
+          "cached_value": 17.34421001674179
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*E2",
+          "cached_value": 86.88377927471309
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E22",
+          "formula": "=+E20+E21",
+          "cached_value": 104.22798929145489
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E25",
+          "formula": "=+E9-E11-E16-E18-E22-E12",
+          "cached_value": 1306.4583299173648
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E28",
+          "formula": "=IF(P28<P36,P36,P28)",
+          "cached_value": 416.9298950572455
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E30",
+          "formula": "=IF(P30<P39,P39,P30)",
+          "cached_value": 441.9218868637215
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E33",
+          "formula": "=+E25-E28-E30",
+          "cached_value": 447.6065479963978
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E36",
+          "formula": "=+E67",
+          "cached_value": 52.23602003842747
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E37",
+          "formula": "=-E52",
+          "cached_value": 4.363590203135101
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E39",
+          "formula": "=+E33-E36-E37",
+          "cached_value": 391.00693775483523
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*E39",
+          "cached_value": 117.30208132645056
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E44",
+          "formula": "=+E39-E42",
+          "cached_value": 273.7048564283847
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E54",
+          "formula": "=+SUM(E48:E53)",
+          "cached_value": 260.80693021695146
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E55",
+          "formula": "=+D55+E54",
+          "cached_value": 217.17102818560045
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E70",
+          "formula": "=+'Material Cost '!$BJ$35*E2",
+          "cached_value": 63.840386331847526
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E71",
+          "formula": "=-'RFQ Data'!$E$16*E9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*E9/48,0)",
+          "cached_value": -264.77428301783607
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E72",
+          "formula": "=-'RFQ Data'!$G$25/365*E9",
+          "cached_value": -84.49306760015158
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E73",
+          "formula": "=-'RFQ Data'!$J$65/365*E13",
+          "cached_value": -7.163954186233923
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E74",
+          "formula": "=-'Material Cost '!$BL$35*E2",
+          "cached_value": -35.7887356927504
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E75",
+          "formula": "=+SUM(E70:E74)",
+          "cached_value": -328.3796541651244
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "E76",
+          "formula": "=+E75-D75",
+          "cached_value": 0.06778630437719357
+        }
+      },
+      "Y3": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "F1",
+          "formula": "=+'RFQ Data'!G30",
+          "cached_value": 2028
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "F2",
+          "formula": "=+'RFQ Data'!G31",
+          "cached_value": 360
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "F3",
+          "formula": "=+'RFQ Data'!G32",
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "F4",
+          "formula": "=E4*(1-F3)",
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "F5",
+          "formula": "=+E5",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "F6",
+          "formula": "=+E6",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "F7",
+          "formula": "=+F4+F5+F6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F9",
+          "formula": "=+F7*F2",
+          "cached_value": 2569.997472837944
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F11",
+          "formula": "=+'Material Cost '!BS35*F2",
+          "cached_value": 372.82903971076877
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*F2",
+          "cached_value": 0.72
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F13",
+          "formula": "=+F11+F12",
+          "cached_value": 373.5490397107688
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F16",
+          "formula": "=+$AB$10*F2",
+          "cached_value": 233.23247677808666
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F18",
+          "formula": "=+'Product Added value'!$AG$32*F2",
+          "cached_value": 552.5296371402684
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F20",
+          "formula": "=+'Material Cost '!$BN$35*F2",
+          "cached_value": 17.34421001674179
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*F2",
+          "cached_value": 86.88377927471309
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F22",
+          "formula": "=+F20+F21",
+          "cached_value": 104.22798929145489
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F25",
+          "formula": "=+F9-F11-F16-F18-F22-F12",
+          "cached_value": 1306.4583299173648
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F28",
+          "formula": "=IF(Q28<Q36,Q36,Q28)",
+          "cached_value": 416.9298950572455
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F30",
+          "formula": "=IF(Q30<Q39,Q39,Q30)",
+          "cached_value": 441.9218868637215
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F33",
+          "formula": "=+F25-F28-F30",
+          "cached_value": 447.6065479963978
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F36",
+          "formula": "=+F67",
+          "cached_value": 52.23602003842747
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F37",
+          "formula": "=-F52",
+          "cached_value": -21.717102818560047
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F39",
+          "formula": "=+F33-F36-F37",
+          "cached_value": 417.0876307765304
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*F39",
+          "cached_value": 125.12628923295911
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F44",
+          "formula": "=+F39-F42",
+          "cached_value": 291.9613415435713
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F54",
+          "formula": "=+SUM(F48:F53)",
+          "cached_value": 275.357889265599
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F55",
+          "formula": "=+E55+F54",
+          "cached_value": 492.52891745119945
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F70",
+          "formula": "=+'Material Cost '!$BJ$35*F2",
+          "cached_value": 63.840386331847526
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F71",
+          "formula": "=-'RFQ Data'!$E$16*F9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*F9/48,0)",
+          "cached_value": -264.77428301783607
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F72",
+          "formula": "=-'RFQ Data'!$G$25/365*F9",
+          "cached_value": -84.49306760015158
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F73",
+          "formula": "=-'RFQ Data'!$J$65/365*F13",
+          "cached_value": -7.163954186233923
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F74",
+          "formula": "=-'Material Cost '!$BL$35*F2",
+          "cached_value": -35.7887356927504
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F75",
+          "formula": "=+SUM(F70:F74)",
+          "cached_value": -328.3796541651244
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "F76",
+          "formula": "=+F75-E75",
+          "cached_value": 0
+        }
+      },
+      "Y4": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "G1",
+          "formula": "=+'RFQ Data'!H30",
+          "cached_value": 2029
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "G2",
+          "formula": "=+'RFQ Data'!H31",
+          "cached_value": 360
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "G3",
+          "formula": "=+'RFQ Data'!H32",
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "G4",
+          "formula": "=F4*(1-G3)",
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "G5",
+          "formula": "=+F5",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "G6",
+          "formula": "=+F6",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "G7",
+          "formula": "=+G4+G5+G6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G9",
+          "formula": "=+G7*G2",
+          "cached_value": 2569.997472837944
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G11",
+          "formula": "=IF(F11<>0,+F11/F2*G2,0)",
+          "cached_value": 372.82903971076877
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*G2",
+          "cached_value": 0.72
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G13",
+          "formula": "=+G11+G12",
+          "cached_value": 373.5490397107688
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G16",
+          "formula": "=+$AB$10*G2",
+          "cached_value": 233.23247677808666
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G18",
+          "formula": "=+'Product Added value'!$AG$32*G2",
+          "cached_value": 552.5296371402684
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G20",
+          "formula": "=+'Material Cost '!$BN$35*G2",
+          "cached_value": 17.34421001674179
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*G2",
+          "cached_value": 86.88377927471309
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G22",
+          "formula": "=+G20+G21",
+          "cached_value": 104.22798929145489
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G25",
+          "formula": "=+G9-G11-G16-G18-G22-G12",
+          "cached_value": 1306.4583299173648
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G28",
+          "formula": "=IF(R28<R36,R36,R28)",
+          "cached_value": 416.9298950572455
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G30",
+          "formula": "=IF(R30<R39,R39,R30)",
+          "cached_value": 441.9218868637215
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G33",
+          "formula": "=+G25-G28-G30",
+          "cached_value": 447.6065479963978
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G36",
+          "formula": "=+G67",
+          "cached_value": 0
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G37",
+          "formula": "=-G52",
+          "cached_value": -49.252891745119946
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G39",
+          "formula": "=+G33-G36-G37",
+          "cached_value": 496.85943974151775
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*G39",
+          "cached_value": 149.0578319224553
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G44",
+          "formula": "=+G39-G42",
+          "cached_value": 347.80160781906244
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G54",
+          "formula": "=+SUM(G48:G53)",
+          "cached_value": 278.24128625525
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G55",
+          "formula": "=+F55+G54",
+          "cached_value": 770.7702037064494
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G70",
+          "formula": "=+'Material Cost '!$BJ$35*G2",
+          "cached_value": 63.840386331847526
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G71",
+          "formula": "=-'RFQ Data'!$E$16*G9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*G9/48,0)",
+          "cached_value": -264.77428301783607
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G72",
+          "formula": "=-'RFQ Data'!$G$25/365*G9",
+          "cached_value": -84.49306760015158
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G73",
+          "formula": "=-'RFQ Data'!$J$65/365*G13",
+          "cached_value": -7.163954186233923
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G74",
+          "formula": "=-'Material Cost '!$BL$35*G2",
+          "cached_value": -35.7887356927504
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G75",
+          "formula": "=+SUM(G70:G74)",
+          "cached_value": -328.3796541651244
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "G76",
+          "formula": "=+G75-F75",
+          "cached_value": 0
+        }
+      },
+      "EOL": {
+        "calendar_year": {
+          "sheet": "PriceCalAVO",
+          "cell": "H1",
+          "formula": "=+'RFQ Data'!I30",
+          "cached_value": 2030
+        },
+        "quantity_kpieces": {
+          "sheet": "PriceCalAVO",
+          "cell": "H2",
+          "formula": 0,
+          "cached_value": 0
+        },
+        "productivity_rate": {
+          "sheet": "PriceCalAVO",
+          "cell": "H3",
+          "formula": 0,
+          "cached_value": 0
+        },
+        "part_price_before_indexed_material_and_packaging": {
+          "sheet": "PriceCalAVO",
+          "cell": "H4",
+          "formula": "=G4*(1-H3)",
+          "cached_value": 6.1586590903072205
+        },
+        "packaging_and_transport_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "H5",
+          "formula": "=+G5",
+          "cached_value": 0.24334383131864748
+        },
+        "indexed_material_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "H6",
+          "formula": "=+G6",
+          "cached_value": 0.736878947368421
+        },
+        "selling_price": {
+          "sheet": "PriceCalAVO",
+          "cell": "H7",
+          "formula": "=+H4+H5+H6",
+          "cached_value": 7.138881868994289
+        },
+        "sales_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H9",
+          "formula": "=+H7*H2",
+          "cached_value": 0
+        },
+        "material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H11",
+          "formula": "=IF(G11<>0,+G11/G2*H2,0)",
+          "cached_value": 0
+        },
+        "packaging_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H12",
+          "formula": "='Transp-Packaging-AMS'!$S$4*H2",
+          "cached_value": 0
+        },
+        "total_material_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H13",
+          "formula": "=+H11+H12",
+          "cached_value": 0
+        },
+        "dl_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H16",
+          "formula": "=+$AB$10*H2",
+          "cached_value": 0
+        },
+        "voh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H18",
+          "formula": "=+'Product Added value'!$AG$32*H2",
+          "cached_value": 0
+        },
+        "inbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H20",
+          "formula": "=+'Material Cost '!$BN$35*H2",
+          "cached_value": 0
+        },
+        "outbound_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H21",
+          "formula": "='Transp-Packaging-AMS'!$S$6*H2",
+          "cached_value": 0
+        },
+        "total_transport_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H22",
+          "formula": "=+H20+H21",
+          "cached_value": 0
+        },
+        "gmdc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H25",
+          "formula": "=+H9-H11-H16-H18-H22",
+          "cached_value": 0
+        },
+        "foh_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H28",
+          "formula": "=IF(S28<S36,S36,S28)",
+          "cached_value": 0
+        },
+        "fees_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H30",
+          "formula": "=IF(S30<S39,S39,S30)",
+          "cached_value": 0
+        },
+        "ebitda_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H33",
+          "formula": "=+H25-H28-H30",
+          "cached_value": 0
+        },
+        "depreciation_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H36",
+          "formula": "=+H67",
+          "cached_value": 0
+        },
+        "financing_cost_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H37",
+          "formula": "=-H52",
+          "cached_value": -77.07702037064495
+        },
+        "operating_income_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H39",
+          "formula": "=+H33-H36-H37",
+          "cached_value": 77.07702037064495
+        },
+        "taxes_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H42",
+          "formula": "=+VLOOKUP('RFQ Data'!$K$13,'Financials Parameters'!$I$5:$W$16,12,FALSE)*H39",
+          "cached_value": 23.123106111193483
+        },
+        "net_result_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H44",
+          "formula": "=+H39-H42",
+          "cached_value": 53.953914259451466
+        },
+        "annual_cash_flow_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H54",
+          "formula": "=+SUM(H48:H53)",
+          "cached_value": 43.163131407561174
+        },
+        "cumulative_cash_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H55",
+          "formula": "=+G55+H54",
+          "cached_value": 813.9333351140106
+        },
+        "ap_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H70",
+          "formula": "=+'Material Cost '!$BJ$35*H2",
+          "cached_value": 0
+        },
+        "ar_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H71",
+          "formula": "=-'RFQ Data'!$E$16*H9/365-IF('RFQ Data'!$D$17=\"DAP\",'RFQ Data'!$F$18*H9/48,0)",
+          "cached_value": 0
+        },
+        "finished_product_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H72",
+          "formula": "=-'RFQ Data'!$G$25/365*H9",
+          "cached_value": 0
+        },
+        "wip_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H73",
+          "formula": "=-'RFQ Data'!$J$65/365*H13",
+          "cached_value": 0
+        },
+        "raw_material_stock_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H74",
+          "formula": "=-'Material Cost '!$BL$35*H2",
+          "cached_value": 0
+        },
+        "twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H75",
+          "formula": "=+SUM(H70:H74)",
+          "cached_value": 0
+        },
+        "delta_twc_kcurrency": {
+          "sheet": "PriceCalAVO",
+          "cell": "H76",
+          "formula": "=+H75-G75*J76",
+          "cached_value": 0
+        }
+      }
+    }
+  },
+  "business_rule_differences": [
+    "Workbook contains seven columns (pre-launch, SOP/Y1, Y2-Y5, EOL), not Y-1 through Y6.",
+    "Workbook solves a 50% IRR and discounts NPV at 50%; the later approved generic model uses 12%.",
+    "Workbook financing is 10%; the later approved generic model uses 8%.",
+    "Workbook WIP duration is 7 days; the later approved Choke rule uses 5 days.",
+    "Workbook depreciation starts in pre-launch; the later generic engine starts in Y1."
+  ]
+}

@@ -70,6 +70,7 @@ from services.choke_writeback_mcp_diagnostic import (
 
 BASE_DIR = BACKEND_ROOT
 logger = logging.getLogger(__name__)
+TECHNICAL_CALCULATION_ENGINE_VERSION = "choke-technical-cost-v2"
 MOST_WRITEBACK_INSTRUCTION = (
     "Analyze only this work package using your native MOST JSON structure "
     "from most_cycle_output_template.json. "
@@ -8870,6 +8871,9 @@ def calculate_final_choke_costing_from_saved_outputs(
 
         component_breakdown.append({
             "component_id": component_id,
+            "cost_object_version": component_costing.COMPONENT_NORMALIZER_VERSION,
+            "quantity_per_product": display_quantity,
+            "quantity_unit": display_quantity_unit,
             "technical_quantity": display_quantity,
             "technical_quantity_unit": display_quantity_unit,
             "technical_quantity_status": (
@@ -8878,6 +8882,7 @@ def calculate_final_choke_costing_from_saved_outputs(
                 else "resolved"
             ),
             "purchasing_quantity_per_product": pricing_quantity,
+            "purchasing_unit": pricing_unit,
             "purchasing_quantity_unit": (
                 f"{pricing_unit}/product" if pricing_unit else None
             ),
@@ -8897,6 +8902,22 @@ def calculate_final_choke_costing_from_saved_outputs(
             "pricing_unit": pricing_quantity_info.get("pricing_unit"),
             "pricing_quantity_basis": pricing_quantity_info.get("pricing_quantity_basis"),
             "unit_price": price_info.get("unit_price"),
+            "base_purchase_unit_cost": delivered_result.get("base_unit_cost"),
+            "transport_unit_cost": next((
+                item.get("converted_value")
+                for item in delivered_result.get("included_adders") or []
+                if item.get("name") in {"transport", "transportation"}
+            ), 0),
+            "customs_unit_cost": next((
+                item.get("converted_value")
+                for item in delivered_result.get("included_adders") or []
+                if item.get("name") in {"customs", "custom_duty"}
+            ), 0),
+            "forwarder_unit_cost": next((
+                item.get("converted_value")
+                for item in delivered_result.get("included_adders") or []
+                if item.get("name") in {"forwarder", "forwarder_fee"}
+            ), 0),
             "original_unit_price": (price_info.get("normalized_offer") or {}).get("unit_price"),
             "original_currency": (price_info.get("normalized_offer") or {}).get("currency"),
             "converted_unit_price": (
@@ -8914,7 +8935,11 @@ def calculate_final_choke_costing_from_saved_outputs(
             "delivered_cost_per_pricing_unit": delivered_result.get(
                 "delivered_cost_per_pricing_unit"
             ),
+            "delivered_material_unit_cost": delivered_result.get(
+                "delivered_cost_per_pricing_unit"
+            ),
             "delivered_material_cost_per_piece": line_delivered_cost,
+            "material_cost_per_product": line_delivered_cost,
             "delivered_material_cost_per_piece_exact": (
                 format(line_delivered_decimal, "f")
                 if delivered_basis_compatible else None
@@ -9148,6 +9173,14 @@ def calculate_final_choke_costing_from_saved_outputs(
     result = {
         "project_code": project_code,
         "product_id": product_id,
+        "backend_commit": get_git_commit(),
+        "calculation_engine_version": TECHNICAL_CALCULATION_ENGINE_VERSION,
+        "component_normalizer_version": component_costing.COMPONENT_NORMALIZER_VERSION,
+        "data_root": str(DATA_ROOT),
+        "calculation_function": (
+            "services.choke_sequential_agent_workflow."
+            "calculate_final_choke_costing_from_saved_outputs"
+        ),
         **classification_trace(state.get("choke_classification")),
         "process_decomposition": process_decomposition,
         "technical_revisions": {

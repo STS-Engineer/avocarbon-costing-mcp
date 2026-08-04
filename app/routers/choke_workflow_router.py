@@ -52,6 +52,9 @@ from services.choke_financial_workflow import (
     save_financial_reference_comparison,
     solve_saved_selling_price,
 )
+from services.choke_excel_golden_reference import (
+    get_approved_reference_report,
+)
 
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
@@ -531,6 +534,22 @@ def get_final_result(project_code: str, product_id: str):
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail="Saved final result is not valid JSON") from exc
+
+
+@router.get("/golden-reference/{project_code}/{product_id}")
+def workflow_golden_reference(project_code: str, product_id: str):
+    paths = get_workflow_run_paths(project_code, product_id)
+    result_path = paths["run_dir"] / "final_choke_costing_result.json"
+    backend_result = None
+    if result_path.exists():
+        try:
+            backend_result = json.loads(result_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            backend_result = None
+    return get_approved_reference_report(
+        project_code, product_id, backend_result,
+    )
+
 
 
 @router.get("/financial-model-audit")
