@@ -363,6 +363,17 @@ def test_currency_less_root_logistics_is_excluded_and_reported():
     )
     assert result["status"] == "calculated_with_exclusions"
     assert result["excluded_adders"][0]["reason"] == "currency_missing"
+def test_component_normalizer_version_is_exposed_by_real_output_calculation(monkeypatch):
+    result = _run_final(monkeypatch, "preliminary")
+
+    assert costing.COMPONENT_NORMALIZER_VERSION == "choke-component-normalizer-v2"
+    assert result["component_normalizer_version"] == costing.COMPONENT_NORMALIZER_VERSION
+    assert all(
+        row["cost_object_version"] == costing.COMPONENT_NORMALIZER_VERSION
+        for row in result["component_breakdown"]
+    )
+
+
 
 
 def test_firm_result_keeps_resolved_material_subtotal_but_blocks_for_glue(monkeypatch):
@@ -375,6 +386,12 @@ def test_firm_result_keeps_resolved_material_subtotal_but_blocks_for_glue(monkey
     assert rows["ferrite_core"]["fx"]["status"] == "already_converted"
     assert math.isclose(rows["ferrite_core"]["material_cost_per_piece"], 2 * 1.137144)
     assert math.isclose(rows["magnet_wire"]["technical_quantity"], 0.779)
+    assert rows["ferrite_core"]["transport_unit_cost"] == 0.09
+    assert rows["ferrite_core"]["customs_unit_cost"] == 0.092036
+    assert rows["ferrite_core"]["forwarder_unit_cost"] == 0.03
+    assert rows["magnet_wire"]["transport_unit_cost"] == 18
+    assert rows["magnet_wire"]["customs_unit_cost"] == 0
+    assert rows["magnet_wire"]["forwarder_unit_cost"] == 5
     assert rows["magnet_wire"]["technical_quantity_unit"] == "g/product"
     assert math.isclose(
         rows["magnet_wire"]["purchasing_quantity_per_product"], 0.000779

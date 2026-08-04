@@ -20,6 +20,8 @@ structured "blocked" result naming exactly what is missing/incompatible.
 Never silently multiplies incompatible units.
 """
 
+COMPONENT_NORMALIZER_VERSION = "choke-component-normalizer-v2"
+
 import re
 from math import pi
 from decimal import Decimal, InvalidOperation, getcontext

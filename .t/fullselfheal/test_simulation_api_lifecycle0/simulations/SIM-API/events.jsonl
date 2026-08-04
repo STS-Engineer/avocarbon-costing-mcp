@@ -1,0 +1,6 @@
+{"timestamp": "2026-08-03T17:07:42.362139+00:00", "event": "simulation_created", "simulation_id": "SIM-API"}
+{"timestamp": "2026-08-03T17:07:42.439899+00:00", "event": "context_updated", "simulation_id": "SIM-API", "fields": ["target_price"]}
+{"timestamp": "2026-08-03T17:07:42.484168+00:00", "event": "output_saved", "simulation_id": "SIM-API", "output_type": "bom", "identifier": null, "replaced": false}
+{"timestamp": "2026-08-03T17:07:42.494999+00:00", "event": "output_saved", "simulation_id": "SIM-API", "output_type": "component_costing", "identifier": "ferrite_core", "replaced": false}
+{"timestamp": "2026-08-03T17:07:42.505615+00:00", "event": "output_saved", "simulation_id": "SIM-API", "output_type": "most_component", "identifier": "ferrite_core", "replaced": false}
+{"timestamp": "2026-08-03T17:07:42.518690+00:00", "event": "simulation_calculated", "simulation_id": "SIM-API", "status": "complete", "blocking_errors": []}

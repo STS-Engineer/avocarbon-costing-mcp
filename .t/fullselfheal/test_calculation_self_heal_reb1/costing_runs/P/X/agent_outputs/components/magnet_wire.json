@@ -1,0 +1,28 @@
+{
+  "component_id": "magnet_wire",
+  "component_family": "enameled_wire",
+  "technical_specification": {
+    "line_weight_g_per_product": 0.725061,
+    "developed_length_m_per_product": 0.18317
+  },
+  "recommended_offer": {
+    "unit_price": 1177.553,
+    "currency": "INR",
+    "pricing_unit": "kg",
+    "delivered_cost": 1479.412348,
+    "delivered_cost_currency": "INR",
+    "delivered_cost_basis": "INR/kg",
+    "transport_cost": 115,
+    "transport_cost_currency": "INR",
+    "transport_basis": "INR/kg",
+    "customs_cost": 142.18083,
+    "customs_cost_currency": "INR",
+    "customs_basis": "INR/kg",
+    "forwarder_fee": 35,
+    "forwarder_fee_currency": "INR",
+    "forwarder_basis": "INR/kg",
+    "capital_cost_12pct": 9.678518,
+    "capital_cost_currency": "INR",
+    "capital_cost_basis": "INR/kg"
+  }
+}

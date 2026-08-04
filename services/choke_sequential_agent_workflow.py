@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 from services import choke_component_costing as component_costing
+from services.choke_component_costing import COMPONENT_NORMALIZER_VERSION
 from services.choke_classification import classify_choke, classification_trace
 from services.bom_invocation_identity import (
     bom_conversation_key as _bom_conversation_key,
@@ -8871,7 +8872,7 @@ def calculate_final_choke_costing_from_saved_outputs(
 
         component_breakdown.append({
             "component_id": component_id,
-            "cost_object_version": component_costing.COMPONENT_NORMALIZER_VERSION,
+            "cost_object_version": COMPONENT_NORMALIZER_VERSION,
             "quantity_per_product": display_quantity,
             "quantity_unit": display_quantity_unit,
             "technical_quantity": display_quantity,
@@ -9175,7 +9176,7 @@ def calculate_final_choke_costing_from_saved_outputs(
         "product_id": product_id,
         "backend_commit": get_git_commit(),
         "calculation_engine_version": TECHNICAL_CALCULATION_ENGINE_VERSION,
-        "component_normalizer_version": component_costing.COMPONENT_NORMALIZER_VERSION,
+        "component_normalizer_version": COMPONENT_NORMALIZER_VERSION,
         "data_root": str(DATA_ROOT),
         "calculation_function": (
             "services.choke_sequential_agent_workflow."

@@ -1,0 +1,28 @@
+{
+  "component_id": "glue",
+  "component_family": "glue",
+  "technical_specification": {
+    "estimated_total_weight_g_per_product": 0.032673,
+    "bead_geometry_assumption": "2 zones, 1 mm diameter, 10.4 mm, density 2 g/cm3"
+  },
+  "recommended_offer": {
+    "unit_price": 10000,
+    "currency": "INR",
+    "pricing_unit": "kg",
+    "delivered_cost": 10126.619178,
+    "delivered_cost_currency": "INR",
+    "delivered_cost_basis": "INR/kg",
+    "transport_cost": 85,
+    "transport_cost_currency": "INR",
+    "transport_basis": "INR/kg",
+    "customs_cost": 0,
+    "customs_cost_currency": "INR",
+    "customs_basis": "INR/kg",
+    "forwarder_fee": 25,
+    "forwarder_fee_currency": "INR",
+    "forwarder_basis": "INR/kg",
+    "capital_cost_12pct": 16.619178,
+    "capital_cost_currency": "INR",
+    "capital_cost_basis": "INR/kg"
+  }
+}
