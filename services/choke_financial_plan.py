@@ -1190,6 +1190,10 @@ def solve_selling_price(
     commercial["solve_selling_price"] = True
     target_config = commercial.get("product_profitability_target") or {}
     scenario_solver = commercial.get("scenario_solver") is True
+    rule_set = str(commercial.get("rule_set") or "current_approved")
+    solver_discount_rate = _d(
+        commercial.get("solver_discount_rate"), Decimal("12")
+    ) or Decimal("12")
     if not isinstance(target_config, Mapping):
         return {
             "convergence_status": "blocked",
@@ -1211,7 +1215,7 @@ def solve_selling_price(
             "code": "roce_to_npv_semantics_unconfirmed",
             "source_field": source_field,
             "source_value": target_config.get("value"),
-            "discount_rate_percent": 12,
+            "discount_rate_percent": _number(solver_discount_rate),
         }
         return {
             "convergence_status": "blocked",
@@ -1233,7 +1237,7 @@ def solve_selling_price(
             "convergence_status": "blocked",
             "missing_inputs": ["product_profitability_target.value"],
         }
-    commercial["discount_rate"] = Decimal("12")
+    commercial["discount_rate"] = solver_discount_rate
 
     lower = _d(commercial.get("solver_lower_bound"), Decimal("0.000001")) or Decimal("0.000001")
     upper = _d(commercial.get("solver_upper_bound"), Decimal("1000000")) or Decimal("1000000")
@@ -1315,13 +1319,16 @@ def solve_selling_price(
             False
         ),
         "solver_type": "scenario_solver",
-        "solver_label": "Scenario-only NPV=0 solver at 12%",
+        "solver_label": (
+            f"Scenario-only NPV=0 solver at {solver_discount_rate}%"
+        ),
         "solved_y0_selling_price": _number(midpoint, PER_UNIT_QUANTUM),
         "target": {"type": target_type, "value": _number(target)},
         "source_product_target_field": source_field,
         "target_interpretation": target_type,
         "product_target": dict(target_config),
-        "discount_rate": 0.12,
+        "discount_rate": _number(_rate(solver_discount_rate)),
+        "rule_set": rule_set,
         "achieved_npv": _number(achieved),
         "residual": _number(residual, PER_UNIT_QUANTUM),
         "iterations": iterations,

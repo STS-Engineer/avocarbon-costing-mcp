@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 from services import choke_component_costing as component_costing
 from services.choke_component_costing import COMPONENT_NORMALIZER_VERSION
+from services.choke_most_input_contract import build_physical_operation_scope
 from services.choke_classification import classify_choke, classification_trace
 from services.bom_invocation_identity import (
     bom_conversation_key as _bom_conversation_key,
@@ -6749,10 +6750,16 @@ def build_most_process_decomposition(state: Dict[str, Any], normalized_bom: Dict
             if item in component_map
         ]
         technical_inputs: Dict[str, Any] = {}
+        technical_by_component: Dict[str, Dict[str, Any]] = {}
         for component in package_components:
-            technical_inputs.update(
-                _most_component_technical_data(state["project_code"], state["product_id"], component)
+            component_technical = _most_component_technical_data(
+                state["project_code"], state["product_id"], component
             )
+            technical_by_component[component["component_id"]] = component_technical
+            technical_inputs.update(component_technical)
+        technical_inputs.update(
+            build_physical_operation_scope(package, technical_by_component)
+        )
         package["technical_inputs"] = technical_inputs
         package["production_plant"] = state.get("production_plant") or (state.get("unit_data") or {}).get("plant")
         package["annual_quantity"] = (state.get("customer_input") or {}).get("annual_quantity")
@@ -8536,7 +8543,8 @@ def calculate_final_choke_costing_from_saved_outputs(
     required_external_ids = {
         item["component_id"]
         for item in _required_external_components(
-            normalized_bom, include_unconfirmed=True
+            normalized_bom,
+            include_unconfirmed=result_mode != "preliminary",
         )
     }
     component_revision_blockers = []
@@ -8575,6 +8583,29 @@ def calculate_final_choke_costing_from_saved_outputs(
         bom_fields = dimensional_by_component.get(component_id, {})
         price_info = component_costing.resolve_unit_price(raw, target_currency=project_currency)
         current_bom_component = current_bom_components.get(component_id) or {}
+        if (
+            result_mode == "preliminary"
+            and component_id == "lead_tinning"
+            and _component_status_is_unconfirmed(current_bom_component)
+        ):
+            warning = (
+                "Optional lead tinning is excluded from current preliminary costing "
+                "because the current drawing/process interpretation is unconfirmed."
+            )
+            warnings.append(warning)
+            component_breakdown.append({
+                "component_id": component_id,
+                "cost_object_version": COMPONENT_NORMALIZER_VERSION,
+                "calculation_mode": "current_preliminary",
+                "status": "excluded_optional_unconfirmed",
+                "blocking_reasons": [],
+                "warning": warning,
+                "material_cost_per_piece": None,
+                "delivered_material_cost_per_piece": None,
+                "material_cost_per_product": None,
+                "costing_policy": "optional_tin_excluded_without_blocking",
+            })
+            continue
         quantity_source = {
             **current_bom_component,
             "component_definition": {
@@ -9174,6 +9205,8 @@ def calculate_final_choke_costing_from_saved_outputs(
     result = {
         "project_code": project_code,
         "product_id": product_id,
+        "calculation_mode": "current_preliminary",
+        "calculation_basis_label": "Current project calculation",
         "backend_commit": get_git_commit(),
         "calculation_engine_version": TECHNICAL_CALCULATION_ENGINE_VERSION,
         "component_normalizer_version": COMPONENT_NORMALIZER_VERSION,

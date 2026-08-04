@@ -1,0 +1,131 @@
+{
+  "schema_version": "choke-golden-inputs-v1",
+  "reference_id": "choke_24018",
+  "rule_set": "historical_quotation_2024",
+  "source": {
+    "workbook": "24018-CHO-00 - 0300440157 - PRABHA ENGINEERING- India - Chokes - assy Quotation.xlsm",
+    "sha256": "84b2166bd0a55af2a6b75be09b6fcc67c8cb4a87024b60075fd56d80f7eacbf1"
+  },
+  "project": {
+    "project_code": "24018-CHO-00",
+    "product_id": "300440157",
+    "product": "Rod choke",
+    "production_plant": "Chennai",
+    "currency": "INR",
+    "annual_quantity": 360000
+  },
+  "components": [
+    {
+      "component_id": "magnet_wire",
+      "material_family": "enameled_wire",
+      "quantity_per_product": 0.00091,
+      "quantity_unit": "kg",
+      "unit_price_schedule": [854.84, 851.42064, 848.01495744, 844.62289761024],
+      "unit_price_aggregation": "current",
+      "validation_tco_aggregation": "arithmetic_mean",
+      "currency": "INR",
+      "pricing_unit": "kg",
+      "transport_rate_per_pricing_unit": 12.8226,
+      "payment_days": 60,
+      "incoterm": "DDP",
+      "source_cells": ["Material Cost !F6", "Material Cost !BO6:BR6", "Material Cost !BN6"]
+    },
+    {
+      "component_id": "ferrite_core",
+      "material_family": "ferrite_component",
+      "quantity_per_product": 1,
+      "quantity_unit": "pc",
+      "unit_price_schedule": [0.2384766343841073, 0.23132233535258406, 0.22438266529200654, 0.21765118533324634],
+      "unit_price_aggregation": "current",
+      "validation_tco_aggregation": "arithmetic_mean",
+      "currency": "INR",
+      "pricing_unit": "pc",
+      "transport_rate_per_pricing_unit": 0.035771495157616094,
+      "payment_days": 60,
+      "incoterm": "FCA",
+      "source_cells": ["Material Cost !F7", "Material Cost !BO7:BR7", "Material Cost !BN7"]
+    },
+    {
+      "component_id": "glue",
+      "material_family": "adhesive",
+      "quantity_per_product": 0.00001,
+      "quantity_unit": "kg",
+      "unit_price_schedule": [2340, 2340, 2340, 2340],
+      "unit_price_aggregation": "current",
+      "validation_tco_aggregation": "arithmetic_mean",
+      "currency": "INR",
+      "pricing_unit": "kg",
+      "transport_rate_per_pricing_unit": 35.1,
+      "payment_days": 60,
+      "incoterm": "DDP",
+      "source_cells": ["Material Cost !F8", "Material Cost !BO8:BR8", "Material Cost !BN8"]
+    },
+    {
+      "component_id": "lead_tinning",
+      "material_family": "tinning_material",
+      "quantity_per_product": 0.00001,
+      "quantity_unit": "kg",
+      "unit_price_schedule": [2582, 2582, 2582, 2582],
+      "unit_price_aggregation": "current",
+      "validation_tco_aggregation": "arithmetic_mean",
+      "currency": "INR",
+      "pricing_unit": "kg",
+      "transport_rate_per_pricing_unit": 38.73,
+      "payment_days": 60,
+      "incoterm": "DDP",
+      "source_cells": ["Material Cost !F9", "Material Cost !BO9:BR9", "Material Cost !BN9"]
+    }
+  ],
+  "operations": [
+    {"operation_id": "OP 10", "operation_name": "Winding", "p_h": 1000, "oee": 1, "operator_fraction": 0.15, "machine_voh_rate_operating_per_hour": 31.81818181818182, "source_cells": ["Product Added value!J4", "Product Added value!K4", "Product Added value!AF4"]},
+    {"operation_id": "OP 20", "operation_name": "Manual gluing and oven", "p_h": 700, "oee": 1, "operator_fraction": 1, "machine_voh_rate_operating_per_hour": 9.090909090909092, "source_cells": ["Product Added value!J5", "Product Added value!K5", "Product Added value!AF5"]},
+    {"operation_id": "OP 30", "operation_name": "Inspection + Packaging", "p_h": 10000, "oee": 1, "operator_fraction": 1, "machine_voh_rate_operating_per_hour": 0, "source_cells": ["Product Added value!J6", "Product Added value!K6", "Product Added value!AF6"]},
+    {"operation_id": "OP 40", "operation_name": "Push test", "p_h": 1200, "oee": 1, "operator_fraction": 2, "machine_voh_rate_operating_per_hour": 2.7272727272727275, "source_cells": ["Product Added value!J7", "Product Added value!K7", "Product Added value!AF7"]}
+  ],
+  "unit_data": {
+    "operating_currency": "INR",
+    "selling_currency": "INR",
+    "dl_rate_operating_per_hour": 193.66872330327482,
+    "voh_rate_operating_per_hour": 442.5249169435216,
+    "open_hours_per_year": 4752,
+    "foh_percent_dc": 46.84657655782457,
+    "fee_percent_dc": 49.65469675110994,
+    "source_cells": ["RFQ Data!J63", "RFQ Data!J64", "Product Added value!AE4:AE7"]
+  },
+  "other_cost_inputs": {
+    "outbound_transport_per_product": 0.24134383131864748,
+    "packaging_per_product": 0.002,
+    "source_cells": ["PriceCalAVO!AB14", "PriceCalAVO!AB9"]
+  },
+  "commercial_inputs": {
+    "mode": "firm",
+    "rule_set": "historical_quotation_2024",
+    "sop_year": 2025,
+    "annual_quantities": {"Y-1": 0, "Y0": 360000, "Y1": 360000, "Y2": 360000, "Y3": 360000, "Y4": 360000, "Y5": 0, "Y6": 0},
+    "y_minus_1_quantity_zero": true,
+    "customer_productivity": {"percentage": 0, "start_year": 1, "duration": 0, "basis": "added_value"},
+    "material_indexation_rates": {},
+    "plant_indexation_rates": {},
+    "logistics_indexation_rates": {},
+    "fx_adjustment_rates": {},
+    "customer_payment_days": 30,
+    "customer_incoterm": "DAP",
+    "customer_delivery_frequency_days": 7,
+    "customer_transit_days": 0,
+    "platform": false,
+    "production_plant": "Chennai",
+    "tax_rate": 30,
+    "discount_rate": 50,
+    "solver_discount_rate": 50,
+    "financing_rate": 10,
+    "financing_interest_basis": "closing_balance",
+    "wip_days": 7,
+    "wip_material_basis": "base_material",
+    "fg_safety_stock_days": 12,
+    "capex_tooling_treatment": {"generic_capex": {"type": "avocarbon_owned"}, "specific_capex": {"type": "avocarbon_owned"}, "tooling": {"type": "prepaid"}},
+    "product_profitability_target": {"source_field": "RFQ Data!H56", "value": 0, "target_interpretation": "npv_zero"},
+    "scenario_solver": true,
+    "supplier_terms": {},
+    "source_cells": ["RFQ Data!E16", "RFQ Data!D17", "RFQ Data!H17", "RFQ Data!J65", "RFQ Data!G25", "PriceCalAVO!O3"]
+  }
+}

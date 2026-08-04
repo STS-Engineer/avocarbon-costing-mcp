@@ -284,12 +284,20 @@ def calculate_dl_voh(work_packages_or_most_outputs, unit_data, annual_quantity, 
             ["pieces_per_cycle"],
             ["station_library_summary", "parts_per_cycle"],
         ])) or 1.0
-        operator_percent_decimal = _normalize_percent(_first_value(operation, [
-            ["operator_percent"],
-            ["percent_operator"],
-            ["operator_percent_decimal"],
-            ["station_library_summary", "operator_percent"],
+        explicit_operator_fraction = _coerce_number(_first_value(operation, [
+            ["operator_fraction"],
+            ["station_library_summary", "operator_fraction"],
         ]))
+        operator_percent_decimal = (
+            explicit_operator_fraction
+            if explicit_operator_fraction is not None
+            else _normalize_percent(_first_value(operation, [
+                ["operator_percent"],
+                ["percent_operator"],
+                ["operator_percent_decimal"],
+                ["station_library_summary", "operator_percent"],
+            ]))
+        )
         generic_capex = _coerce_number(_first_value(operation, [
             ["generic_capex_eur"],
             ["generic_capex"],
@@ -317,6 +325,11 @@ def calculate_dl_voh(work_packages_or_most_outputs, unit_data, annual_quantity, 
         tooling_adder_per_piece = _coerce_number(_first_value(operation, [
             ["tooling_adder_per_piece_eur"],
             ["station_library_summary", "tooling_adder_per_piece_eur"],
+        ])) or 0.0
+        machine_voh_rate = _coerce_number(_first_value(operation, [
+            ["machine_voh_rate_operating_per_hour"],
+            ["machine_cost_per_hour"],
+            ["station_library_summary", "machine_voh_rate_operating_per_hour"],
         ])) or 0.0
 
         # A station explicitly reporting p_h=0 and operator_percent=0 together
@@ -401,6 +414,7 @@ def calculate_dl_voh(work_packages_or_most_outputs, unit_data, annual_quantity, 
 
         total_voh_per_hour = (
             base_voh_selling_per_hour
+            + machine_voh_rate / fx
             + generic_voh_per_hour
             + specific_voh_per_hour
             + tooling_voh_per_hour
@@ -428,6 +442,7 @@ def calculate_dl_voh(work_packages_or_most_outputs, unit_data, annual_quantity, 
             "yearly_production_hours": yearly_production_hours,
             "occupation_rate": occupation_rate,
             "base_voh_selling_per_hour": base_voh_selling_per_hour,
+            "machine_voh_selling_per_hour": machine_voh_rate / fx,
             "generic_voh_per_hour": generic_voh_per_hour,
             "specific_occupation_integer": specific_occupation_integer,
             "specific_voh_per_hour": specific_voh_per_hour,

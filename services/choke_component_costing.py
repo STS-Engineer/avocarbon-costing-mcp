@@ -1087,18 +1087,22 @@ _DELIVERED_ADJUSTMENT_SPECS = {
     "transport": {
         "fields": ("transportation_cost", "transport_cost"),
         "basis": ("transportation_cost_basis", "transport_basis"),
+        "currency": ("transportation_cost_currency", "transport_cost_currency"),
     },
     "customs": {
         "fields": ("custom_duty_cost", "customs_duty_cost", "customs_cost", "duty_cost"),
         "basis": ("custom_duty_cost_basis", "customs_cost_basis", "customs_basis"),
+        "currency": ("custom_duty_cost_currency", "customs_cost_currency"),
     },
     "forwarder_fee": {
         "fields": ("forwarder_fee", "forwarder_fees", "forwarder_cost", "forwarding_cost"),
         "basis": ("forwarder_fee_basis", "forwarder_cost_basis", "forwarder_basis"),
+        "currency": ("forwarder_fee_currency", "forwarder_cost_currency"),
     },
     "capital_cost": {
         "fields": ("capital_cost_12pct", "capital_cost_at_12_percent", "capital_cost"),
         "basis": ("capital_cost_basis",),
+        "currency": ("capital_cost_currency",),
     },
     "packaging": {
         "fields": ("packaging_cost", "packing_cost"),
@@ -1154,6 +1158,7 @@ def _adjustment_currency_and_basis(
     container: List[str],
     field_name: str,
     basis_names: tuple[str, ...],
+    currency_names: tuple[str, ...],
     offer_currency: Optional[str],
     delivered_currency: Optional[str],
     delivered_basis: Optional[str],
@@ -1162,6 +1167,13 @@ def _adjustment_currency_and_basis(
         agent_raw, container + [f"{field_name}_currency"]
     )
     explicit_currency = _currency_from_monetary_unit(explicit_currency_value)
+    if not explicit_currency:
+        explicit_currency_value = next((
+            _get_path(agent_raw, container + [name])
+            for name in currency_names
+            if _get_path(agent_raw, container + [name]) not in (None, "")
+        ), None)
+        explicit_currency = _currency_from_monetary_unit(explicit_currency_value)
     if not explicit_currency and container == ["recommended_offer", "supply_chain"]:
         explicit_currency_value = _get_path(
             agent_raw, ["recommended_offer", f"{field_name}_currency"]
@@ -1366,6 +1378,7 @@ def reconcile_delivered_unit_cost(
             container or [],
             field_name or name,
             spec["basis"],
+            spec.get("currency", ()),
             offer_currency,
             delivered_currency,
             delivered_basis_text,
@@ -1587,6 +1600,20 @@ def normalize_unit_basis(unit_price_basis: Any) -> Optional[str]:
     text = str(unit_price_basis).strip().lower()
     if text in _BASIS_UNIT_ALIASES:
         return _BASIS_UNIT_ALIASES[text]
+    # Agent offers often preserve a human explanation after the canonical
+    # basis (for example "INR per kg; consolidated freight assumption").
+    # Recognize the explicit per-unit phrase without treating arbitrary prose
+    # containing a unit as a compatible monetary basis.
+    for pattern, kind in (
+        (r"\bper[\s_-]+kg\b", "kg"),
+        (r"\bper[\s_-]+g\b", "g"),
+        (r"\bper[\s_-]+(?:pc|pcs|piece|pieces|unit|units)\b", "pc"),
+        (r"\bper[\s_-]+(?:m|meter|metre)\b", "m"),
+        (r"\bper[\s_-]+mm\b", "mm"),
+        (r"\bper[\s_-]+shipment\b", "shipment"),
+    ):
+        if re.search(pattern, text):
+            return kind
     for token, kind in _BASIS_UNIT_ALIASES.items():
         if text.endswith("/" + token):
             return kind
@@ -1605,6 +1632,42 @@ def normalize_unit_basis(unit_price_basis: Any) -> Optional[str]:
     if "shipment" in text:
         return "shipment"
     return None
+
+
+def resolve_component_unit_price_schedule(
+    unit_prices: Any,
+    aggregation: str = "current",
+) -> Dict[str, Any]:
+    """Resolve a configured supplier-price schedule without reference outputs.
+
+    This is shared input normalization: callers may select the current price or
+    an arithmetic average when a rule set explicitly requires it. Expected
+    historical cost outputs are never accepted by this function.
+    """
+    values = [
+        value for value in (_decimal(item) for item in (unit_prices or []))
+        if value is not None
+    ]
+    if not values:
+        return {"status": "blocked", "reason": "unit_price_schedule_missing"}
+    method = str(aggregation or "current").strip().lower()
+    if method == "current":
+        resolved = values[0]
+    elif method == "arithmetic_mean":
+        resolved = sum(values, Decimal("0")) / Decimal(len(values))
+    else:
+        return {
+            "status": "blocked",
+            "reason": "unsupported_unit_price_aggregation",
+            "aggregation": method,
+        }
+    return {
+        "status": "resolved",
+        "aggregation": method,
+        "input_prices": [_decimal_float(value) for value in values],
+        "unit_price": _decimal_float(resolved),
+        "unit_price_exact": _decimal_text(resolved),
+    }
 
 
 # ---------------------------------------------------------------------------

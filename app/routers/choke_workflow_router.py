@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -56,6 +57,7 @@ from services.choke_excel_golden_reference import (
     get_approved_reference_report,
 )
 
+from services.choke_golden_validation import validate_against_golden_reference
 
 router = APIRouter(prefix="/api/choke-workflow", tags=["Choke Sequential Workflow"])
 logger = logging.getLogger(__name__)
@@ -132,6 +134,12 @@ class CalculateRealOutputsRequest(BaseModel):
         if normalized not in {"firm", "preliminary"}:
             raise ValueError("result_mode must be 'firm' or 'preliminary'")
         return normalized
+
+
+
+class GoldenReferenceValidationRequest(BaseModel):
+    reference_id: str
+    use_historical_inputs: bool = True
 
 
 class UpdateCommercialFieldsRequest(BaseModel):
@@ -506,12 +514,14 @@ def calculate_real_outputs(request: CalculateRealOutputsRequest):
 
 @router.post("/calculate-final")
 def calculate_final_outputs(request: CalculateRealOutputsRequest):
-    return _handle(lambda: calculate_final_choke_costing_from_saved_outputs(
-        project_code=request.project_code,
-        product_id=request.product_id,
-        unit_data_override=request.unit_data,
-        result_mode=request.result_mode,
-    ))
+    return _handle(
+        lambda: calculate_final_choke_costing_from_saved_outputs(
+            project_code=request.project_code,
+            product_id=request.product_id,
+            unit_data_override=request.unit_data,
+            result_mode=request.result_mode,
+        )
+    )
 
 
 @router.get("/final-result/{project_code}/{product_id}")
@@ -536,8 +546,28 @@ def get_final_result(project_code: str, product_id: str):
         raise HTTPException(status_code=500, detail="Saved final result is not valid JSON") from exc
 
 
+@router.post("/validate-against-golden-reference")
+def validate_golden_reference(request: GoldenReferenceValidationRequest):
+    if str(os.getenv("ENABLE_GOLDEN_REFERENCE_VALIDATION") or "").lower() not in {
+        "1", "true", "yes"
+    }:
+        raise HTTPException(status_code=404, detail="Golden-reference QA is disabled.")
+    if not request.use_historical_inputs:
+        raise HTTPException(
+            status_code=422,
+            detail="QA validation requires the reviewed historical input fixture.",
+        )
+    return _handle(
+        lambda: validate_against_golden_reference(request.reference_id)
+    )
+
+
 @router.get("/golden-reference/{project_code}/{product_id}")
 def workflow_golden_reference(project_code: str, product_id: str):
+    if str(os.getenv("ENABLE_GOLDEN_REFERENCE_VALIDATION") or "").lower() not in {
+        "1", "true", "yes"
+    }:
+        raise HTTPException(status_code=404, detail="Golden-reference QA is disabled.")
     paths = get_workflow_run_paths(project_code, product_id)
     result_path = paths["run_dir"] / "final_choke_costing_result.json"
     backend_result = None

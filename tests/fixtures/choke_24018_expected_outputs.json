@@ -1,0 +1,158 @@
+{
+    "schema_version":  "choke-golden-expected-v1",
+    "reference_id":  "choke_24018",
+    "source":  {
+                   "workbook":  "24018-CHO-00 - 0300440157 - PRABHA ENGINEERING- India - Chokes - assy Quotation.xlsm",
+                   "sha256":  "84b2166bd0a55af2a6b75be09b6fcc67c8cb4a87024b60075fd56d80f7eacbf1"
+               },
+    "component_outputs":  [
+                              {
+                                  "component_id":  "magnet_wire",
+                                  "base_cost_per_product":  0.7732494076239295,
+                                  "inbound_transport_per_product":  0.011668565999999998,
+                                  "delivered_cost_per_product":  0.7849179736239295
+                              },
+                              {
+                                  "component_id":  "ferrite_core",
+                                  "base_cost_per_product":  0.22795820509048606,
+                                  "inbound_transport_per_product":  0.035771495157616094,
+                                  "delivered_cost_per_product":  0.26372970024810216
+                              },
+                              {
+                                  "component_id":  "glue",
+                                  "base_cost_per_product":  0.0234,
+                                  "inbound_transport_per_product":  0.000351,
+                                  "delivered_cost_per_product":  0.023751
+                              },
+                              {
+                                  "component_id":  "lead_tinning",
+                                  "base_cost_per_product":  0.025820000000000003,
+                                  "inbound_transport_per_product":  0.0003873,
+                                  "delivered_cost_per_product":  0.026207300000000003
+                              }
+                          ],
+    "technical_outputs":  {
+                              "base_material_per_product":  1.0657592336443449,
+                              "packaging_per_product":  0.002,
+                              "inbound_transport_per_product":  0.04817836115761609,
+                              "outbound_transport_per_product":  0.24134383131864748,
+                              "delivered_material_per_product":  1.113937594801961,
+                              "dl_per_product":  0.6478679910502407,
+                              "voh_per_product":  1.5348045476118566,
+                              "direct_cost_per_product":  2.472194731138361,
+                              "foh_per_product":  1.1581385973812375,
+                              "fees_per_product":  1.2275607968436708,
+                              "manufacturing_cost_per_product":  4.857894125363269,
+                              "total_product_cost_per_product":  5.925653359007614
+                          },
+    "annual_financial_rows":  {
+                                  "Y-1":  {
+                                              "calendar_year":  2024,
+                                              "quantity_kpieces":  0,
+                                              "selling_price":  7.138881868994289,
+                                              "sales_kcurrency":  0,
+                                              "material_kcurrency":  0,
+                                              "dl_kcurrency":  0,
+                                              "voh_kcurrency":  0,
+                                              "foh_kcurrency":  0,
+                                              "fees_kcurrency":  0,
+                                              "annual_cash_flow_kcurrency":  -265.62016189540367,
+                                              "cumulative_cash_kcurrency":  -265.62016189540367,
+                                              "npv_reference":  null
+                                          },
+                                  "Y0":  {
+                                             "calendar_year":  2025,
+                                             "quantity_kpieces":  360,
+                                             "selling_price":  7.138881868994289,
+                                             "sales_kcurrency":  2569.997472837944,
+                                             "material_kcurrency":  379.97759412461573,
+                                             "dl_kcurrency":  233.23247677808666,
+                                             "voh_kcurrency":  552.5296371402684,
+                                             "foh_kcurrency":  416.9298950572455,
+                                             "fees_kcurrency":  441.9218868637215,
+                                             "annual_cash_flow_kcurrency":  -23.11875954258988,
+                                             "cumulative_cash_kcurrency":  -288.73892143799355,
+                                             "npv_reference":  null
+                                         },
+                                  "Y1":  {
+                                             "calendar_year":  2026,
+                                             "quantity_kpieces":  360,
+                                             "selling_price":  7.138881868994289,
+                                             "sales_kcurrency":  2569.997472837944,
+                                             "material_kcurrency":  376.3636112961519,
+                                             "dl_kcurrency":  233.23247677808666,
+                                             "voh_kcurrency":  552.5296371402684,
+                                             "foh_kcurrency":  416.9298950572455,
+                                             "fees_kcurrency":  441.9218868637215,
+                                             "annual_cash_flow_kcurrency":  245.10301940664255,
+                                             "cumulative_cash_kcurrency":  -43.63590203135101,
+                                             "npv_reference":  null
+                                         },
+                                  "Y2":  {
+                                             "calendar_year":  2027,
+                                             "quantity_kpieces":  360,
+                                             "selling_price":  7.138881868994289,
+                                             "sales_kcurrency":  2569.997472837944,
+                                             "material_kcurrency":  372.82903971076877,
+                                             "dl_kcurrency":  233.23247677808666,
+                                             "voh_kcurrency":  552.5296371402684,
+                                             "foh_kcurrency":  416.9298950572455,
+                                             "fees_kcurrency":  441.9218868637215,
+                                             "annual_cash_flow_kcurrency":  260.80693021695146,
+                                             "cumulative_cash_kcurrency":  217.17102818560045,
+                                             "npv_reference":  null
+                                         },
+                                  "Y3":  {
+                                             "calendar_year":  2028,
+                                             "quantity_kpieces":  360,
+                                             "selling_price":  7.138881868994289,
+                                             "sales_kcurrency":  2569.997472837944,
+                                             "material_kcurrency":  372.82903971076877,
+                                             "dl_kcurrency":  233.23247677808666,
+                                             "voh_kcurrency":  552.5296371402684,
+                                             "foh_kcurrency":  416.9298950572455,
+                                             "fees_kcurrency":  441.9218868637215,
+                                             "annual_cash_flow_kcurrency":  275.357889265599,
+                                             "cumulative_cash_kcurrency":  492.52891745119945,
+                                             "npv_reference":  null
+                                         },
+                                  "Y4":  {
+                                             "calendar_year":  2029,
+                                             "quantity_kpieces":  360,
+                                             "selling_price":  7.138881868994289,
+                                             "sales_kcurrency":  2569.997472837944,
+                                             "material_kcurrency":  372.82903971076877,
+                                             "dl_kcurrency":  233.23247677808666,
+                                             "voh_kcurrency":  552.5296371402684,
+                                             "foh_kcurrency":  416.9298950572455,
+                                             "fees_kcurrency":  441.9218868637215,
+                                             "annual_cash_flow_kcurrency":  278.24128625525,
+                                             "cumulative_cash_kcurrency":  770.7702037064494,
+                                             "npv_reference":  null
+                                         },
+                                  "EOL":  {
+                                              "calendar_year":  2030,
+                                              "quantity_kpieces":  0,
+                                              "selling_price":  7.138881868994289,
+                                              "sales_kcurrency":  0,
+                                              "material_kcurrency":  0,
+                                              "dl_kcurrency":  0,
+                                              "voh_kcurrency":  0,
+                                              "foh_kcurrency":  0,
+                                              "fees_kcurrency":  0,
+                                              "annual_cash_flow_kcurrency":  43.163131407561174,
+                                              "cumulative_cash_kcurrency":  813.9333351140106,
+                                              "npv_reference":  null
+                                          }
+                              },
+    "solver_outputs":  {
+                           "initial_price_seed":  6.717489629548733,
+                           "solved_part_price":  6.1586590903072205,
+                           "quoted_y0_selling_price":  7.138881868994289,
+                           "profitability_target":  0.5,
+                           "achieved_irr":  0.4999999999999969,
+                           "discount_rate_used_by_workbook":  0.5,
+                           "npv":  -7.0758214102776648E-14,
+                           "converged":  true
+                       }
+}

@@ -1,0 +1,17 @@
+{
+  "technical_revision": "output-current",
+  "source_bom_revision": "bom-current",
+  "source_component_revision": "revision-ferrite_core",
+  "source_revision_metadata": {
+    "raw_bom_revision": "raw-current",
+    "normalized_bom_revision": "bom-current",
+    "process_decomposition_revision": "process-current",
+    "drawing_document_revision_hash": "drawing-current",
+    "upstream_bom_trigger_run_id": "bom-current-run",
+    "component_input_revision": "revision-ferrite_core"
+  },
+  "pricing_completeness": {
+    "status": "complete",
+    "requires_regeneration": false
+  }
+}

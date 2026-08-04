@@ -1,6 +1,8 @@
 import math
 from decimal import Decimal
 
+import pytest
+
 from services import choke_component_costing as costing
 from services import choke_sequential_agent_workflow as workflow
 from services import choke_technical_revisions as revisions
@@ -368,6 +370,7 @@ def test_component_normalizer_version_is_exposed_by_real_output_calculation(monk
 
     assert costing.COMPONENT_NORMALIZER_VERSION == "choke-component-normalizer-v2"
     assert result["component_normalizer_version"] == costing.COMPONENT_NORMALIZER_VERSION
+    assert result["calculation_mode"] == "current_preliminary"
     assert all(
         row["cost_object_version"] == costing.COMPONENT_NORMALIZER_VERSION
         for row in result["component_breakdown"]
@@ -603,3 +606,43 @@ def test_financial_missing_inputs_do_not_reblock_technical_costing(monkeypatch):
         "blocked", "preliminary_assumption"
     }
     assert result["manufacturing_cost_per_piece"] is not None
+
+
+def test_verbose_per_kg_agent_basis_is_canonicalized_without_regeneration():
+    assert costing.normalize_unit_basis(
+        "INR per kg; consolidated China-to-Chennai freight assumption"
+    ) == "kg"
+
+
+def test_current_wire_offer_reconciles_from_existing_raw_aliases():
+    raw = {
+        "component_id": "magnet_wire",
+        "recommended_offer": {
+            "unit_price": 98.54,
+            "currency": "CNY",
+            "pricing_unit": "kg",
+            "converted_unit_price": 1177.553,
+            "converted_currency": "INR",
+            "transport_cost": 115,
+            "transport_basis": "INR per kg; consolidated freight assumption",
+            "transport_cost_currency": "INR",
+            "customs_cost": 142.18083,
+            "customs_basis": "INR per kg; provisional duty assumption",
+            "customs_cost_currency": "INR",
+            "forwarder_fee": 35,
+            "forwarder_basis": "INR per kg; handling assumption",
+            "forwarder_fee_currency": "INR",
+            "capital_cost_12pct": 9.678518,
+            "capital_cost_basis": "12% carrying rate on INR per kg",
+            "capital_cost_currency": "INR",
+            "delivered_cost": 1479.412348,
+            "delivered_cost_basis": "INR per kg = purchase + logistics + capital",
+            "delivered_cost_currency": "INR",
+        },
+    }
+    audit = costing.reconcile_delivered_unit_cost(raw, "INR")
+    assert audit["status"] == "calculated"
+    assert audit["calculated_delivered_unit_cost"] == pytest.approx(1469.73383)
+    assert audit["reconciliation_difference"] == pytest.approx(0)
+    assert audit["reported_adjustment_correction"] == pytest.approx(-9.678518)
+    assert audit["delivered_cost_per_pricing_unit"] == pytest.approx(1469.73383)
