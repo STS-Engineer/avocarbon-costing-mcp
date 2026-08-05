@@ -156,7 +156,8 @@ def atomic_write_json(path: Path, payload: Any) -> Path:
             mode="w",
             encoding="utf-8",
             dir=path.parent,
-            prefix=f".{path.name}.",
+            # WINDOWS_PATH_GUARD: keep atomic temp names short
+            prefix=".tmp-",
             suffix=".tmp",
             delete=False,
         ) as stream:

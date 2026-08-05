@@ -72,7 +72,7 @@ from services.choke_writeback_mcp_diagnostic import (
 
 BASE_DIR = BACKEND_ROOT
 logger = logging.getLogger(__name__)
-TECHNICAL_CALCULATION_ENGINE_VERSION = "choke-technical-cost-v2"
+TECHNICAL_CALCULATION_ENGINE_VERSION = "choke-technical-cost-v3-preliminary-logistics"
 MOST_WRITEBACK_INSTRUCTION = (
     "Analyze only this work package using your native MOST JSON structure "
     "from most_cycle_output_template.json. "
@@ -296,6 +296,8 @@ def _archive_technical_revision(
         / artifact_kind
         / f"{safe_revision}.json"
     )
+    # REGRESSION_GUARD: atomic writer requires an existing directory
+    path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         _write_json(path, payload)
     return _relative(path)
@@ -8460,6 +8462,243 @@ def _plant_unit_missing(unit_data: Dict[str, Any]) -> bool:
     return any(unit_data.get(key) in [None, "", 0] for key in required)
 
 
+def _build_preliminary_delivered_cost_fallback(
+    *,
+    component_id: str,
+    delivered_result: Dict[str, Any],
+    price_info: Dict[str, Any],
+    material_result: Dict[str, Any],
+    pricing_quantity: Any,
+    pricing_unit: Optional[str],
+    line_material_decimal: Optional[Decimal],
+) -> Optional[Dict[str, Any]]:
+    """Build a traceable preliminary delivered-cost object.
+
+    This policy is deliberately limited to preliminary mode by the caller.
+
+    It never changes the saved Agent output. It uses:
+
+    1. the backend-reconstructed delivered cost when its currency/unit are
+       compatible, even if confirmation fields remain unresolved; otherwise
+    2. the already-converted base material cost per pricing unit.
+
+    Missing or incompatible logistics remain firm blockers.
+    """
+    # REGRESSION_GUARD: contradictory delivered totals are not assumptions
+    if (
+        delivered_result.get("reason")
+        == "delivered_cost_reconciliation_mismatch"
+    ):
+        return None
+
+    if (
+        material_result.get("status") != "calculated"
+        or line_material_decimal is None
+        or pricing_quantity in (None, "")
+        or not pricing_unit
+    ):
+        return None
+
+    try:
+        quantity_decimal = Decimal(str(pricing_quantity))
+    except Exception:
+        return None
+
+    if quantity_decimal <= 0:
+        return None
+
+    material_currency = normalize_currency_code(material_result.get("currency"))
+    delivered_currency = normalize_currency_code(
+        delivered_result.get("delivered_cost_currency")
+    )
+    delivered_pricing_unit = delivered_result.get("pricing_unit")
+
+    reconstructed_unit_cost_raw = delivered_result.get(
+        "calculated_delivered_unit_cost"
+    )
+
+    reconstructed_is_compatible = bool(
+        reconstructed_unit_cost_raw not in (None, "")
+        and delivered_pricing_unit in (None, "", pricing_unit)
+        and (
+            not material_currency
+            or not delivered_currency
+            or delivered_currency == material_currency
+        )
+    )
+
+    assumption_basis = "available_compatible_base_and_adders"
+
+    if reconstructed_is_compatible:
+        try:
+            provisional_unit_cost = Decimal(
+                str(reconstructed_unit_cost_raw)
+            )
+        except Exception:
+            return None
+    else:
+        # line_material_decimal is already resolved in project/reporting
+        # currency. Dividing it by the compatible pricing quantity is safer
+        # than reusing an unconverted supplier unit price.
+        provisional_unit_cost = (
+            line_material_decimal / quantity_decimal
+        )
+        assumption_basis = "base_purchase_only"
+
+    if provisional_unit_cost < 0:
+        return None
+
+    provisional_delivered_decimal = (
+        quantity_decimal * provisional_unit_cost
+    )
+    provisional_logistics_decimal = max(
+        provisional_delivered_decimal - line_material_decimal,
+        Decimal("0"),
+    )
+
+    included_adders = list(
+        delivered_result.get("included_adders") or []
+    )
+    excluded_adders = list(
+        delivered_result.get("excluded_adders") or []
+    )
+
+    original_status = delivered_result.get("status")
+    original_reason = (
+        delivered_result.get("reason")
+        or "confirmed_delivered_cost_required"
+    )
+    original_reconciliation_difference = delivered_result.get(
+        "reconciliation_difference"
+    )
+
+    firm_blockers = [
+        f"component_outputs:{component_id}:{original_reason}"
+    ]
+
+    for excluded in excluded_adders:
+        blocker_name = _slug(
+            excluded.get("name")
+            or excluded.get("field")
+            or excluded.get("reason")
+            or "logistics_adder",
+            "logistics_adder",
+        )
+        firm_blockers.append(
+            f"component_outputs:{component_id}:"
+            f"{blocker_name}_confirmation_required"
+        )
+
+    firm_blockers = list(dict.fromkeys(firm_blockers))
+
+    delivered_cost_status = (
+        "provisional_available_terms"
+        if reconstructed_is_compatible
+        else "provisional_base_only"
+    )
+
+    if reconstructed_is_compatible:
+        message = (
+            f"{component_id}: preliminary delivered material cost uses the "
+            "resolved base purchase value plus all currency- and "
+            "unit-compatible logistics adders currently available. "
+            "Missing, incompatible, or unconfirmed adders remain firm "
+            "costing blockers."
+        )
+    else:
+        message = (
+            f"{component_id}: no fully usable delivered-cost structure was "
+            "available. Preliminary delivered material cost therefore uses "
+            "the resolved base purchase value. Transport, customs, and "
+            "forwarder values not currently usable are provisionally "
+            "excluded and remain firm costing blockers."
+        )
+
+    provisional_result = {
+        **delivered_result,
+        "status": "calculated_preliminary",
+        "reason": None,
+        "original_status": original_status,
+        "original_blocking_reason": original_reason,
+        "pricing_unit": pricing_unit,
+        "delivered_cost_currency": (
+            material_currency
+            or delivered_currency
+            or normalize_currency_code(
+                price_info.get("unit_price_currency")
+            )
+        ),
+        "calculated_delivered_unit_cost": float(
+            provisional_unit_cost
+        ),
+        "calculated_delivered_unit_cost_exact": format(
+            provisional_unit_cost, "f"
+        ),
+        "delivered_cost_per_pricing_unit": float(
+            provisional_unit_cost
+        ),
+        "delivered_cost_per_pricing_unit_exact": format(
+            provisional_unit_cost, "f"
+        ),
+        # The selected preliminary value reconciles to the backend-selected
+        # provisional formula. The original mismatch is retained separately.
+        "reconciliation_difference": 0.0,
+        "reconciliation_difference_exact": "0",
+        "original_reconciliation_difference": (
+            original_reconciliation_difference
+        ),
+        "preliminary_assumption": True,
+        "delivered_cost_status": delivered_cost_status,
+        "preliminary_assumption_basis": assumption_basis,
+        "original_calculation_source": delivered_result.get(
+            "calculation_source"
+        ),
+        "calculation_source": (
+            "preliminary_available_compatible_terms"
+            if reconstructed_is_compatible
+            else "preliminary_base_purchase_only"
+        ),
+        "reported_delivered_cost_used": False,
+        "included_adders": included_adders,
+        "excluded_adders": excluded_adders,
+    }
+
+    assumption = {
+        "component_id": component_id,
+        "assumption_type": "preliminary_delivered_cost",
+        "status": "provisional",
+        "delivered_cost_status": delivered_cost_status,
+        "basis": assumption_basis,
+        "currency": provisional_result.get(
+            "delivered_cost_currency"
+        ),
+        "pricing_unit": pricing_unit,
+        "base_purchase_cost_per_product": float(
+            line_material_decimal
+        ),
+        "provisional_delivered_unit_cost": float(
+            provisional_unit_cost
+        ),
+        "provisional_delivered_cost_per_product": float(
+            provisional_delivered_decimal
+        ),
+        "provisional_logistics_cost_per_product": float(
+            provisional_logistics_decimal
+        ),
+        "included_adders": included_adders,
+        "unresolved_adders": excluded_adders,
+        "original_blocking_reason": original_reason,
+        "firm_blockers": firm_blockers,
+        "message": message,
+    }
+
+    return {
+        "delivered_result": provisional_result,
+        "assumption": assumption,
+        "firm_blockers": firm_blockers,
+        "original_reason": original_reason,
+    }
+
 def calculate_final_choke_costing_from_saved_outputs(
     project_code: str,
     product_id: str,
@@ -8568,6 +8807,8 @@ def calculate_final_choke_costing_from_saved_outputs(
     transport_cost_per_piece = Decimal("0")
     unresolved_material_components: List[Dict[str, Any]] = []
     unresolved_logistics_adders: List[Dict[str, Any]] = []
+    firm_only_component_blockers: List[str] = []
+    preliminary_assumptions: List[Dict[str, Any]] = []
     output_component_ids = set()
     unit_data = _unit_data_for_final_calculation(state, customer_input, unit_data_override)
     unit_data = {
@@ -8733,6 +8974,8 @@ def calculate_final_choke_costing_from_saved_outputs(
                 == normalize_currency_code(price_info.get("unit_price_currency"))
                 else Decimal(str(line_material_cost))
             )
+        component_firm_blockers: List[str] = []
+        preliminary_fallback = None
         delivered_result = (
             component.get("delivered_cost_reconciliation")
             or component_costing.resolve_delivered_unit_cost(
@@ -8747,6 +8990,71 @@ def calculate_final_choke_costing_from_saved_outputs(
             and delivered_basis == pricing_unit
             and pricing_quantity is not None
         )
+
+        if (
+            not delivered_basis_compatible
+            and result_mode == "preliminary"
+        ):
+            preliminary_fallback = (
+                _build_preliminary_delivered_cost_fallback(
+                    component_id=component_id,
+                    delivered_result=delivered_result,
+                    price_info=price_info,
+                    material_result=material_result,
+                    pricing_quantity=pricing_quantity,
+                    pricing_unit=pricing_unit,
+                    line_material_decimal=line_material_decimal,
+                )
+            )
+
+            if preliminary_fallback is not None:
+                delivered_result = preliminary_fallback[
+                    "delivered_result"
+                ]
+                delivered_basis = delivered_result.get(
+                    "pricing_unit"
+                )
+                delivered_basis_compatible = True
+
+                component_firm_blockers = list(
+                    preliminary_fallback.get("firm_blockers")
+                    or []
+                )
+                firm_only_component_blockers.extend(
+                    component_firm_blockers
+                )
+
+                preliminary_assumptions.append(
+                    preliminary_fallback["assumption"]
+                )
+                warnings.append(
+                    preliminary_fallback["assumption"]["message"]
+                )
+
+                unresolved_logistics_adders.append({
+                    "component_id": component_id,
+                    "field": "delivered_cost",
+                    "reason": preliminary_fallback.get(
+                        "original_reason"
+                    ),
+                    "reported_delivered_unit_cost": (
+                        delivered_result.get(
+                            "reported_delivered_unit_cost"
+                        )
+                    ),
+                    "calculated_delivered_unit_cost": (
+                        delivered_result.get(
+                            "calculated_delivered_unit_cost"
+                        )
+                    ),
+                    "original_reconciliation_difference": (
+                        delivered_result.get(
+                            "original_reconciliation_difference"
+                        )
+                    ),
+                    "covered_by_preliminary_assumption": True,
+                })
+
         if delivered_basis_compatible:
             line_delivered_decimal = (
                 Decimal(str(pricing_quantity))
@@ -8807,16 +9115,27 @@ def calculate_final_choke_costing_from_saved_outputs(
                     "delivered_cost_pricing_unit_mismatch"
                 )
 
+        covered_by_preliminary_assumption = bool(
+            result_mode == "preliminary"
+            and preliminary_fallback is not None
+        )
+
         for excluded in delivered_result.get("excluded_adders") or []:
             unresolved_logistics_adders.append({
                 "component_id": component_id,
                 **excluded,
                 "covered_by_delivered_cost": False,
+                "covered_by_preliminary_assumption": (
+                    covered_by_preliminary_assumption
+                ),
             })
-        if (
-            delivered_result.get("excluded_adders")
-        ):
-            missing_inputs.append(f"component_outputs:{component_id}:logistics_adders_unresolved")
+
+        if delivered_result.get("excluded_adders"):
+            if not covered_by_preliminary_assumption:
+                missing_inputs.append(
+                    f"component_outputs:{component_id}:"
+                    "logistics_adders_unresolved"
+                )
 
         currency = _saved_component_currency(raw)
         canonical_currency = (
@@ -8857,17 +9176,29 @@ def calculate_final_choke_costing_from_saved_outputs(
             and abs(Decimal(str(reconciliation_difference)))
             <= component_costing.DELIVERED_COST_RECONCILIATION_TOLERANCE
         )
+        delivered_status_acceptable = (
+            delivered_result.get("status")
+            in {"calculated", "calculated_preliminary"}
+        )
+
         component_status = (
             "resolved"
             if not missing_canonical_fields
             and material_result.get("status") == "calculated"
-            and delivered_result.get("status") == "calculated"
+            and delivered_status_acceptable
             and reconciliation_valid
             else "blocked"
         )
+
         if (
             component_status == "resolved"
-            and technical_quantity.get("resolution_status") == "estimated"
+            and (
+                technical_quantity.get("resolution_status")
+                == "estimated"
+                or delivered_result.get(
+                    "preliminary_assumption"
+                ) is True
+            )
         ):
             component_status = "resolved_assumption"
         component_blocking_reason = None
@@ -9016,6 +9347,21 @@ def calculate_final_choke_costing_from_saved_outputs(
             "source": "current_canonical_resolved_component",
             "status": component_status,
             "blocking_reason": component_blocking_reason,
+            "delivered_cost_status": (
+                delivered_result.get("delivered_cost_status")
+                or (
+                    "confirmed"
+                    if delivered_result.get("status")
+                    == "calculated"
+                    else "unresolved"
+                )
+            ),
+            "preliminary_assumption": bool(
+                delivered_result.get(
+                    "preliminary_assumption"
+                )
+            ),
+            "firm_blockers": component_firm_blockers,
         })
         included_adders_per_product = []
         if pricing_quantity is not None:
@@ -9147,6 +9493,12 @@ def calculate_final_choke_costing_from_saved_outputs(
         item
         for item in unresolved_logistics_adders
         if not item.get("covered_by_delivered_cost")
+        and not (
+            result_mode == "preliminary"
+            and item.get(
+                "covered_by_preliminary_assumption"
+            )
+        )
     ]
     calculation_permitted = (
         not core_blockers
@@ -9181,6 +9533,7 @@ def calculate_final_choke_costing_from_saved_outputs(
     )
     technical_firm_blockers = [
         *unique_missing,
+        *firm_only_component_blockers,
         *(
             [f"component_outputs:{item}:assumption_approval_required"
              for item in assumption_components]
@@ -9205,8 +9558,16 @@ def calculate_final_choke_costing_from_saved_outputs(
     result = {
         "project_code": project_code,
         "product_id": product_id,
-        "calculation_mode": "current_preliminary",
-        "calculation_basis_label": "Current project calculation",
+        "calculation_mode": (
+            "current_preliminary"
+            if result_mode == "preliminary"
+            else "current_firm"
+        ),
+        "calculation_basis_label": (
+            "Current project preliminary calculation"
+            if result_mode == "preliminary"
+            else "Current project firm calculation"
+        ),
         "backend_commit": get_git_commit(),
         "calculation_engine_version": TECHNICAL_CALCULATION_ENGINE_VERSION,
         "component_normalizer_version": COMPONENT_NORMALIZER_VERSION,
@@ -9237,7 +9598,13 @@ def calculate_final_choke_costing_from_saved_outputs(
         ),
         "technical_preliminary_status": technical_preliminary_status,
         "technical_firm_status": technical_firm_status,
-        "technical_firm_blockers": list(dict.fromkeys(technical_firm_blockers)),
+        "technical_firm_blockers": list(
+            dict.fromkeys(technical_firm_blockers)
+        ),
+        "preliminary_assumptions": preliminary_assumptions,
+        "firm_only_component_blockers": list(
+            dict.fromkeys(firm_only_component_blockers)
+        ),
         "financial_preliminary_status": "not_evaluated",
         "financial_firm_status": "not_evaluated",
         "financial_missing_inputs": [],
@@ -9366,13 +9733,23 @@ def calculate_final_choke_costing_from_saved_outputs(
     if _state_path(project_code, product_id).exists():
         state["workflow_status"] = state.get("status")
         state["bom_status"] = (state.get("bom") or {}).get("status")
+        acceptable_component_statuses = (
+            {"resolved"}
+            if result_mode == "firm"
+            else {
+                "resolved",
+                "resolved_assumption",
+                "excluded_optional_unconfirmed",
+            }
+        )
+
         state["component_status"] = (
             "received"
             if component_outputs
             and all(
-                item.get("status") == "resolved"
+                item.get("status")
+                in acceptable_component_statuses
                 for item in component_breakdown
-                if item.get("component_id") != "glue" or result_mode == "firm"
             )
             else "partial"
         )
@@ -9484,7 +9861,11 @@ def _normalize_most_output(path: Path) -> Dict[str, Any]:
     return output
 
 
-def calculate_from_real_outputs(project_code: str, product_id: str) -> Dict[str, Any]:
+def calculate_from_real_outputs(
+    project_code: str,
+    product_id: str,
+    result_mode: str = "preliminary",
+) -> Dict[str, Any]:
     state = _load_state(project_code, product_id)
     input_file = state.get("input_file")
     if not input_file:
@@ -9530,7 +9911,11 @@ def calculate_from_real_outputs(project_code: str, product_id: str) -> Dict[str,
 
     envelope["calculation_source"] = "real_sequential_agent_chain"
     envelope["workflow_state"] = state
-    final_result = calculate_final_choke_costing_from_saved_outputs(project_code, product_id)
+    final_result = calculate_final_choke_costing_from_saved_outputs(
+        project_code,
+        product_id,
+        result_mode=result_mode,
+    )
     envelope["final_choke_costing"] = final_result
     envelope.setdefault("financial_calculation", {}).update({
         "status": final_result.get("status"),

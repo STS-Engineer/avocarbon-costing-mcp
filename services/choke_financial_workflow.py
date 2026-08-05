@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping
 
 from services.choke_financial_plan import (
     build_historical_comparison,
+    apply_preliminary_financial_defaults,
     calculate_financial_plan,
     financial_readiness,
     solve_selling_price,
@@ -432,25 +433,124 @@ def calculate_saved_financial_plan(
 ) -> Dict[str, Any]:
     paths = _paths(project_code, product_id)
     technical = _technical(project_code, product_id)
-    commercial = _commercial_context(project_code, product_id, commercial_inputs)
-    atomic_write_json(paths["financial_input"], commercial)
-    result = calculate_financial_plan(
-        technical,
-        commercial,
-        _unit_data(project_code, product_id),
-        _component_rows(technical, commercial),
-        _investment_assets(project_code, product_id),
+    unit_data = _unit_data(project_code, product_id)
+    commercial = _commercial_context(
+        project_code,
+        product_id,
+        commercial_inputs,
     )
+    commercial = apply_preliminary_financial_defaults(
+        commercial,
+        technical,
+        unit_data,
+    )
+
+    component_rows = _component_rows(technical, commercial)
+    investment_assets = _investment_assets(
+        project_code,
+        product_id,
+    )
+
+    atomic_write_json(paths["financial_input"], commercial)
+
+    auto_solve_preliminary = bool(
+        str(commercial.get("mode") or "").lower() == "preliminary"
+        and commercial.get("solve_selling_price") is True
+        and commercial.get("initial_selling_price") in (None, "")
+    )
+
+    solver_result = None
+
+    if auto_solve_preliminary:
+        solver_result = solve_selling_price(
+            technical,
+            commercial,
+            unit_data,
+            component_rows,
+            investment_assets,
+        )
+
+        if (
+            solver_result.get("convergence_status") == "converged"
+            and isinstance(
+                solver_result.get("financial_result"),
+                Mapping,
+            )
+        ):
+            result = dict(solver_result["financial_result"])
+            result.update({
+                "auto_solved_preliminary_price": True,
+                "solved_y0_selling_price": solver_result.get(
+                    "solved_y0_selling_price"
+                ),
+                "solver_convergence_status": solver_result.get(
+                    "convergence_status"
+                ),
+                "solver_target": solver_result.get("target"),
+                "solver_achieved_npv": solver_result.get(
+                    "achieved_npv"
+                ),
+                "solver_residual": solver_result.get("residual"),
+                "solver_iterations": solver_result.get("iterations"),
+                "solver_warning": solver_result.get("warning"),
+            })
+        else:
+            result = {
+                "financial_status": "blocked",
+                "financial_preliminary_status": "blocked",
+                "financial_firm_status": "blocked",
+                "missing_inputs": list(
+                    solver_result.get("missing_inputs") or []
+                ),
+                "warnings": [
+                    solver_result.get("message")
+                    or "The preliminary selling-price solver could not run."
+                ],
+                "annual_table": [],
+                "npv": None,
+                "solver_result": solver_result,
+            }
+
+        atomic_write_json(paths["solver_result"], solver_result)
+    else:
+        result = calculate_financial_plan(
+            technical,
+            commercial,
+            unit_data,
+            component_rows,
+            investment_assets,
+        )
+
     result["project_code"] = project_code
     result["product_id"] = product_id
-    result["source_technical_result_revision"] = _revision(paths["technical_result"])
-    result["source_commercial_input_revision"] = _revision(paths["financial_input"])
+    result["source_technical_result_revision"] = _revision(
+        paths["technical_result"]
+    )
+    result["source_commercial_input_revision"] = _revision(
+        paths["financial_input"]
+    )
     result["calculated_at"] = datetime.now(timezone.utc).isoformat()
     result["save_path"] = str(paths["financial_result"])
-    atomic_write_json(paths["financial_result"], result)
-    _persist_financial_status(
-        project_code, product_id, result["financial_status"], paths["financial_result"]
+    result["preliminary_defaults"] = dict(
+        commercial.get("_preliminary_defaults") or {}
     )
+    result["preliminary_assumptions"] = list(
+        commercial.get("_preliminary_default_warnings") or []
+    )
+    result["financial_firm_blockers"] = list(dict.fromkeys([
+        *(result.get("financial_firm_blockers") or []),
+        *(commercial.get("_preliminary_firm_blockers") or []),
+    ]))
+
+    atomic_write_json(paths["financial_result"], result)
+
+    _persist_financial_status(
+        project_code,
+        product_id,
+        result.get("financial_status") or "blocked",
+        paths["financial_result"],
+    )
+
     return result
 
 
@@ -461,13 +561,23 @@ def solve_saved_selling_price(
 ) -> Dict[str, Any]:
     paths = _paths(project_code, product_id)
     technical = _technical(project_code, product_id)
-    commercial = _commercial_context(project_code, product_id, commercial_inputs)
+    unit_data = _unit_data(project_code, product_id)
+    commercial = _commercial_context(
+        project_code,
+        product_id,
+        commercial_inputs,
+    )
+    commercial = apply_preliminary_financial_defaults(
+        commercial,
+        technical,
+        unit_data,
+    )
     commercial["solve_selling_price"] = True
     atomic_write_json(paths["financial_input"], commercial)
     result = solve_selling_price(
         technical,
         commercial,
-        _unit_data(project_code, product_id),
+        unit_data,
         _component_rows(technical, commercial),
         _investment_assets(project_code, product_id),
     )

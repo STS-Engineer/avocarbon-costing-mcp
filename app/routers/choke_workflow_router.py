@@ -509,6 +509,7 @@ def calculate_real_outputs(request: CalculateRealOutputsRequest):
     return _handle(lambda: calculate_from_real_outputs(
         project_code=request.project_code,
         product_id=request.product_id,
+        result_mode=request.result_mode,
     ))
 
 

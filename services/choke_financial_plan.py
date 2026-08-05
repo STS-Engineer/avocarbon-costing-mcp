@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
-CALCULATION_VERSION = "avocarbon-choke-financial-v1"
+CALCULATION_VERSION = "avocarbon-choke-financial-v2-preliminary-defaults"
 ZERO = Decimal("0")
 ONE = Decimal("1")
 DAYS_PER_YEAR = Decimal("365")
@@ -50,6 +51,364 @@ def _exact(value: Optional[Decimal]) -> Optional[str]:
 
 def _unique(values: Iterable[str]) -> List[str]:
     return list(dict.fromkeys(str(item) for item in values if item))
+
+
+def apply_preliminary_financial_defaults(
+    commercial_inputs: Mapping[str, Any],
+    technical_result: Optional[Mapping[str, Any]] = None,
+    unit_data: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return effective preliminary inputs without changing confirmed source data.
+
+    Defaults are used only when mode=preliminary. Every default is recorded and
+    remains a firm-costing blocker.
+    """
+    commercial = dict(commercial_inputs or {})
+    mode = str(commercial.get("mode") or "firm").strip().lower()
+
+    if mode != "preliminary":
+        return commercial
+
+    assumptions = list(
+        commercial.get("_preliminary_default_warnings") or []
+    )
+    firm_blockers = list(
+        commercial.get("_preliminary_firm_blockers") or []
+    )
+    applied_defaults = dict(
+        commercial.get("_preliminary_defaults") or {}
+    )
+
+    def missing(field: str) -> bool:
+        return field not in commercial or commercial.get(field) in (None, "")
+
+    def set_default(
+        field: str,
+        value: Any,
+        message: str,
+        firm_blocker: Optional[str] = None,
+    ) -> None:
+        if not missing(field):
+            return
+
+        commercial[field] = value
+        applied_defaults[field] = {
+            "value": value,
+            "status": "provisional",
+            "source": "preliminary_default_policy",
+        }
+        assumptions.append(message)
+
+        if firm_blocker:
+            firm_blockers.append(firm_blocker)
+
+    # SOP year
+    if missing("sop_year"):
+        derived_year = None
+        sop_date = commercial.get("sop_date")
+
+        if sop_date not in (None, ""):
+            try:
+                derived_year = int(str(sop_date)[:4])
+            except (TypeError, ValueError):
+                derived_year = None
+
+        if derived_year is None:
+            derived_year = datetime.now(timezone.utc).year
+            message = (
+                f"SOP year was unavailable; preliminary calculation uses "
+                f"{derived_year}, the current calendar year."
+            )
+        else:
+            message = (
+                f"SOP year {derived_year} was derived from the saved SOP date."
+            )
+
+        commercial["sop_year"] = derived_year
+        applied_defaults["sop_year"] = {
+            "value": derived_year,
+            "status": "provisional",
+            "source": (
+                "sop_date"
+                if sop_date not in (None, "")
+                else "current_calendar_year"
+            ),
+        }
+        assumptions.append(message)
+        firm_blockers.append("sop_year_confirmation_required")
+
+    # Annual quantities: Y-1 = 0 and a flat Y0-Y6 profile from annual_quantity.
+    annual_quantities = (
+        dict(commercial.get("annual_quantities") or {})
+        if isinstance(commercial.get("annual_quantities"), Mapping)
+        else {}
+    )
+    annual_quantity = _d(
+        commercial.get("annual_quantity"),
+        _d(commercial.get("flat_annual_quantity")),
+    )
+
+    if annual_quantity is None:
+        annual_quantity = _d(annual_quantities.get("Y0"))
+
+    if annual_quantity is not None and annual_quantity > ZERO:
+        changed_periods: List[str] = []
+
+        if annual_quantities.get("Y-1") in (None, ""):
+            annual_quantities["Y-1"] = 0
+            changed_periods.append("Y-1")
+
+        for period in PERIODS[1:]:
+            if annual_quantities.get(period) in (None, ""):
+                annual_quantities[period] = float(annual_quantity)
+                changed_periods.append(period)
+
+        commercial["annual_quantities"] = annual_quantities
+        commercial["flat_annual_quantity"] = float(annual_quantity)
+        commercial["quantity_rule"] = "flat"
+        commercial["y_minus_1_quantity_zero"] = True
+
+        if changed_periods:
+            assumptions.append(
+                "Missing annual quantities were provisionally completed with "
+                f"Y-1 = 0 and Y0-Y6 = {annual_quantity} products/year."
+            )
+            applied_defaults["annual_quantities"] = {
+                "value": annual_quantities,
+                "status": "provisional",
+                "source": "saved_annual_quantity_flat_profile",
+                "defaulted_periods": changed_periods,
+            }
+            firm_blockers.append(
+                "annual_quantity_profile_confirmation_required"
+            )
+
+    # Zero customer productivity unless commercial productivity is supplied.
+    productivity = (
+        dict(commercial.get("customer_productivity") or {})
+        if isinstance(commercial.get("customer_productivity"), Mapping)
+        else {}
+    )
+    productivity_defaults = {
+        "percentage": 0,
+        "start_year": 1,
+        "duration": 0,
+        "basis": "added_value",
+    }
+    productivity_changed = []
+
+    for field, value in productivity_defaults.items():
+        if productivity.get(field) in (None, ""):
+            productivity[field] = value
+            productivity_changed.append(field)
+
+    commercial["customer_productivity"] = productivity
+
+    if productivity_changed:
+        assumptions.append(
+            "Customer productivity was incomplete; preliminary calculation "
+            "uses 0% productivity on added value."
+        )
+        applied_defaults["customer_productivity"] = {
+            "value": productivity,
+            "status": "provisional",
+            "source": "zero_productivity_preliminary_default",
+            "defaulted_fields": productivity_changed,
+        }
+        firm_blockers.append(
+            "customer_productivity_confirmation_required"
+        )
+
+    # Commercial working-capital assumptions.
+    set_default(
+        "customer_payment_days",
+        0,
+        "Customer payment terms were unavailable; preliminary AR uses 0 days.",
+        "customer_payment_days_confirmation_required",
+    )
+    set_default(
+        "customer_incoterm",
+        "FCA",
+        "Customer Incoterm was unavailable; preliminary calculation uses FCA.",
+        "customer_incoterm_confirmation_required",
+    )
+    set_default(
+        "customer_delivery_frequency_days",
+        30,
+        "Customer delivery frequency was unavailable; preliminary calculation "
+        "uses 30 days.",
+        "customer_delivery_frequency_confirmation_required",
+    )
+    set_default(
+        "platform",
+        False,
+        "Platform delivery was unconfirmed; preliminary calculation assumes no platform.",
+        "customer_platform_confirmation_required",
+    )
+    set_default(
+        "customer_transit_days",
+        0,
+        "Customer transit time was unavailable; preliminary calculation uses 0 days.",
+        "customer_transit_days_confirmation_required",
+    )
+    set_default(
+        "platform_safety_stock_days",
+        0,
+        "Platform safety stock is provisionally zero because no platform is assumed.",
+        "platform_safety_stock_confirmation_required",
+    )
+
+    # Current approved generic finance assumptions.
+    set_default(
+        "discount_rate",
+        12,
+        "Preliminary NPV uses a 12% discount rate.",
+        "discount_rate_confirmation_required",
+    )
+    set_default(
+        "solver_discount_rate",
+        commercial.get("discount_rate", 12),
+        "Preliminary selling-price solver uses the preliminary discount rate.",
+    )
+    set_default(
+        "financing_rate",
+        8,
+        "Preliminary financing uses an 8% annual rate.",
+        "financing_rate_confirmation_required",
+    )
+    set_default(
+        "financing_interest_basis",
+        "closing_balance",
+        "Financing interest provisionally uses the closing balance.",
+        "financing_interest_basis_confirmation_required",
+    )
+    set_default(
+        "wip_material_basis",
+        "base_material",
+        "Preliminary WIP uses base material plus half of DL, VOH and FOH.",
+        "wip_material_basis_confirmation_required",
+    )
+    set_default(
+        "wip_days",
+        5,
+        "Preliminary Choke WIP uses 5 days.",
+        "wip_days_confirmation_required",
+    )
+    set_default(
+        "fg_safety_stock_days",
+        10,
+        "Finished-goods safety stock provisionally uses 10 days.",
+        "fg_safety_stock_confirmation_required",
+    )
+
+    # Investment and indexation defaults.
+    set_default(
+        "capex_tooling_treatment",
+        {},
+        "No confirmed CAPEX/tooling commercial treatment was supplied; "
+        "preliminary calculation uses the existing default asset rules.",
+        "capex_tooling_treatment_confirmation_required",
+    )
+    set_default(
+        "material_indexation_rates",
+        {},
+        "Material indexation is provisionally 0% for every period.",
+        "material_indexation_confirmation_required",
+    )
+    set_default(
+        "plant_indexation_rates",
+        {},
+        "Plant indexation is provisionally 0% for every period.",
+        "plant_indexation_confirmation_required",
+    )
+    set_default(
+        "logistics_indexation_rates",
+        {},
+        "Logistics indexation is provisionally 0% for every period.",
+        "logistics_indexation_confirmation_required",
+    )
+    set_default(
+        "fx_adjustment_rates",
+        {},
+        "Selling-price FX adjustment is provisionally 0% for every period.",
+        "fx_adjustment_confirmation_required",
+    )
+    set_default(
+        "investment_fx_rates",
+        {},
+        "No investment FX conversion was supplied; unconvertible preliminary "
+        "investment items remain excluded and firm-blocking.",
+        "investment_fx_rates_confirmation_required",
+    )
+    set_default(
+        "business_link_values",
+        {},
+        "Business-link cash-flow adjustments are provisionally zero.",
+        "business_link_values_confirmation_required",
+    )
+    set_default(
+        "depreciation_years",
+        5,
+        "Preliminary depreciation uses five straight-line annual charges.",
+        "depreciation_period_confirmation_required",
+    )
+    set_default(
+        "depreciation_start_period",
+        "Y1",
+        "Preliminary depreciation starts in Y1 under the current generic rule.",
+        "depreciation_start_confirmation_required",
+    )
+    set_default(
+        "rule_set",
+        "current_approved",
+        "The current approved generic Choke rule set is used.",
+    )
+
+    # With no supplied price, solve a QA/preliminary NPV=0 scenario.
+    if _d(commercial.get("initial_selling_price")) is None:
+        commercial["solve_selling_price"] = True
+
+        target = commercial.get("product_profitability_target")
+        target = dict(target) if isinstance(target, Mapping) else {}
+
+        target_interpretation = target.get("target_interpretation")
+        approved_target = target_interpretation in {
+            "npv_zero",
+            "npv_amount",
+        }
+
+        if not approved_target:
+            commercial["source_product_profitability_target"] = target
+            commercial["scenario_solver"] = True
+            commercial["product_profitability_target"] = {
+                "status": "preliminary_scenario",
+                "source_field": "preliminary_scenario_npv_zero",
+                "value": 0,
+                "unit": commercial.get("currency"),
+                "target_type": "NPV",
+                "target_interpretation": "npv_zero",
+                "commercially_approved": False,
+            }
+            assumptions.append(
+                "No approved profitability-target interpretation was available; "
+                "the preliminary solver uses scenario-only NPV = 0."
+            )
+            firm_blockers.append(
+                "product_profitability_target.target_interpretation"
+            )
+
+    commercial["_preliminary_defaults_applied"] = bool(
+        applied_defaults
+    )
+    commercial["_preliminary_defaults"] = applied_defaults
+    commercial["_preliminary_default_warnings"] = _unique(
+        assumptions
+    )
+    commercial["_preliminary_firm_blockers"] = _unique(
+        firm_blockers
+    )
+
+    return commercial
 
 
 def _json_hash(payload: Mapping[str, Any]) -> str:
@@ -190,12 +549,28 @@ def financial_readiness(
     component_rows: Optional[List[Mapping[str, Any]]] = None,
     investment_assets: Optional[List[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    mode = str(commercial.get("mode") or "firm").lower()
-    missing: List[str] = []
-    firm_only_missing: List[str] = []
-    warnings: List[str] = []
     unit_data = unit_data or {}
-    components = list(component_rows or _component_rows(technical_result, commercial))
+    commercial = apply_preliminary_financial_defaults(
+        commercial,
+        technical_result,
+        unit_data,
+    )
+    mode = str(commercial.get("mode") or "firm").lower()
+    # REGRESSION_GUARD: missing SOP is structural
+    sop_input_missing = (
+        commercial.get("sop_year") in (None, "")
+        and commercial.get("sop_date") in (None, "")
+    )
+    missing: List[str] = []
+    firm_only_missing: List[str] = list(
+        commercial.get("_preliminary_firm_blockers") or []
+    )
+    warnings: List[str] = list(
+        commercial.get("_preliminary_default_warnings") or []
+    )
+    components = list(
+        component_rows or _component_rows(technical_result, commercial)
+    )
 
     sop_year = commercial.get("sop_year")
     if sop_year in (None, "") and commercial.get("sop_date"):
@@ -306,8 +681,20 @@ def financial_readiness(
         reporting_currency = str(technical_result.get("currency") or "").upper()
         fx_rates = commercial.get("investment_fx_rates") or {}
         for currency in currencies:
-            if currency and currency != reporting_currency and currency not in fx_rates:
-                missing.append(f"investment_fx_rates.{currency}")
+            if (
+                currency
+                and currency != reporting_currency
+                and currency not in fx_rates
+            ):
+                blocker = f"investment_fx_rates.{currency}"
+                if mode == "firm":
+                    missing.append(blocker)
+                else:
+                    firm_only_missing.append(blocker)
+                    warnings.append(
+                        f"Preliminary model excludes investment assets in "
+                        f"{currency} because no investment FX rate is available."
+                    )
 
     unresolved = technical_result.get("unresolved_material_components") or []
     if unresolved:
@@ -355,6 +742,18 @@ def financial_readiness(
     firm_status = (
         "blocked" if structural or firm_only_missing else "ready"
     )
+    # REGRESSION_GUARD: force missing SOP to blocked
+    if sop_input_missing:
+        missing = _unique([*missing, "sop_year"])
+        structural = _unique([*structural, "sop_year"])
+        firm_only_missing = [
+            item for item in firm_only_missing
+            if item != "sop_year"
+        ]
+        status = "blocked"
+        preliminary_status = "blocked"
+        firm_status = "blocked"
+
     return {
         "financial_status": status,
         "financial_preliminary_status": preliminary_status,
@@ -367,6 +766,15 @@ def financial_readiness(
             "product_profitability_target"
         ),
         "commercially_usable": status == "ready" and mode == "firm",
+        "preliminary_defaults_applied": bool(
+            commercial.get("_preliminary_defaults_applied")
+        ),
+        "preliminary_defaults": dict(
+            commercial.get("_preliminary_defaults") or {}
+        ),
+        "preliminary_assumptions": list(
+            commercial.get("_preliminary_default_warnings") or []
+        ),
     }
 
 
@@ -583,11 +991,39 @@ def calculate_financial_plan(
     investment_assets: Optional[List[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Calculate an annual P&L/cash/TWC/NPV model from normalized inputs."""
-    commercial = dict(commercial_inputs)
     unit_data = dict(unit_data or {})
-    components = list(component_rows or _component_rows(technical_result, commercial))
+    commercial = apply_preliminary_financial_defaults(
+        commercial_inputs,
+        technical_result,
+        unit_data,
+    )
+    components = list(
+        component_rows or _component_rows(technical_result, commercial)
+    )
     assets = list(investment_assets or [])
+    # REGRESSION_GUARD: retain original SOP-input presence
+    _regression_guard_sop_input_missing = (
+        commercial_inputs.get("sop_year") in (None, "")
+        and commercial_inputs.get("sop_date") in (None, "")
+    )
     readiness = financial_readiness(technical_result, commercial, unit_data, components, assets)
+    # REGRESSION_GUARD: missing SOP cannot use assumptions
+    if _regression_guard_sop_input_missing:
+        readiness = {
+            **readiness,
+            "financial_status": "blocked",
+            "financial_preliminary_status": "blocked",
+            "financial_firm_status": "blocked",
+            "financial_firm_blockers": _unique([
+                *(readiness.get("financial_firm_blockers") or []),
+                "sop_year",
+            ]),
+            "missing_inputs": _unique([
+                *(readiness.get("missing_inputs") or []),
+                "sop_year",
+            ]),
+            "commercially_usable": False,
+        }
     base_result = {
         "calculation_version": CALCULATION_VERSION,
         "input_hash": _json_hash({
@@ -1122,6 +1558,7 @@ def calculate_financial_plan(
         "investment_schedule": investment,
         "assumptions": _unique([
             *quantity_assumptions,
+            *(commercial.get("_preliminary_default_warnings") or []),
             "Default Choke WIP is 5 days." if "wip_days" not in commercial else "",
             "Default finished-goods safety stock is 10 days."
             if "fg_safety_stock_days" not in commercial else "",
