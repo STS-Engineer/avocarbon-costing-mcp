@@ -5750,6 +5750,7 @@ def trigger_next_component_costing(
             not force
             and component_id not in schedulable_component_ids
             and not explicitly_regenerable
+            and not requires_regeneration
         ):
             decision = {"component_id": component_id, "status": previous.get("status"), "reason": "already_processed"}
             skipped.append(decision)
