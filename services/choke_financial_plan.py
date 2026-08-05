@@ -427,19 +427,45 @@ def _annual_rate(values: Any, period: str) -> Decimal:
     return _rate(value, ZERO) or ZERO
 
 
-def _technical_costs(technical: Mapping[str, Any]) -> Dict[str, Decimal]:
-    base_material = _d(
-        technical.get("base_material_cost_per_piece"),
-        _d(technical.get("material_cost_per_piece"), ZERO),
-    ) or ZERO
-    logistics = _d(
-        technical.get("logistics_cost_per_piece"),
-        _d(technical.get("transport_cost_per_piece"), ZERO),
-    ) or ZERO
-    delivered = _d(
-        technical.get("delivered_material_cost_per_piece"),
-        base_material + logistics,
-    ) or base_material + logistics
+def _technical_costs(
+    technical: Mapping[str, Any],
+    *,
+    allow_resolved_subtotals: bool = False,
+) -> Dict[str, Decimal]:
+    """Resolve technical costs without turning partial totals into Firm costs.
+
+    Firm mode reads only the primary confirmed totals. Preliminary mode may use
+    the explicitly labelled subtotals of already-resolved components so the
+    financial table never reports material=0 merely because another component is
+    still unresolved.
+    """
+    base_material = _d(technical.get("base_material_cost_per_piece"))
+    if base_material is None:
+        base_material = _d(technical.get("material_cost_per_piece"))
+    if base_material is None and allow_resolved_subtotals:
+        base_material = _d(
+            technical.get("calculated_material_cost_for_resolved_components")
+        )
+    base_material = base_material or ZERO
+
+    logistics = _d(technical.get("logistics_cost_per_piece"))
+    if logistics is None:
+        logistics = _d(technical.get("transport_cost_per_piece"))
+    if logistics is None and allow_resolved_subtotals:
+        logistics = _d(
+            technical.get("calculated_transport_cost_for_resolved_components")
+        )
+    logistics = logistics or ZERO
+
+    delivered = _d(technical.get("delivered_material_cost_per_piece"))
+    if delivered is None and allow_resolved_subtotals:
+        delivered = _d(
+            technical.get(
+                "calculated_delivered_material_cost_for_resolved_components"
+            )
+        )
+    delivered = delivered if delivered is not None else base_material + logistics
+
     dl = _d(technical.get("dl_cost_per_piece"), ZERO) or ZERO
     voh = _d(technical.get("voh_cost_per_piece"), ZERO) or ZERO
     direct = dl + voh + logistics
@@ -459,7 +485,6 @@ def _technical_costs(technical: Mapping[str, Any]) -> Dict[str, Decimal]:
         "manufacturing_added_value": direct + foh + fee,
         "total_before_commercial": base_material + direct + foh + fee,
     }
-
 
 def _quantity_profile(commercial: Mapping[str, Any], sop_year: int) -> tuple[Dict[str, Decimal], List[str], List[str]]:
     missing: List[str] = []
@@ -1049,7 +1074,20 @@ def calculate_financial_plan(
             "npv": None,
         }
 
-    costs = _technical_costs(technical_result)
+    partial_technical_subtotals_used = (
+        str(commercial.get("mode") or "firm").lower() == "preliminary"
+        and technical_result.get("base_material_cost_per_piece") is None
+        and technical_result.get("material_cost_per_piece") is None
+        and technical_result.get("calculated_material_cost_for_resolved_components")
+        is not None
+    )
+    costs = _technical_costs(
+        technical_result,
+        allow_resolved_subtotals=(
+            str(commercial.get("mode") or "firm").lower()
+            == "preliminary"
+        ),
+    )
     reporting_currency = str(technical_result.get("currency") or commercial.get("currency") or "")
     investment = _investment_schedule(assets, commercial, reporting_currency)
     productivity = commercial["customer_productivity"]
@@ -1540,6 +1578,14 @@ def calculate_financial_plan(
             else "provisional_default"
         ),
         "tax_rate": _number(tax_rate),
+        "technical_cost_source": (
+            "resolved_component_subtotals_preliminary"
+            if partial_technical_subtotals_used
+            else "confirmed_technical_totals"
+        ),
+        "partial_technical_subtotals_used": (
+            partial_technical_subtotals_used
+        ),
         "cost_structure": {
             key: _number(value, PER_UNIT_QUANTUM) for key, value in costs.items()
         },
