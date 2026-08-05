@@ -17,7 +17,10 @@ from services.choke_financial_plan import (
 )
 from services.project_data_paths import atomic_write_json, get_workflow_run_paths
 from services.product_profitability_service import get_product_profitability_objective
-from services.choke_component_costing import resolve_component_ap_terms
+from services.choke_component_costing import (
+    component_offer_requires_regeneration,
+    resolve_component_ap_terms,
+)
 
 
 def _read_json(path: Path, default: Any = None) -> Any:
@@ -88,6 +91,236 @@ def _saved_inputs(project_code: str, product_id: str) -> Dict[str, Any]:
     return _read_json(_paths(project_code, product_id)["financial_input"], {}) or {}
 
 
+# OLIVIER_CHOKE_COMPLETION_FIX: approved reusable Choke policy
+OLIVIER_CHOKE_POLICY_VERSION = "olivier-choke-policy-2026-07-23-v1"
+
+
+def _policy_value_missing(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _location_zone(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    aliases = (
+        ("india", ("india", "chennai", "pune", "bangalore", "bengaluru")),
+        ("china", ("china", "kunshan", "tianjin", "changsha", "shanghai")),
+        ("tunisia", ("tunisia", "tunis", "elfahs", "el fahs")),
+        ("mexico", ("mexico", "juarez", "monterrey")),
+        ("korea", ("korea", "seoul")),
+        ("europe", (
+            "europe", "eu", "france", "germany", "poland", "luxembourg",
+            "italy", "spain", "slovakia", "czech", "romania",
+        )),
+        ("north_america", ("usa", "united states", "canada")),
+    )
+    for zone, tokens in aliases:
+        if any(token in text for token in tokens):
+            return zone
+    return None
+
+
+def _component_zone_relation(origin: Any, commercial: Mapping[str, Any]) -> str | None:
+    origin_zone = _location_zone(origin)
+    destination_zone = None
+    for candidate in (
+        commercial.get("production_country"),
+        commercial.get("production_zone"),
+        commercial.get("production_plant"),
+        commercial.get("customer_delivery_zone"),
+        commercial.get("destination_zone"),
+        commercial.get("usage_zone"),
+    ):
+        destination_zone = _location_zone(candidate)
+        if destination_zone:
+            break
+    if not origin_zone or not destination_zone:
+        return None
+    return "same" if origin_zone == destination_zone else "different"
+
+
+def _approved_quantity_profile(max_quantity: Any) -> Dict[str, Any] | None:
+    try:
+        quantity = float(max_quantity)
+    except (TypeError, ValueError):
+        return None
+    if quantity <= 0:
+        return None
+    half = quantity / 2
+    return {
+        "Y-1": 0,
+        "Y0": half,
+        "Y1": quantity,
+        "Y2": quantity,
+        "Y3": quantity,
+        "Y4": quantity,
+        "Y5": half,
+        "Y6": 0,
+    }
+
+
+def _field_was_preliminary_default(commercial: Mapping[str, Any], field: str) -> bool:
+    defaults = commercial.get("preliminary_defaults")
+    if not isinstance(defaults, Mapping):
+        return False
+    detail = defaults.get(field)
+    return isinstance(detail, Mapping) and detail.get("status") == "provisional"
+
+
+def _apply_olivier_choke_policy(
+    commercial: Mapping[str, Any],
+    state: Mapping[str, Any],
+    explicit_overrides: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Fill absent Choke business rules from Olivier's approved policy.
+
+    Explicit request values and resolved RFQ/customer values are never overwritten.
+    Missing SOP is deliberately not invented; it remains a structural blocker.
+    """
+    result = dict(commercial)
+    explicit = dict(explicit_overrides or {})
+    applied: Dict[str, Any] = {}
+
+    def set_default(
+        field: str,
+        value: Any,
+        *,
+        replace_provisional: bool = True,
+        empty_mapping_is_missing: bool = False,
+    ) -> None:
+        if field in explicit and not _policy_value_missing(explicit.get(field)):
+            return
+        current = result.get(field)
+        current_missing = _policy_value_missing(current)
+        if empty_mapping_is_missing and isinstance(current, Mapping) and not current:
+            current_missing = True
+        if (
+            current_missing
+            or (replace_provisional and _field_was_preliminary_default(result, field))
+        ):
+            result[field] = value
+            applied[field] = value
+
+    # SOP may be derived only from an actual saved date. No generic date is used.
+    if _policy_value_missing(result.get("sop_year")) and result.get("sop_date"):
+        try:
+            result["sop_year"] = int(str(result["sop_date"])[:4])
+            applied["sop_year"] = result["sop_year"]
+        except (TypeError, ValueError):
+            pass
+
+    max_quantity = (
+        result.get("annual_quantity")
+        or result.get("annual_max_quantity")
+        or result.get("max_annual_quantity")
+        or result.get("qmax")
+    )
+    profile = _approved_quantity_profile(max_quantity)
+    if profile is not None:
+        if (
+            "annual_quantities" not in explicit
+            and (
+                not isinstance(result.get("annual_quantities"), Mapping)
+                or _field_was_preliminary_default(result, "annual_quantities")
+            )
+        ):
+            result["annual_quantities"] = profile
+            result["quantity_rule"] = "olivier_standard_profile"
+            applied["annual_quantities"] = profile
+
+    set_default("solve_selling_price", True, replace_provisional=False)
+    set_default("scenario_solver", False, replace_provisional=False)
+    productivity_policy = {
+        "percentage": 3,
+        "start_year": 1,
+        "duration": 3,
+        "basis": "added_value",
+    }
+    current_productivity = result.get("customer_productivity")
+    productivity_incomplete = (
+        not isinstance(current_productivity, Mapping)
+        or any(
+            current_productivity.get(field) in (None, "")
+            for field in ("percentage", "start_year", "duration", "basis")
+        )
+    )
+    if (
+        "customer_productivity" not in explicit
+        and (
+            productivity_incomplete
+            or _field_was_preliminary_default(result, "customer_productivity")
+        )
+    ):
+        result["customer_productivity"] = productivity_policy
+        applied["customer_productivity"] = productivity_policy
+    set_default("customer_payment_days", 60)
+    set_default("customer_incoterm", "EXW")
+    set_default("customer_delivery_frequency_days", 7)
+    set_default("platform", False)
+    set_default("customer_transit_days", 0)
+    set_default("platform_safety_stock_days", 0)
+    set_default("fg_safety_stock_days", 10)
+    set_default("wip_material_basis", "base_material")
+    set_default("wip_days", 5)
+    set_default("discount_rate", 12)
+    set_default("solver_discount_rate", 12)
+    set_default("financing_rate", 8)
+    set_default("financing_interest_basis", "closing_balance")
+    set_default("business_link_values", {})
+    set_default("material_indexation_rates", {})
+    set_default("plant_indexation_rates", {})
+    set_default("logistics_indexation_rates", {})
+    set_default("fx_adjustment_rates", {})
+    set_default("investment_fx_rates", {})
+    set_default("depreciation_years", 5)
+    set_default("depreciation_start_period", "Y1")
+    set_default("capex_tooling_treatment", {
+        "generic_capex": {
+            "type": "avocarbon_owned",
+            "depreciable_percent": 100,
+            "customer_collection_percent": 0,
+        },
+        "specific_capex": {
+            "type": "cash",
+            "depreciable_percent": 0,
+            "customer_collection_percent": 100,
+        },
+        "tooling": {
+            "type": "cash",
+            "depreciable_percent": 0,
+            "customer_collection_percent": 100,
+        },
+    }, empty_mapping_is_missing=True)
+
+    target = result.get("product_profitability_target")
+    explicit_target = explicit.get("product_profitability_target")
+    target_is_approved = (
+        isinstance(target, Mapping)
+        and target.get("target_interpretation") in {"npv_zero", "npv_amount"}
+    )
+    if not target_is_approved and not isinstance(explicit_target, Mapping):
+        if isinstance(target, Mapping):
+            result["legacy_product_profitability_target"] = dict(target)
+        result["product_profitability_target"] = {
+            "status": "approved_policy",
+            "source_field": "olivier_choke_policy.npv_zero_at_12_percent",
+            "value": 0,
+            "unit": result.get("currency") or "reporting_currency",
+            "target_type": "NPV",
+            "target_interpretation": "npv_zero",
+            "commercially_approved": True,
+            "policy_version": OLIVIER_CHOKE_POLICY_VERSION,
+        }
+        applied["product_profitability_target"] = (
+            result["product_profitability_target"]
+        )
+
+    result["approved_policy_version"] = OLIVIER_CHOKE_POLICY_VERSION
+    result["approved_policy_defaults_applied"] = applied
+    result["rule_set"] = "current_approved"
+    return result
+
 def _commercial_context(
     project_code: str,
     product_id: str,
@@ -96,17 +329,28 @@ def _commercial_context(
     state = _state(project_code, product_id)
     customer = dict(state.get("customer_input") or {})
     saved = _saved_inputs(project_code, product_id)
-    commercial = {**customer, **saved, **dict(overrides or {})}
+    explicit = dict(overrides or {})
+    commercial = {**customer, **saved, **explicit}
+    explicit_fields = set(saved.get("_financial_explicit_fields") or [])
+    explicit_fields.update(customer.get("_explicit_user_fields") or [])
+    explicit_fields.update(explicit.keys())
     commercial["project_code"] = project_code
     commercial["product_id"] = product_id
     commercial.setdefault(
         "production_plant",
-        (state.get("manufacturing_strategy") or {}).get("production_plant"),
+        (state.get("manufacturing_strategy") or {}).get("production_plant")
+        or state.get("production_plant"),
+    )
+    commercial.setdefault(
+        "production_country",
+        (state.get("manufacturing_strategy") or {}).get("production_country")
+        or state.get("production_country"),
     )
     if commercial.get("currency") in (None, ""):
         commercial["currency"] = (
             customer.get("quotation_currency")
             or customer.get("target_price_currency")
+            or (state.get("unit_data") or {}).get("selling_currency")
         )
     if not isinstance(commercial.get("product_profitability_target"), Mapping):
         commercial["product_profitability_target"] = (
@@ -115,8 +359,14 @@ def _commercial_context(
                 product_id,
             )
         )
-    return commercial
-
+    explicit_values = {
+        field: commercial.get(field) for field in explicit_fields
+    }
+    resolved = _apply_olivier_choke_policy(
+        commercial, state, explicit_values
+    )
+    resolved["_financial_explicit_fields"] = sorted(explicit_fields)
+    return resolved
 
 def _component_rows(
     technical: Mapping[str, Any],
@@ -124,6 +374,7 @@ def _component_rows(
 ) -> List[Dict[str, Any]]:
     terms = commercial.get("supplier_terms") or {}
     result = []
+    policy_applied = bool(commercial.get("approved_policy_version"))
     for component in technical.get("component_breakdown") or []:
         if component.get("status") not in {"resolved", "resolved_assumption"}:
             continue
@@ -133,8 +384,7 @@ def _component_rows(
         offer = component.get("normalized_offer") or {}
         ap_terms = component.get("ap_terms") or offer.get("ap_terms") or {}
         payment_days, payment_path = _first_with_path(offer, [
-            ["payment_days"],
-            ["payment_conditions_days"],
+            ["payment_days"], ["payment_conditions_days"],
             ["recommended_offer", "payment_days"],
             ["recommended_offer", "payment_conditions_days"],
             ["raw_offer", "payment_days"],
@@ -142,21 +392,18 @@ def _component_rows(
             ["raw_offer", "recommended_offer", "payment_days"],
         ])
         incoterm, incoterm_path = _first_with_path(offer, [
-            ["incoterm"],
-            ["recommended_offer", "incoterm"],
+            ["incoterm"], ["recommended_offer", "incoterm"],
             ["raw_offer", "incoterm"],
             ["raw_offer", "recommended_offer", "incoterm"],
         ])
         ap_basis, ap_basis_path = _first_with_path(offer, [
-            ["ap_value_basis"],
-            ["recommended_offer", "ap_value_basis"],
+            ["ap_value_basis"], ["recommended_offer", "ap_value_basis"],
             ["raw_offer", "ap_value_basis"],
             ["raw_offer", "recommended_offer", "ap_value_basis"],
             ["price_basis", "ap_value_basis"],
         ])
         origin_zone, origin_path = _first_with_path(offer, [
-            ["origin_zone"],
-            ["supplier_country"],
+            ["origin_zone"], ["supplier_country"],
             ["recommended_offer", "origin"],
             ["recommended_offer", "origin_zone"],
             ["raw_offer", "origin_zone"],
@@ -164,11 +411,47 @@ def _component_rows(
             ["raw_offer", "recommended_offer", "origin"],
         ])
         supplier, supplier_path = _first_with_path(offer, [
-            ["supplier_name"],
+            ["supplier_name"], ["supplier"],
             ["recommended_offer", "supplier_name"],
+            ["recommended_offer", "supplier"],
             ["raw_offer", "supplier_name"],
             ["raw_offer", "recommended_offer", "supplier_name"],
         ])
+        selected_origin = (
+            override.get("origin_zone")
+            or ap_terms.get("origin_zone")
+            or ap_terms.get("origin")
+            or origin_zone
+        )
+        selected_zone_relation = (
+            override.get("zone_relation")
+            or _component_zone_relation(selected_origin, commercial)
+        )
+        selected_payment_days = (
+            override.get("payment_days")
+            if "payment_days" in override
+            else ap_terms.get("payment_days", payment_days)
+        )
+        selected_incoterm = (
+            override.get("incoterm")
+            or ap_terms.get("incoterm")
+            or incoterm
+        )
+        selected_ap_basis = (
+            override.get("ap_value_basis")
+            or ap_terms.get("ap_value_basis")
+            or ap_basis
+        )
+        policy_fields = []
+        if policy_applied and selected_payment_days in (None, ""):
+            selected_payment_days = 60
+            policy_fields.append("payment_days")
+        if policy_applied and selected_incoterm in (None, ""):
+            selected_incoterm = "EXW"
+            policy_fields.append("incoterm")
+        if policy_applied and selected_ap_basis in (None, ""):
+            selected_ap_basis = "base_purchase_value"
+            policy_fields.append("ap_value_basis")
         override_paths = override.get("source_paths") or {}
         result.append({
             "component_id": cid,
@@ -176,77 +459,117 @@ def _component_rows(
                 override.get("supplier")
                 or ap_terms.get("supplier")
                 or supplier
+                or "Internal costing estimate - supplier to confirm"
             ),
             "currency": component.get("currency") or offer.get("currency"),
             "base_cost_per_product": component.get("material_cost_per_piece"),
             "delivered_cost_per_product": component.get(
                 "delivered_material_cost_per_piece"
             ),
-            "payment_days": (
-                override.get("payment_days")
-                if "payment_days" in override
-                else ap_terms.get("payment_days", payment_days)
-            ),
-            "incoterm": (
-                override.get("incoterm")
-                or ap_terms.get("incoterm")
-                or incoterm
-            ),
-            "zone_relation": override.get("zone_relation"),
+            "payment_days": selected_payment_days,
+            "incoterm": str(selected_incoterm or "").upper(),
+            "zone_relation": selected_zone_relation,
             "origin": ap_terms.get("origin"),
-            "origin_zone": (
-                override.get("origin_zone")
-                or ap_terms.get("origin_zone")
-                or origin_zone
-            ),
+            "origin_zone": selected_origin,
             "payment_term": ap_terms.get("payment_term"),
-            "ap_value_basis": (
-                override.get("ap_value_basis")
-                or ap_terms.get("ap_value_basis")
-                or ap_basis
-            ),
+            "ap_value_basis": selected_ap_basis,
             "source_paths": {
                 "supplier": override_paths.get("supplier") or (
                     ap_terms.get("source_paths") or {}
                 ).get("supplier") or supplier_path,
                 "payment_days": override_paths.get("payment_days") or (
                     ap_terms.get("source_paths") or {}
-                ).get("payment_days") or payment_path,
+                ).get("payment_days") or payment_path or (
+                    "olivier_choke_policy.customer_payment_days"
+                    if "payment_days" in policy_fields else None
+                ),
                 "incoterm": override_paths.get("incoterm") or (
                     ap_terms.get("source_paths") or {}
-                ).get("incoterm") or incoterm_path,
+                ).get("incoterm") or incoterm_path or (
+                    "olivier_choke_policy.customer_incoterm"
+                    if "incoterm" in policy_fields else None
+                ),
                 "origin": (ap_terms.get("source_paths") or {}).get("origin"),
                 "origin_zone": override_paths.get("origin_zone") or (
                     ap_terms.get("source_paths") or {}
                 ).get("origin_zone") or origin_path,
+                "zone_relation": (
+                    "derived_origin_vs_production_zone"
+                    if selected_zone_relation else None
+                ),
                 "ap_value_basis": override_paths.get("ap_value_basis") or (
                     ap_terms.get("source_paths") or {}
-                ).get("ap_value_basis") or ap_basis_path,
-                "base_cost_per_product": "component_breakdown.material_cost_per_piece",
+                ).get("ap_value_basis") or ap_basis_path or (
+                    "olivier_choke_policy.base_purchase_value"
+                    if "ap_value_basis" in policy_fields else None
+                ),
+                "base_cost_per_product": (
+                    "component_breakdown.material_cost_per_piece"
+                ),
                 "delivered_cost_per_product": (
                     "component_breakdown.delivered_material_cost_per_piece"
                 ),
             },
+            "policy_default_fields": policy_fields,
             "source": override.get("source") or "saved_component_output",
         })
     return result
-
 
 def component_ap_readiness(
     project_code: str,
     product_id: str,
     commercial_inputs: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Audit AP readiness from this run's actual saved component JSON files."""
+    """Audit AP terms from current saved component JSON files.
+
+    The normalized BOM is the preferred authority. When a caller supplies a
+    reduced path map (for a unit test or a lightweight integration), the audit
+    falls back to the technical component breakdown and finally to saved JSON
+    filenames instead of raising ``KeyError``.
+    """
     paths = _paths(project_code, product_id)
-    commercial = _commercial_context(project_code, product_id, commercial_inputs)
+    commercial = _commercial_context(
+        project_code, product_id, commercial_inputs
+    )
     overrides = commercial.get("supplier_terms") or {}
     component_dir = paths["components_dir"]
     try:
         technical = _technical(project_code, product_id)
     except FileNotFoundError:
         technical = {}
-    expected = ["ferrite_core", "magnet_wire", "lead_tinning", "glue"]
+
+    normalized_bom_path = paths.get("normalized_bom_path")
+    normalized_bom = (
+        _read_json(normalized_bom_path, {}) or {}
+        if normalized_bom_path is not None
+        else {}
+    )
+    if normalized_bom_path is None:
+        # Backward-compatible audit contract used by lightweight integrations
+        # and the maintained targeted-rerun test. A reduced path map cannot
+        # prove the current BOM, so audit the canonical Choke material set.
+        expected = ["ferrite_core", "magnet_wire", "lead_tinning", "glue"]
+    else:
+        expected = [
+            str(item.get("component_id"))
+            for item in normalized_bom.get("components") or []
+            if isinstance(item, Mapping)
+            and item.get("component_id")
+            and item.get("costing_route") == "external_component_costing_agent"
+            and item.get("excluded_not_required") is not True
+        ]
+        if not expected:
+            expected = [
+                str(item.get("component_id"))
+                for item in technical.get("component_breakdown") or []
+                if isinstance(item, Mapping)
+                and item.get("component_id")
+                and item.get("status") not in {"excluded_optional_unconfirmed"}
+            ]
+        if not expected and component_dir.exists():
+            expected = [path.stem for path in sorted(component_dir.glob("*.json"))]
+    expected = list(dict.fromkeys(expected))
+
     rows: List[Dict[str, Any]] = []
     rerun: List[str] = []
     for component_id in expected:
@@ -261,14 +584,31 @@ def component_ap_readiness(
             })
             rerun.append(component_id)
             continue
+
         terms = resolve_component_ap_terms(dict(raw))
         override = (
             overrides.get(component_id, {})
             if isinstance(overrides, Mapping) else {}
         )
+        override = override if isinstance(override, Mapping) else {}
+
+        supplier = override.get("supplier") or terms.get("supplier")
+        payment_days = (
+            override.get("payment_days")
+            if "payment_days" in override
+            else terms.get("payment_days")
+        )
+        incoterm = override.get("incoterm") or terms.get("incoterm")
+        origin = override.get("origin") or terms.get("origin")
+        origin_zone = override.get("origin_zone") or terms.get("origin_zone")
         selected_basis = override.get("ap_value_basis") or terms.get(
             "ap_value_basis"
         )
+        zone_relation = (
+            override.get("zone_relation")
+            or _component_zone_relation(origin_zone or origin, commercial)
+        )
+
         component = next((
             item for item in technical.get("component_breakdown") or []
             if item.get("component_id") == component_id
@@ -280,36 +620,55 @@ def component_ap_readiness(
             if selected_basis == "delivered_purchase_value"
             else None
         )
-        missing = list(terms.get("missing_fields") or [])
+
+        missing: List[str] = []
+        for field, value in (
+            ("supplier", supplier),
+            ("payment_days", payment_days),
+            ("incoterm", incoterm),
+            ("origin", origin),
+            ("origin_zone", origin_zone),
+        ):
+            if value in (None, ""):
+                missing.append(field)
+        if selected_basis not in {
+            "base_purchase_value", "delivered_purchase_value",
+        }:
+            missing.append("ap_value_basis")
         if purchasing_value is None:
             missing.append("purchasing_value")
         missing = list(dict.fromkeys(missing))
         status = "ready" if not missing else "incomplete"
         if status != "ready":
             rerun.append(component_id)
+
+        source_paths = dict(terms.get("source_paths") or {})
+        source_paths.update(override.get("source_paths") or {})
         rows.append({
             "component_id": component_id,
-            "supplier": terms.get("supplier"),
+            "supplier": supplier,
             "payment_term": terms.get("payment_term"),
-            "normalized_payment_days": terms.get("payment_days"),
+            "normalized_payment_days": payment_days,
             "ap_basis": selected_basis,
             "purchasing_value_selected": purchasing_value,
-            "incoterm": terms.get("incoterm"),
-            "origin": terms.get("origin"),
-            "origin_zone": terms.get("origin_zone"),
+            "incoterm": str(incoterm or "").upper(),
+            "origin": origin,
+            "origin_zone": origin_zone,
+            "zone_relation": zone_relation,
             "source_path": str(path),
-            "field_source_paths": terms.get("source_paths") or {},
+            "field_source_paths": source_paths,
             "status": status,
             "missing_fields": missing,
         })
+
     return {
         "project_code": project_code,
         "product_id": product_id,
         "component_ap_readiness": rows,
         "components_requiring_rerun": list(dict.fromkeys(rerun)),
         "preserve_outputs": ["bom", "most"],
+        "policy_version": commercial.get("approved_policy_version"),
     }
-
 
 def _investment_assets(project_code: str, product_id: str) -> List[Dict[str, Any]]:
     most_dir = _paths(project_code, product_id)["most_dir"]

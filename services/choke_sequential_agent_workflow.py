@@ -73,6 +73,9 @@ from services.choke_writeback_mcp_diagnostic import (
 BASE_DIR = BACKEND_ROOT
 logger = logging.getLogger(__name__)
 TECHNICAL_CALCULATION_ENGINE_VERSION = "choke-technical-cost-v3-preliminary-logistics"
+# OLIVIER_CHOKE_COMPLETION_FIX: generic material routing policy
+OLIVIER_CHOKE_ROUTING_POLICY_VERSION = "olivier-choke-material-routing-2026-08-05-v1"
+
 MOST_WRITEBACK_INSTRUCTION = (
     "Analyze only this work package using your native MOST JSON structure "
     "from most_cycle_output_template.json. "
@@ -102,27 +105,37 @@ MOST_WRITEBACK_INSTRUCTION = (
 )
 
 COMPONENT_COSTING_INSTRUCTION = (
-    "Cost only this component. Return one complete JSON and call save_component_output exactly once. "
-    "A usable recommended_offer must contain unit_price as a JSON number, currency, "
-    "pricing_unit (pc, kg, g, or m), supplier_name, payment_days as a JSON number, "
-    "incoterm, origin, origin_zone, and ap_value_basis explicitly set to "
-    "base_purchase_value or delivered_purchase_value, "
-    "transport_cost with transport_basis, customs_cost with customs_basis, and "
-    "forwarder_fee with forwarder_basis. Currency and every basis must be explicit. "
-    "For legacy compatibility, unit_price_currency must equal currency and "
-    "unit_price_basis must identify the same pricing_unit; transportation_cost_basis, "
-    "customs_cost_basis, and forwarder_cost_basis must match transport_basis, "
-    "customs_basis, and forwarder_basis respectively. "
-    "If currency or pricing_unit cannot be determined, return status=blocked with exactly "
-    "one explicit missing field and do not return a usable recommended_offer. "
-    "If a supplier "
-    "price was converted, also provide original_unit_price, original_currency, "
-    "conversion_rate, conversion_rate_date, converted_unit_price, and "
-    "converted_currency. Never omit currency or pricing_unit for a numerical price. "
-    "Never infer offer currency from the production plant. Do not report a technical "
-    "length or mass as a piece quantity. Use annual_product_quantity and the separate "
-    "annual_purchasing_quantity with annual_purchasing_unit for supplier-volume pricing; "
-    "never send metres to a supplier price basis expressed per kg."
+    "Cost only the identified BOM material component; never cost the complete "
+    "Choke product in the External Component Costing Expert. Return exactly one "
+    "complete JSON for this component and call save_component_output exactly once "
+    "using the exact project_code, product_id, component_id and trigger_run_id "
+    "provided in this request. Copy trigger_run_id unchanged; never invent, omit or "
+    "replace it, and confirm the save_component_output success response before "
+    "reporting completion. A usable recommended_offer must contain unit_price as a "
+    "JSON number, currency, pricing_unit (pc, kg, g, or m), supplier_name, "
+    "payment_days as a JSON number, incoterm, origin, origin_zone, and "
+    "ap_value_basis explicitly set to base_purchase_value or "
+    "delivered_purchase_value. It must also contain transport_cost (or the legacy "
+    "transportation_cost alias) with transport_basis, customs_cost with "
+    "customs_basis, forwarder_fee with forwarder_basis, capital_cost with "
+    "capital_cost_basis, and delivered_cost with delivered_cost_basis and explicit "
+    "currency. Zero is valid when a logistics term is not applicable, but the field, "
+    "currency and basis must still be present. For legacy compatibility, "
+    "unit_price_currency must equal currency and unit_price_basis must identify the "
+    "same pricing_unit; transportation_cost_basis, customs_cost_basis and "
+    "forwarder_cost_basis must match transport_basis, customs_basis and "
+    "forwarder_basis respectively. If a supplier price was converted, also provide "
+    "original_unit_price, original_currency, conversion_rate, conversion_rate_date, "
+    "converted_unit_price and converted_currency. Never infer offer currency from "
+    "the production plant. Never report a technical length or mass as a piece "
+    "quantity. Use annual_product_quantity and the separate "
+    "annual_purchasing_quantity with annual_purchasing_unit for supplier-volume "
+    "pricing; never send metres to a supplier price basis expressed per kg. If a "
+    "supplier quotation is unavailable, return a conservative, traceable engineering "
+    "estimate with estimated fields and commercially_usable=false rather than "
+    "omitting the mandatory contract. Do not invent another material, alloy, BOM "
+    "quantity or internal manufacturing operation. A reported delivered total that "
+    "contradicts backend reconstruction must remain blocked."
 )
 
 
@@ -3820,6 +3833,37 @@ def _component_family(component_id: str, component: Dict[str, Any]) -> Optional[
 
 
 def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
+    """Route bought Choke materials independently from internal operations.
+
+    The BOM Agent may label tin as ``not_external_agent`` because the tinning
+    *operation* is internal. Olivier's workflow nevertheless requires the tin
+    consumable itself to be costed as an external material. Canonical material
+    identity therefore has priority over a raw operation-oriented route label.
+    """
+    canonical_id = _component_id(component, 1)
+    if canonical_id == "ferrite_core":
+        return "ferrite"
+    if canonical_id == "magnet_wire":
+        return "enameled_wire"
+    if canonical_id == "lead_tinning":
+        return "tin"
+    if canonical_id == "glue":
+        text = _component_text(component)
+        relevance = component.get("costing_relevance")
+        status = str(
+            component.get("status") or component.get("presence") or ""
+        ).lower()
+        if (
+            relevance is True
+            or status in {"present", "required", "to_confirm", "to confirm"}
+            or any(term in text for term in [
+                "present", "required", "to_confirm", "to confirm",
+                "a confirmer", "ambigu", "impossible de conclure",
+            ])
+        ):
+            return "glue"
+        return None
+
     explicit_route = str(component.get("costing_route") or "").strip().lower()
     if explicit_route in {"not_external_agent", "internal_costing"}:
         return None
@@ -3830,43 +3874,37 @@ def _external_costing_route(component: Dict[str, Any]) -> Optional[str]:
         or ""
     ).strip().lower()
     if explicit_route == "external_component_costing_agent":
-        return explicit_family or _component_type(component).strip().lower() or "external_component"
-    canonical_id = _component_id(component, 1)
-    if canonical_id == "glue":
-        text = _component_text(component)
-        if any(term in text for term in [
-            "present",
-            "required",
-            "to_confirm",
-            "to confirm",
-            "a confirmer",
-            "ambigu",
-            "impossible de conclure",
-        ]):
-            return "glue"
-        return None
-    if canonical_id == "lead_tinning":
-        return "tin"
-    if canonical_id == "magnet_wire":
-        return "enameled_wire"
-    if canonical_id == "ferrite_core":
-        return "ferrite"
+        return (
+            explicit_family
+            or _component_type(component).strip().lower()
+            or "external_component"
+        )
     text = _component_text(component)
     if any(term in text for term in ["complete choke", "full choke", "assembly"]):
         return None
-    if any(term in text for term in ["ferrite core", "ferrite", "magnetic component", "magnetic"]):
+    if any(term in text for term in [
+        "ferrite core", "ferrite", "magnetic component", "magnetic",
+    ]):
         return "ferrite"
-    if any(term in text for term in ["magnet wire", "copper wire", "enameled_wire", "enameled wire", "enamelled wire", "wire"]):
+    if any(term in text for term in [
+        "magnet wire", "copper wire", "enameled_wire", "enameled wire",
+        "enamelled wire", "wire",
+    ]):
         return "enameled_wire"
-    if any(term in text for term in ["lead tin", "tin plating", "tinning"]):
+    if any(term in text for term in [
+        "lead tin", "tin plating", "tinning", "solder", "sncu",
+    ]):
         return "tin"
     if any(term in text for term in ["glue", "adhesive", "epoxy"]):
         relevance = component.get("costing_relevance")
-        status = str(component.get("status") or component.get("presence") or "").lower()
-        if relevance is True or status in {"present", "required", "to_confirm", "to confirm"}:
+        status = str(
+            component.get("status") or component.get("presence") or ""
+        ).lower()
+        if relevance is True or status in {
+            "present", "required", "to_confirm", "to confirm",
+        }:
             return "glue"
     return None
-
 
 def normalize_bom(
     raw_bom: Dict[str, Any],
@@ -3917,6 +3955,7 @@ def normalize_bom(
     classification = choke_classification or classify_choke(customer_input or {}, raw_bom)
     return {
         "status": "normalized",
+        "routing_policy_version": OLIVIER_CHOKE_ROUTING_POLICY_VERSION,
         "components": components,
         "external_components": external_components,
         "choke_classification": classification,
@@ -4783,16 +4822,44 @@ def save_bom_output(
 
 
 def _load_normalized_bom(project_code: str, product_id: str) -> Dict[str, Any]:
-    normalized = _read_json(_bom_normalized_path(project_code, product_id), None)
-    if isinstance(normalized, dict):
+    """Load the current normalized BOM and self-heal routing revisions.
+
+    This allows already-created projects to receive the corrected ferrite/wire/
+    tin/glue material routing after deployment without using a manual JSON edit.
+    A new technical revision is generated, so stale component outputs are safely
+    regenerated through the existing trigger_run_id workflow.
+    """
+    normalized_path = _bom_normalized_path(project_code, product_id)
+    normalized = _read_json(normalized_path, None)
+    if (
+        isinstance(normalized, dict)
+        and normalized.get("routing_policy_version")
+        == OLIVIER_CHOKE_ROUTING_POLICY_VERSION
+    ):
         return normalized
+
     raw = _read_json(_bom_raw_path(project_code, product_id), None)
     if raw is None:
+        if isinstance(normalized, dict):
+            return normalized
         raise FileNotFoundError("BOM output is not available yet.")
-    normalized = normalize_bom(raw)
-    _write_json(_bom_normalized_path(project_code, product_id), normalized)
-    return normalized
 
+    state = _load_state(project_code, product_id)
+    customer_input = state.get("customer_input") or {}
+    classification = classify_choke(customer_input, raw)
+    refreshed = normalize_bom(raw, customer_input, classification)
+    refreshed = technical_revisions.attach_bom_revisions(raw, refreshed)
+    _write_json(normalized_path, refreshed)
+    state.setdefault("technical_revisions", {})["normalized_bom"] = (
+        refreshed.get("technical_revision")
+    )
+    state["choke_classification"] = classification
+    state.update(classification_trace(classification))
+    state.setdefault("warnings", []).append(
+        "Normalized BOM routing was refreshed to the current Olivier material policy."
+    )
+    _save_state(state)
+    return refreshed
 
 def _state_bom_path_candidates(state: Dict[str, Any], key: str, fallback: Path) -> List[Path]:
     candidates: List[Path] = []
@@ -5625,7 +5692,7 @@ def trigger_next_component_costing(
         saved_normalized = _read_json(
             _normalized_component_output_path(project_code, product_id, component_id), {}
         ) or {}
-        saved_price_incomplete = component_costing.component_offer_requires_regeneration(saved_raw) if saved_raw else False
+        saved_price_incomplete = component_costing.component_offer_requires_firm_regeneration(saved_raw) if saved_raw else False
         requires_regeneration = previous.get("requires_regeneration") is True or saved_price_incomplete
         if saved_price_incomplete:
             previous = {
@@ -8992,8 +9059,11 @@ def calculate_final_choke_costing_from_saved_outputs(
         )
 
         if (
-            not delivered_basis_compatible
-            and result_mode == "preliminary"
+            result_mode == "preliminary"
+            and (
+                not delivered_basis_compatible
+                or delivered_result.get("status") != "calculated"
+            )
         ):
             preliminary_fallback = (
                 _build_preliminary_delivered_cost_fallback(
@@ -9631,6 +9701,9 @@ def calculate_final_choke_costing_from_saved_outputs(
         ),
         "calculated_delivered_material_cost_for_resolved_components": (
             None if not component_outputs else float(delivered_material_cost_per_piece)
+        ),
+        "calculated_transport_cost_for_resolved_components": (
+            None if not component_outputs else float(transport_cost_per_piece)
         ),
         "delivered_material_cost_per_piece": (
             float(delivered_material_cost_per_piece)

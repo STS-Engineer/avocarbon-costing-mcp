@@ -1317,6 +1317,9 @@ def reconcile_delivered_unit_cost(
     """
     agent_raw = agent_raw or {}
     component_id = str(agent_raw.get("component_id") or "").strip().lower()
+    # DELIVERED_SCOPE_REGRESSION_GUARD_2026_08_05: preserve the validated component-specific rule.
+    # Ferrite and tin retain a fully reconciled reported delivered total,
+    # while wire and glue use the controlled backend four-term rebuild.
     olivier_four_term_scope = component_id in {"glue", "magnet_wire"}
     delivered_term_names = {"transport", "customs", "forwarder_fee"}
     target = normalize_currency_code(target_currency)
@@ -1571,26 +1574,114 @@ def resolve_delivered_unit_cost(
     )
 
 
-def component_offer_requires_regeneration(agent_raw: Optional[Dict[str, Any]]) -> bool:
+def component_offer_requires_regeneration(
+    agent_raw: Optional[Dict[str, Any]],
+) -> bool:
+    """Detect only the legacy unit-price schema gap.
+
+    This public helper intentionally remains backward compatible: an output
+    with a numerical price, currency and canonical pricing unit does not need
+    regeneration merely because newer Firm-only evidence is absent. Full
+    delivered-cost, logistics and AP completeness is checked separately by
+    normalization, reconciliation and ``component_offer_requires_firm_regeneration``.
+    """
     offer = resolve_component_offer(agent_raw)
     return bool(
         offer.get("unit_price") is not None
         and (not offer.get("currency") or not offer.get("pricing_unit"))
     )
 
+def component_offer_requires_firm_regeneration(
+    agent_raw: Optional[Dict[str, Any]],
+) -> bool:
+    """Return True when a priced saved output cannot support Firm costing.
 
+    This preserves the stricter automatic-regeneration policy introduced for
+    generic Choke costing without changing the established public helper used
+    by legacy normalization and compatibility tests.
+    """
+    if component_offer_requires_regeneration(agent_raw):
+        return True
+    offer = resolve_component_offer(agent_raw)
+    if offer.get("unit_price") is None:
+        return False
+    if (
+        offer.get("delivered_cost_per_unit") is None
+        or not offer.get("delivered_cost_currency")
+        or not offer.get("delivered_cost_basis")
+    ):
+        return True
+    for name in ("transport", "customs", "forwarder_fee"):
+        term = offer.get(name) or {}
+        if term.get("value") is None:
+            return True
+        if not term.get("currency") or not term.get("rate_basis"):
+            return True
+    ap_terms = offer.get("ap_terms") or resolve_component_ap_terms(agent_raw)
+    return ap_terms.get("status") != "ready"
+
+# COMPONENT_BASIS_ALIAS_GUARD_2026_08_05: canonical monetary-rate unit aliases.
+# Keep this at module scope. The unit normalizer is used by ferrite, wire,
+# glue, tin, delivered-cost reconciliation, and final technical costing.
 _BASIS_UNIT_ALIASES = {
-    "kg": "kg", "cny/kg": "kg", "rmb/kg": "kg", "eur/kg": "kg", "usd/kg": "kg", "per_kg": "kg",
-    "pc": "pc", "pcs": "pc", "piece": "pc", "cny/pc": "pc", "rmb/pc": "pc", "eur/pc": "pc",
-    "usd/pc": "pc", "per_piece": "pc", "u": "pc", "cny/pce": "pc", "rmb/pce": "pc",
-    "m": "m", "meter": "m", "metre": "m", "cny/m": "m", "rmb/m": "m", "eur/m": "m", "usd/m": "m", "per_m": "m",
-    "g": "g", "cny/g": "g", "rmb/g": "g", "eur/g": "g", "usd/g": "g", "per_g": "g",
-    "mm": "mm", "cny/mm": "mm", "rmb/mm": "mm", "eur/mm": "mm", "usd/mm": "mm", "per_mm": "mm",
-    "shipment": "shipment", "per_shipment": "shipment", "cny/shipment": "shipment", "rmb/shipment": "shipment",
-    "percentage_of_component_value": "percentage", "percent_of_value": "percentage", "%": "percentage",
+    "kg": "kg",
+    "cny/kg": "kg",
+    "rmb/kg": "kg",
+    "eur/kg": "kg",
+    "usd/kg": "kg",
+    "inr/kg": "kg",
+    "per_kg": "kg",
+    "pc": "pc",
+    "pcs": "pc",
+    "piece": "pc",
+    "pieces": "pc",
+    "unit": "pc",
+    "units": "pc",
+    "cny/pc": "pc",
+    "rmb/pc": "pc",
+    "eur/pc": "pc",
+    "usd/pc": "pc",
+    "inr/pc": "pc",
+    "cny/pce": "pc",
+    "rmb/pce": "pc",
+    "inr/pce": "pc",
+    "per_piece": "pc",
+    "u": "pc",
+    "m": "m",
+    "meter": "m",
+    "metre": "m",
+    "cny/m": "m",
+    "rmb/m": "m",
+    "eur/m": "m",
+    "usd/m": "m",
+    "inr/m": "m",
+    "per_m": "m",
+    "g": "g",
+    "cny/g": "g",
+    "rmb/g": "g",
+    "eur/g": "g",
+    "usd/g": "g",
+    "inr/g": "g",
+    "per_g": "g",
+    "mm": "mm",
+    "cny/mm": "mm",
+    "rmb/mm": "mm",
+    "eur/mm": "mm",
+    "usd/mm": "mm",
+    "inr/mm": "mm",
+    "per_mm": "mm",
+    "shipment": "shipment",
+    "per_shipment": "shipment",
+    "cny/shipment": "shipment",
+    "rmb/shipment": "shipment",
+    "eur/shipment": "shipment",
+    "usd/shipment": "shipment",
+    "inr/shipment": "shipment",
+    "percentage_of_component_value": "percentage",
+    "percent_of_value": "percentage",
+    "%": "percentage",
     "percentage": "percentage",
 }
-
 
 def normalize_unit_basis(unit_price_basis: Any) -> Optional[str]:
     """Map a free-text rate basis (e.g. "CNY/kg", "per_kg", "RMB/pc") to a
