@@ -104,39 +104,446 @@ MOST_WRITEBACK_INSTRUCTION = (
     "MOST_WRITEBACK_FAILED."
 )
 
-COMPONENT_COSTING_INSTRUCTION = (
-    "Cost only the identified BOM material component; never cost the complete "
-    "Choke product in the External Component Costing Expert. Return exactly one "
-    "complete JSON for this component and call save_component_output exactly once "
-    "using the exact project_code, product_id, component_id and trigger_run_id "
-    "provided in this request. Copy trigger_run_id unchanged; never invent, omit or "
-    "replace it, and confirm the save_component_output success response before "
-    "reporting completion. A usable recommended_offer must contain unit_price as a "
-    "JSON number, currency, pricing_unit (pc, kg, g, or m), supplier_name, "
-    "payment_days as a JSON number, incoterm, origin, origin_zone, and "
-    "ap_value_basis explicitly set to base_purchase_value or "
-    "delivered_purchase_value. It must also contain transport_cost (or the legacy "
-    "transportation_cost alias) with transport_basis, customs_cost with "
-    "customs_basis, forwarder_fee with forwarder_basis, capital_cost with "
-    "capital_cost_basis, and delivered_cost with delivered_cost_basis and explicit "
-    "currency. Zero is valid when a logistics term is not applicable, but the field, "
-    "currency and basis must still be present. For legacy compatibility, "
-    "unit_price_currency must equal currency and unit_price_basis must identify the "
-    "same pricing_unit; transportation_cost_basis, customs_cost_basis and "
-    "forwarder_cost_basis must match transport_basis, customs_basis and "
-    "forwarder_basis respectively. If a supplier price was converted, also provide "
-    "original_unit_price, original_currency, conversion_rate, conversion_rate_date, "
-    "converted_unit_price and converted_currency. Never infer offer currency from "
-    "the production plant. Never report a technical length or mass as a piece "
-    "quantity. Use annual_product_quantity and the separate "
-    "annual_purchasing_quantity with annual_purchasing_unit for supplier-volume "
-    "pricing; never send metres to a supplier price basis expressed per kg. If a "
-    "supplier quotation is unavailable, return a conservative, traceable engineering "
-    "estimate with estimated fields and commercially_usable=false rather than "
-    "omitting the mandatory contract. Do not invent another material, alloy, BOM "
-    "quantity or internal manufacturing operation. A reported delivered total that "
-    "contradicts backend reconstruction must remain blocked."
-)
+COMPONENT_COSTING_INSTRUCTION = """
+BACKEND COMPONENT COSTING CONTRACT
+
+Cost exactly one external BOM component: the component identified by component_id.
+Do not cost another BOM component, combine components, calculate the complete Choke
+price, or trigger MOST analysis.
+
+IDENTIFIER INTEGRITY
+
+Copy project_code, product_id, component_id, and trigger_run_id exactly from the
+structured request into the component JSON and the save_component_output call.
+Treat them as opaque values. Never infer, normalize, rewrite, omit, or replace them.
+
+OUTPUT AND WRITE-BACK
+
+Create exactly one complete JSON object for this component. The object must comply
+with the permanent Agent Instructions, the applicable family prompt,
+costing-output-spec.md, and this backend contract.
+
+In backend workflow mode, do not produce a human-facing summary or recommendation
+table.
+
+Validate the complete JSON before write-back. Then call save_component_output
+exactly once with:
+
+- the exact project_code from the request;
+- the exact product_id from the request;
+- the exact component_id from the request;
+- the exact trigger_run_id from the request;
+- raw_json containing the complete component JSON object.
+
+Do not call a legacy write-back tool. Do not call save_component_output more than
+once.
+
+Treat write-back as successful only when the response confirms:
+
+- success=true;
+- returned component_id matches exactly;
+- raw_component_saved=true;
+- normalized_component_saved=true.
+
+If the response includes trigger_run_id, it must also match exactly.
+
+After confirmed success, return only:
+
+COMPONENT JSON SAVED SUCCESSFULLY
+
+If the write-back call fails or the required confirmation is absent, return only:
+
+COMPONENT_WRITEBACK_FAILED
+
+COMPONENT CONTRACT
+
+The JSON must include:
+
+- project_code;
+- product_id;
+- component_id;
+- trigger_run_id;
+- component_name;
+- component_family;
+- classification set exactly to "External";
+- drawing_reference;
+- annual_product_quantity;
+- annual_purchasing_quantity;
+- annual_purchasing_unit;
+- destination_zone;
+- reporting_currency;
+- technical_specification;
+- cost basis and source confidence;
+- FX conversions;
+- material indexation;
+- productivity;
+- assumptions;
+- unconfirmed_values;
+- required_confirmations;
+- commercially_usable;
+- exactly one recommended_offer.
+
+Do not report a technical length, mass, diameter, or BOM usage as
+annual_product_quantity.
+
+Use annual_purchasing_quantity and annual_purchasing_unit for supplier-volume
+pricing.
+
+Never apply a price per kg to an unconverted quantity in metres. Never apply a price
+per metre to an unconverted quantity in kg.
+
+RECOMMENDED OFFER
+
+Always include the following recommended_offer keys:
+
+- unit_price as a JSON number representing the supplier-native base purchase price;
+- currency as the supplier-native ISO 4217 currency code;
+- pricing_unit as exactly one of: pc, kg, g, m, mm;
+- unit_price_currency equal to currency;
+- unit_price_basis equal to <currency>/<pricing_unit>;
+- supplier_name;
+- payment_terms;
+- payment_days as an integer calendar-day value or null;
+- incoterm;
+- origin;
+- origin_zone;
+- ap_value_basis equal to base_purchase_value, delivered_purchase_value, or null;
+- commercially_usable as a JSON boolean;
+- source and source-confidence information for price, supplier, payment terms,
+  Incoterm, origin, origin zone, and AP value basis.
+
+Do not convert unit_price or currency into the project reporting currency.
+They must preserve the supplier-native commercial price and currency.
+
+Also include:
+
+- recommended_offer.supplier with name, payment_terms, payment_days, incoterm,
+  origin_zone, and applicable source and confidence fields;
+- recommended_offer.accounts_payable with value_basis, payment_days,
+  annual_purchase_value_basis, source_confidence, and source.
+
+Any flat compatibility fields and their nested equivalents must be consistent.
+
+recommended_offer.origin is the structured source of truth for the actual sourcing
+or manufacturing origin.
+
+origin_zone is the approved normalized financial-workflow zone derived from that
+origin.
+
+Do not infer AP value basis from Incoterm.
+
+Preserve complex payment-term text. Return payment_days only when a defensible
+calendar-day normalization exists. Otherwise use null, mark the value unconfirmed,
+request confirmation, and set commercially_usable=false when the missing term
+prevents a firm result.
+
+CANONICAL LOGISTICS FIELDS
+
+Always place these canonical fields directly under recommended_offer:
+
+- transport_cost;
+- transport_cost_currency;
+- transport_basis;
+- customs_cost;
+- customs_cost_currency;
+- customs_basis;
+- forwarder_fee;
+- forwarder_fee_currency;
+- forwarder_basis;
+- capital_cost;
+- capital_cost_currency;
+- capital_cost_basis;
+- delivered_cost;
+- delivered_cost_currency;
+- delivered_cost_basis.
+
+Each canonical logistics value must be a JSON number.
+
+Zero is valid when a term is not applicable, but its currency and basis must still
+be present.
+
+Legacy aliases may be included only when required by a family schema or compatibility
+requirement. Supported aliases include:
+
+- transportation_cost;
+- transportation_cost_currency;
+- transportation_cost_basis;
+- custom_duty_cost;
+- custom_duty_cost_currency;
+- custom_duty_cost_basis;
+- forwarder_cost;
+- forwarder_cost_currency;
+- forwarder_cost_basis.
+
+Do not duplicate legacy aliases unnecessarily.
+
+When an alias is present, it must be identical to its canonical field in numerical
+value, currency, and normalized pricing unit:
+
+- transportation_cost corresponds to transport_cost;
+- custom_duty_cost corresponds to customs_cost;
+- forwarder_cost corresponds to forwarder_fee.
+
+If recommended_offer.supply_chain duplicates a canonical or alias field, its value,
+currency, basis, and normalized pricing unit must be identical to the corresponding
+field directly under recommended_offer.
+
+The fields directly under recommended_offer are canonical.
+
+MACHINE-READABLE BASIS RULES
+
+Require an explicit ISO currency and canonical basis for:
+
+- supplier-native unit_price;
+- converted_unit_price when conversion is used;
+- transport_cost;
+- customs_cost;
+- forwarder_fee;
+- capital_cost;
+- delivered_cost;
+- any other adjustment included in delivered-cost reconciliation.
+
+For these fields, every machine-readable basis value must contain only:
+
+<ISO_CURRENCY>/<PRICING_UNIT>
+
+The component pricing unit must be one of:
+
+- pc;
+- kg;
+- g;
+- m;
+- mm.
+
+Valid allocated examples include:
+
+- INR/pc;
+- USD/pc;
+- INR/kg;
+- EUR/kg;
+- CNY/m;
+- INR/g;
+- INR/mm.
+
+Never place prose, a formula, an Incoterm, a shipment description, a sourcing
+statement, or an assumption in a machine-readable basis field.
+
+Put narrative information in separate fields such as:
+
+- transport_basis_explanation;
+- customs_basis_explanation;
+- forwarder_basis_explanation;
+- capital_cost_basis_explanation;
+- delivered_cost_basis_explanation;
+- delivered_cost_formula;
+- source fields;
+- assumption fields.
+
+Fields such as annual purchase value, tooling investment, cash locked, prototype
+total, and other aggregate financial values may use their own explicitly documented
+currency and basis appropriate to their meaning.
+
+They are not required to use the component unit-price basis unless they participate
+directly in delivered-cost reconciliation.
+
+SHIPMENT-LEVEL LOGISTICS
+
+recommended_offer.pricing_unit must never be shipment.
+
+A logistics amount may initially use <CURRENCY>/shipment only while it remains
+genuinely unallocated.
+
+Keep an unallocated shipment-level amount in a separate shipment-level input,
+calculation, or assumption field.
+
+Do not add an unallocated shipment-level amount to delivered_cost. Do not place it
+in a canonical per-component logistics field until it has been allocated.
+
+Before inclusion in delivered_cost, allocate every shipment-level amount to
+recommended_offer.pricing_unit.
+
+After allocation, use the resulting component basis, such as INR/pc or INR/kg.
+
+The basis must describe the reported numerical value after allocation.
+
+For example, if INR 1,800 per shipment is divided by 30,000 pieces and the resulting
+forwarder_fee is 0.06, use:
+
+- forwarder_fee = 0.06;
+- forwarder_fee_currency = "INR";
+- forwarder_basis = "INR/pc".
+
+Do not use INR/shipment for the already allocated 0.06 value.
+
+FX CONVERSION
+
+Never infer supplier currency or offer currency from the destination or production
+plant.
+
+When supplier-price conversion is required, include:
+
+- original_unit_price;
+- original_currency;
+- original_unit_price_basis;
+- conversion_rate;
+- conversion_rate_date or reference period;
+- conversion-rate source and confidence;
+- converted_unit_price;
+- converted_currency;
+- converted_unit_price_basis.
+
+original_unit_price and original_currency must preserve the same supplier-native
+commercial value represented by unit_price and currency.
+
+converted_unit_price_basis must equal:
+
+<converted_currency>/<pricing_unit>
+
+Document the conversion-rate direction and the applicable FX methodology.
+
+When a valid conversion exists:
+
+- converted_unit_price is the effective base purchase price used in delivered-cost
+  reconciliation;
+- all logistics terms and adjustments included in delivered_cost must use
+  converted_currency and recommended_offer.pricing_unit;
+- delivered_cost_currency must equal converted_currency;
+- all included bases must equal
+  <converted_currency>/<recommended_offer.pricing_unit>.
+
+When no conversion is required:
+
+- unit_price is the effective base purchase price used in delivered-cost
+  reconciliation;
+- all logistics terms and adjustments included in delivered_cost must use currency
+  and recommended_offer.pricing_unit;
+- delivered_cost_currency must equal currency;
+- all included bases must equal
+  <currency>/<recommended_offer.pricing_unit>.
+
+DELIVERED-COST FORMULAS
+
+Effective base purchase price means:
+
+- converted_unit_price when a supplier-price conversion is used;
+- otherwise unit_price.
+
+When component_id is exactly "magnet_wire" or exactly "glue", use the approved
+Olivier four-term delivered-material formula:
+
+delivered_cost =
+effective base purchase price
++ transport_cost
++ customs_cost
++ forwarder_fee
+
+For component_id "magnet_wire" and "glue", report capital_cost separately and do not
+include capital_cost in delivered_cost.
+
+For every other external component, use:
+
+delivered_cost =
+effective base purchase price
++ transport_cost
++ customs_cost
++ forwarder_fee
++ capital_cost
+
+Use an applicable family prompt only where it explicitly establishes another
+authorized commercial basis.
+
+Never include an unallocated shipment-level amount or a value expressed in another
+currency or pricing unit in delivered_cost.
+
+EVIDENCE AND ESTIMATION
+
+Do not silently invent or alter:
+
+- material;
+- alloy;
+- grade;
+- BOM quantity;
+- purchasing quantity;
+- supplier quotation;
+- supplier identity;
+- payment term;
+- AP basis;
+- Incoterm;
+- origin;
+- commercial fact;
+- internal manufacturing operation.
+
+If a supplier quotation or confirmed commercial term is unavailable, a conservative
+and traceable engineering estimate is allowed.
+
+Mark estimated values as estimated. Mark unsupported terms as unconfirmed. Document
+their source or assumption. List them in unconfirmed_values and
+required_confirmations. Set commercially_usable=false.
+
+Null is preferable to an invented mandatory commercial fact.
+
+PRE-WRITE VALIDATION
+
+Before the single save_component_output call, validate that:
+
+1. project_code, product_id, component_id, and trigger_run_id exactly match the
+   request.
+
+2. The JSON contains one component and exactly one recommended_offer.
+
+3. Required keys are present and JSON types are correct.
+
+4. unit_price and currency preserve the supplier-native price and currency.
+
+5. recommended_offer.pricing_unit is exactly pc, kg, g, m, or mm.
+
+6. Supplier unit price, converted unit price when applicable, canonical logistics
+   terms, delivered cost, and every adjustment included in delivered-cost
+   reconciliation have an explicit currency and canonical basis.
+
+7. Every allocated reconciliation basis matches:
+   ^[A-Z]{3}/(pc|kg|g|m|mm)$
+
+8. No machine-readable basis contains narrative text.
+
+9. A shipment basis appears only on a genuinely unallocated logistics input and is
+   not included in delivered_cost.
+
+10. Every shipment-level cost included in delivered_cost has first been allocated
+    to the component pricing unit.
+
+11. When conversion is used, conversion fields are complete and
+    converted_unit_price is used as the effective base purchase price.
+
+12. When no conversion is used, unit_price is used as the effective base purchase
+    price.
+
+13. Every term included in delivered_cost matches the effective calculation
+    currency and recommended_offer.pricing_unit.
+
+14. Every present legacy alias and every supply_chain duplicate matches its
+    canonical field in value, currency, and normalized pricing unit.
+
+15. The formula selected from component_id is identified, and the absolute
+    reconciliation difference is less than or equal to 0.000001 in the effective
+    calculation currency. Use consistent decimal arithmetic and do not validate
+    only from displayed rounded values.
+
+16. Capital cost is excluded from delivered_cost for component_id "magnet_wire" and
+    "glue" and included for other external components unless an authorized family
+    rule explicitly says otherwise.
+
+17. Estimated and unconfirmed facts are traceable, required confirmations are
+    listed, and commercially_usable=false where appropriate.
+
+18. No material, quantity, supplier quotation, or commercial term has been silently
+    invented.
+
+Correct any validation failure before calling save_component_output.
+
+A delivered total that does not reconcile with backend reconstruction must not be
+written as commercially usable.
+""".strip()
 
 
 def _now_iso() -> str:
